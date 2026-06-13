@@ -447,7 +447,7 @@ export default function App() {
     ['dashboard', 'Inicio'],
     ['agenda', 'Agenda'],
     ['tracking', 'Seguimiento'],
-    ['documents', 'Pendientes clave'],
+    ['documents', 'Generador de documentos'],
     ['alerts', 'Alertas'],
   ] as const;
 
@@ -560,7 +560,7 @@ export default function App() {
             <section className="kpi-grid executive-first-screen-v087 executive-cockpit-kpis-v088">
               <div className="card kpi info"><p>En foco hoy</p><strong>4</strong><span>2 decisiones preparadas</span></div>
               <div className="card kpi critical"><p>Por resolver</p><strong>8</strong><span>3 requieren confirmación</span></div>
-              <div className="card kpi warning"><p>Pendientes clave</p><strong>12</strong><span>4 requieren cierre</span></div>
+              <div className="card kpi warning"><p>Generador de documentos</p><strong>FSV/CNE</strong><span>Módulo activo en 3023</span></div>
               <div className="card kpi stable live-card"><p>Ritmo del día</p><strong>{87 + Math.min(livePulse, 6)}%</strong><span>{livePulse > 0 ? 'actualizada por LÍA' : 'operación bajo control'}</span></div>
             </section>
 
@@ -661,36 +661,49 @@ export default function App() {
         {view === 'documents' && (
           <section className="module-grid docs-depth-pass-v087">
             <div className="panel module-header">
-              <p className="eyebrow">CENTRO DOCUMENTAL</p>
-              <h3>Documentos para decisión y cierre</h3>
+              <p className="eyebrow">GENERADOR DE DOCUMENTOS</p>
+              <h3>Generador documental FSV/CNE</h3>
               <p className="muted">
-                Contratos, reportes y propuestas organizados por prioridad.
+                Genera los documentos del proceso regulatorio que se está gestionando. El seguimiento del avance del proceso se consulta en la sección Seguimiento.
               </p>
+              <div className="document-meta-grid">
+                <div><small>Módulo</small><strong>FSV/CNE</strong></div>
+                <div><small>Estado</small><strong>Activo</strong></div>
+                <div><small>Puerto</small><strong>3023</strong></div>
+                <div><small>Uso</small><strong>Generación documental</strong></div>
+              </div>
+              <a
+                className="secondary compact"
+                href="http://38.242.222.25:3023"
+                target="_blank"
+                rel="noreferrer"
+                style={{ display: 'inline-flex', marginTop: 16, textDecoration: 'none' }}
+              >
+                Abrir generador de documentos
+              </a>
             </div>
 
             {documentsList.map(([title, type, status], index) => (
               <div className="panel document-card" key={`doc-${title}`}>
-                <p className="eyebrow">{type} · {(index % 3 === 0 && 'Contrato') || (index % 3 === 1 && 'Reporte') || 'Acta'}</p>
+                <p className="eyebrow">{type}</p>
                 <h4>{title}</h4>
                 <span>{status}</span>
-            <div className="document-meta-grid">
-              <div><small>Estado</small><strong>{status.includes('Listo') ? 'Listo para validación' : 'En preparación'}</strong></div>
-              <div><small>Responsable</small><strong>{index % 2 === 0 ? 'Dirección' : 'Operación'}</strong></div>
-              <div><small>Última actividad</small><strong>Hace {8 + index * 3} min</strong></div>
-              <div><small>Siguiente acción</small><strong>Validar decisión</strong></div>
-            </div>
-            <div className="document-progress"><i style={{ width: `${62 + (index * 7) % 30}%` }} /></div>
-                <button
-                  className={`secondary compact lia-simulated-feedback-v090 ${activeLiaAction === `Abrir documento: ${title}` ? 'cockpit-action-active-v090' : ''}`}
-                  onClick={() =>
-                    runLÍAAction(
-                      `Abrir documento: ${title}`,
-                      `Vista ejecutiva lista para ${title}.`
-                    )
-                  }
+                <div className="document-meta-grid">
+                  <div><small>Estado</small><strong>{status.includes('Listo') ? 'Listo para validación' : 'En preparación'}</strong></div>
+                  <div><small>Responsable</small><strong>{index % 2 === 0 ? 'Dirección' : 'Operación'}</strong></div>
+                  <div><small>Última actividad</small><strong>Hace {8 + index * 3} min</strong></div>
+                  <div><small>Siguiente acción</small><strong>Generar / validar documento</strong></div>
+                </div>
+                <div className="document-progress"><i style={{ width: `${62 + (index * 7) % 30}%` }} /></div>
+                <a
+                  className="secondary compact"
+                  href="http://38.242.222.25:3023"
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ display: 'inline-flex', textDecoration: 'none' }}
                 >
-                  Abrir
-                </button>
+                  Abrir generador
+                </a>
               </div>
             ))}
           </section>
