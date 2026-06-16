@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { CognitiveSpaceEngine } from './components/CognitiveSpaceEngine';
 import { NeuralCore } from './components/NeuralCore';
-import { activity, agenda, alerts, documents, tracking } from './data/liaOsExecutiveData';
+import { activity, agenda, alerts, tracking } from './data/liaOsExecutiveData';
 import { getExecutiveAgendaEventsForDay, getExecutiveTodayDayId } from './data/executiveAgendaData';
 import { connectorPremiumStyles, mobileLÍAFixStyles, styles } from './styles/liaOsStyles';
 import { ExecutiveAgendaTimeline } from './components/ExecutiveAgendaTimeline';
@@ -15,6 +15,8 @@ import { LiaAgentBridgeStatusCard } from './components/LiaAgentBridgeStatusCard'
 import { LiaAgentBackendStatusCard } from './components/LiaAgentBackendStatusCard';
 
 type View = 'dashboard' | 'agenda' | 'tracking' | 'documents' | 'alerts';
+
+const DOCUMENT_GENERATOR_URL = 'http://38.242.222.25:3023';
 
 export default function App() {
   const [logged, setLogged] = useState(false);
@@ -31,7 +33,6 @@ export default function App() {
     'Esperando instrucción ejecutiva.',
   ]);
   const [activityFeed, setActivityFeed] = useState(activity);
-  const [documentsList, setDocumentsList] = useState(documents);
   const [, setAlertsList] = useState(alerts);
   const [livePulse, setLivePulse] = useState(0);
   const [liaMessages, setLÍAMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([
@@ -40,6 +41,7 @@ export default function App() {
       text: 'Centro ejecutivo listo. Puedo ayudarte con agenda, prioridades y seguimiento.',
     },
   ]);
+  const [hideTabletLÍAFloat, setHideTabletLÍAFloat] = useState(false);
   const [mobileOrbListening, setMobileOrbListening] = useState(false);
   const [mobileLÍAOpen, setMobileLÍAOpen] = useState(false);
   const [activeLiaAction, setActiveLiaAction] = useState<string | null>(null);
@@ -109,18 +111,18 @@ export default function App() {
     setActivityFeed((prev) => [text, ...prev].slice(0, 5));
   };
 
+  const openDocumentGenerator = () => {
+    window.open(DOCUMENT_GENERATOR_URL, '_blank', 'noopener,noreferrer');
+  };
+
   const addDocument = (title = 'Documento listo para revisión') => {
     const stamp = new Date().toLocaleTimeString('es-MX', {
       hour: '2-digit',
       minute: '2-digit',
     });
 
-    setDocumentsList((prev) => [
-      [title, `Preparado ${stamp}`, 'Listo para revisión'],
-      ...prev,
-    ].slice(0, 6));
-
-    setView('documents');
+    addActivity(`${title}: generador documental abierto a las ${stamp}.`);
+    openDocumentGenerator();
   };
 
   const addAlert = (title = 'Nuevo recordatorio ejecutivo') => {
@@ -288,13 +290,25 @@ export default function App() {
     setMessage('');
   };
 
+  const closeMobileLÍA = () => {
+    setMobileLÍAOpen(false);
+    setMobileOrbListening(false);
+    setLÍAState('En línea');
+    if (orbTimeoutRef.current) window.clearTimeout(orbTimeoutRef.current);
+  };
+
   const activateMobileOrb = () => {
+    if (mobileLÍAOpen) {
+      closeMobileLÍA();
+      return;
+    }
+
     if (orbTimeoutRef.current) window.clearTimeout(orbTimeoutRef.current);
     setMobileLÍAOpen(true);
     setMobileOrbListening(true);
     setLÍAState('Escuchando...');
     setLÍAMessages((prev) => {
-      const prompt = { role: 'assistant' as const, text: 'LÍA lista. Indica prioridad, documento o alerta.' };
+      const prompt = { role: 'assistant' as const, text: 'Indica prioridad, documento o alerta.' };
       const last = prev[prev.length - 1];
 
       if (last?.role === prompt.role && last.text === prompt.text) {
@@ -315,6 +329,29 @@ export default function App() {
     if (orbTimeoutRef.current) window.clearTimeout(orbTimeoutRef.current);
   }, []);
 
+  useEffect(() => {
+    const tabletWidthQuery = window.matchMedia('(min-width: 768px) and (max-width: 1366px)');
+    const coarseTabletQuery = window.matchMedia('(pointer: coarse) and (min-width: 768px)');
+    const syncTabletLÍAFloat = () => {
+      const shouldHide = tabletWidthQuery.matches || coarseTabletQuery.matches;
+
+      setHideTabletLÍAFloat(shouldHide);
+      if (shouldHide) {
+        setMobileLÍAOpen(false);
+        setMobileOrbListening(false);
+      }
+    };
+
+    syncTabletLÍAFloat();
+    tabletWidthQuery.addEventListener('change', syncTabletLÍAFloat);
+    coarseTabletQuery.addEventListener('change', syncTabletLÍAFloat);
+
+    return () => {
+      tabletWidthQuery.removeEventListener('change', syncTabletLÍAFloat);
+      coarseTabletQuery.removeEventListener('change', syncTabletLÍAFloat);
+    };
+  }, []);
+
   if (!logged) {
     return (
       <main className="lia-login-premium">
@@ -333,36 +370,18 @@ export default function App() {
           </div>
         </header>
 
-        <div className="login-system-status">
-          <span className="login-status-dot" />
-          <div>
-            <small>ESTADO OPERATIVO</small>
-            <strong>ÓPTIMO</strong>
-          </div>
-        </div>
-
         <aside className="login-sync-panel">
-          <p className="login-eyebrow">SINCRONIZANDO</p>
+          <p className="login-eyebrow">Centro de mando ejecutivo</p>
           <h1>NÚCLEO COGNITIVO</h1>
           <p>
             Acceso ejecutivo seguro. Verificando identidad, enlazando contexto operativo
             y preparando el mapa cognitivo de dirección.
           </p>
-
-          <div className="login-sync-stack">
-            <div><span>LÍA lista</span><strong>98%</strong></div>
-            <div><span>Mapa Cognitivo</span><strong>Enlazado</strong></div>
-            <div><span>Módulos</span><strong>Listos</strong></div>
-          </div>
         </aside>
 
         <section className="login-orb-stage" aria-label="Núcleo cognitivo LÍA">
           <div className="orb-halo-system">
             <NeuralCore />
-          </div>
-          <div className="orb-caption">
-            <span>LÍA activa</span>
-            <strong>Sistema activo</strong>
           </div>
         </section>
 
@@ -371,10 +390,6 @@ export default function App() {
             <p className="login-eyebrow">ACCESO EJECUTIVO</p>
             <h2>Verificación requerida</h2>
             <p>Ingresa con tus credenciales para iniciar el centro de comando.</p>
-          </div>
-
-          <div className="login-weather-integrated">
-            <ExecutiveEnvironmentCard variant="login" />
           </div>
 
           <form
@@ -415,11 +430,6 @@ export default function App() {
               />
             </label>
 
-            <label className="login-checkbox">
-              <input type="checkbox" defaultChecked />
-              <span>Recordar sesión en este dispositivo</span>
-            </label>
-
             {loginError ? <p className="login-error">{loginError}</p> : null}
 
             <button type="submit" className="login-premium-submit">
@@ -432,16 +442,9 @@ export default function App() {
           </form>
         </section>
 
-        <footer className="login-security-footer">
-          <span>LÍA CORE OS</span>
-          <span>Cifrado ejecutivo</span>
-          <span>Protección multinivel</span>
-          <span>Sesión segura</span>
-        </footer>
       </main>
     );
   }
-
 
   const nav = [
     ['dashboard', 'Inicio'],
@@ -450,6 +453,17 @@ export default function App() {
     ['documents', 'Generador de documentos'],
     ['alerts', 'Alertas'],
   ] as const;
+
+  const handleMobileNavLink = (id: View) => {
+    setMobileNavOpen(false);
+
+    if (id === 'documents') {
+      openDocumentGenerator();
+      return;
+    }
+
+    setView(id);
+  };
 
   return (
     <>
@@ -463,6 +477,7 @@ export default function App() {
         type="button"
         className="mobile-nav-toggle"
         aria-label="Abrir navegación principal"
+        aria-expanded={mobileNavOpen}
         onClick={() => setMobileNavOpen(true)}
       >
         <span />
@@ -503,10 +518,7 @@ export default function App() {
                   key={`mobile-${id}`}
                   type="button"
                   className={view === id ? 'mobile-nav-link active' : 'mobile-nav-link'}
-                  onClick={() => {
-                    setView(id);
-                    setMobileNavOpen(false);
-                  }}
+                  onClick={() => handleMobileNavLink(id)}
                 >
                   <span>{label}</span>
                   <em>{view === id ? 'Activo' : 'Abrir'}</em>
@@ -528,7 +540,13 @@ export default function App() {
             <button
               key={id}
               className={view === id ? 'nav-item active' : 'nav-item'}
-              onClick={() => setView(id)}
+              onClick={() => {
+                if (id === 'documents') {
+                  openDocumentGenerator();
+                  return;
+                }
+                setView(id);
+              }}
             >
               <span>◆</span>{label}
             </button>
@@ -658,57 +676,6 @@ export default function App() {
 
         {view === 'tracking' && <TrackingCommandView legacyTracking={tracking} />}
 
-        {view === 'documents' && (
-          <section className="module-grid docs-depth-pass-v087">
-            <div className="panel module-header">
-              <p className="eyebrow">GENERADOR DE DOCUMENTOS</p>
-              <h3>Generador documental FSV/CNE</h3>
-              <p className="muted">
-                Genera los documentos del proceso regulatorio que se está gestionando. El seguimiento del avance del proceso se consulta en la sección Seguimiento.
-              </p>
-              <div className="document-meta-grid">
-                <div><small>Módulo</small><strong>FSV/CNE</strong></div>
-                <div><small>Estado</small><strong>Activo</strong></div>
-                <div><small>Puerto</small><strong>3023</strong></div>
-                <div><small>Uso</small><strong>Generación documental</strong></div>
-              </div>
-              <a
-                className="secondary compact"
-                href="http://38.242.222.25:3023"
-                target="_blank"
-                rel="noreferrer"
-                style={{ display: 'inline-flex', marginTop: 16, textDecoration: 'none' }}
-              >
-                Abrir generador de documentos
-              </a>
-            </div>
-
-            {documentsList.map(([title, type, status], index) => (
-              <div className="panel document-card" key={`doc-${title}`}>
-                <p className="eyebrow">{type}</p>
-                <h4>{title}</h4>
-                <span>{status}</span>
-                <div className="document-meta-grid">
-                  <div><small>Estado</small><strong>{status.includes('Listo') ? 'Listo para validación' : 'En preparación'}</strong></div>
-                  <div><small>Responsable</small><strong>{index % 2 === 0 ? 'Dirección' : 'Operación'}</strong></div>
-                  <div><small>Última actividad</small><strong>Hace {8 + index * 3} min</strong></div>
-                  <div><small>Siguiente acción</small><strong>Generar / validar documento</strong></div>
-                </div>
-                <div className="document-progress"><i style={{ width: `${62 + (index * 7) % 30}%` }} /></div>
-                <a
-                  className="secondary compact"
-                  href="http://38.242.222.25:3023"
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ display: 'inline-flex', textDecoration: 'none' }}
-                >
-                  Abrir generador
-                </a>
-              </div>
-            ))}
-          </section>
-        )}
-
         {view === 'alerts' && <PremiumAlertsView />}
 
       </section>
@@ -807,31 +774,30 @@ export default function App() {
         </div>
       </aside>
     </main>
-    <button className={`mobile-lia-orb ${mobileOrbListening ? 'listening' : ''}`} onClick={activateMobileOrb}>
-      <NeuralCore />
-      <span className="mobile-lia-orb-label">Hablar</span>
-    </button>
-    <div className="mobile-lia-chip">
-      <strong>{mobileOrbListening ? 'Escuchando...' : 'LÍA lista'}</strong>
-    </div>
-    {mobileLÍAOpen && (
-      <section className="mobile-lia-panel" role="dialog" aria-label="LÍA móvil">
+    {!hideTabletLÍAFloat && (
+      <button
+        type="button"
+        className={`mobile-lia-orb mobile-lia-floating-control ${mobileOrbListening ? 'listening' : ''}`}
+        aria-label={mobileLÍAOpen ? 'Cerrar panel móvil de LÍA' : 'Abrir panel móvil de LÍA'}
+        aria-expanded={mobileLÍAOpen}
+        onClick={activateMobileOrb}
+      >
+        <span className="mobile-lia-orb-label" aria-hidden="true" />
+      </button>
+    )}
+    {!hideTabletLÍAFloat && mobileLÍAOpen && (
+      <section className="mobile-lia-panel mobile-lia-floating-panel" role="dialog" aria-label="LÍA móvil">
         <div className="mobile-lia-header">
           <div>
-            <p className="eyebrow">LÍA MÓVIL</p>
-            <strong>Asistente ejecutivo activo</strong>
+            <p className="eyebrow">LÍA O.S</p>
+            <strong>Comando rápido</strong>
           </div>
 
           <button
             type="button"
             className="mobile-lia-close"
             aria-label="Cerrar LÍA móvil"
-            onClick={() => {
-              setMobileLÍAOpen(false);
-              setMobileOrbListening(false);
-              setLÍAState('En línea');
-              if (orbTimeoutRef.current) window.clearTimeout(orbTimeoutRef.current);
-            }}
+            onClick={closeMobileLÍA}
           >
             <span aria-hidden="true">×</span>
           </button>
