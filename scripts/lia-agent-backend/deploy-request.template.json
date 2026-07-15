@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "lia-agent-backend-deploy/v1",
+  "operationId": "v4100c-dry-run-YYYYMMDDTHHMMSSZ",
+  "expectedRepoRoot": "/opt/executive-platform-demo",
+  "expectedBranch": "chore/lia-os-v4100b-backend-controlled-deploy-tooling",
+  "expectedHead": "REPLACE_WITH_AUTHORIZED_40_CHAR_COMMIT_SHA",
+  "expectedTag": "REPLACE_WITH_AUTHORIZED_RELEASE_TAG",
+  "sourceBackendDir": "/opt/executive-platform-demo/backend/lia-agent",
+  "deployDir": "/opt/lia-agent-backend",
+  "backupRoot": "/opt/lia-agent-backups",
+  "pm2ProcessName": "lia-agent-backend",
+  "host": "127.0.0.1",
+  "port": 3014,
+  "expectedCurrentVersion": "v4.4.0-b",
+  "expectedTargetVersion": "v4.10.0-a",
+  "expectedCurrentScript": "server.mjs",
+  "expectedTargetScript": "dist/server.js",
+  "healthPath": "/health",
+  "statusPath": "/api/status",
+  "allowedServicePorts": [
+    3004,
+    3014,
+    3023
+  ],
+  "applyAuthorization": "APPLY:lia-agent-backend:v4100c-dry-run-YYYYMMDDTHHMMSSZ",
+  "rollback": {
+    "backupDir": "/opt/lia-agent-backups/REPLACE_WITH_SELECTED_BACKUP"
+  }
+}
