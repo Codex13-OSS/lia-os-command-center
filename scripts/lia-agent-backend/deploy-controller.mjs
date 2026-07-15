@@ -473,10 +473,16 @@ async function getAuthorizedPm2ProcessState(request, deps) {
   };
 }
 
-async function stopAuthorizedRuntimeIfPresent(request, deps) {
+async function stopAuthorizedRuntimeIfPresent(request, deps, stopState = null) {
+  if (stopState) stopState.runtimeStopAttempted = true;
   const before = await getAuthorizedPm2ProcessState(request, deps);
-  if (!before.present) return { deleted: false, status: 'absent' };
+  if (stopState) {
+    stopState.runtimeWasPresent = before.present;
+    stopState.runtimeAlreadyAbsent = !before.present;
+  }
+  if (!before.present) return { deleted: false, runtimeWasPresent: false, status: 'absent' };
   await runRequired(deps.runner, 'pm2', ['delete', request.pm2ProcessName], { shell: false }, 'pm2-delete');
+  if (stopState) stopState.runtimeDeleted = true;
   const after = await getAuthorizedPm2ProcessState(request, deps);
   if (after.present) {
     throw fail(EXIT.APPLY_FAILED, 'pm2_process_still_present_after_delete', {
@@ -484,7 +490,7 @@ async function stopAuthorizedRuntimeIfPresent(request, deps) {
       status: after.status,
     });
   }
-  return { deleted: true, previousStatus: before.status, status: 'deleted' };
+  return { deleted: true, previousStatus: before.status, runtimeWasPresent: true, status: 'deleted' };
 }
 
 function isExpectedPm2Script(actualScript, request, script) {
@@ -492,7 +498,7 @@ function isExpectedPm2Script(actualScript, request, script) {
   return path.resolve(actualScript) === path.resolve(request.deployDir, script);
 }
 
-async function verifyPm2TargetState(request, deps, script) {
+async function verifyPm2TargetState(request, deps, script, { requireExactCwd = false } = {}) {
   const state = await getAuthorizedPm2ProcessState(request, deps);
   if (!state.present) throw fail(EXIT.APPLY_FAILED, 'pm2_process_missing_after_start', { processName: request.pm2ProcessName });
   if (!state.online) throw fail(EXIT.APPLY_FAILED, 'pm2_process_not_online_after_start', { status: state.status });
@@ -501,6 +507,9 @@ async function verifyPm2TargetState(request, deps, script) {
       actual: state.script,
       expected: path.resolve(request.deployDir, script),
     });
+  }
+  if (requireExactCwd && !state.cwd) {
+    throw fail(EXIT.APPLY_FAILED, 'pm2_process_cwd_missing', { expected: request.deployDir });
   }
   if (state.cwd && path.resolve(state.cwd) !== path.resolve(request.deployDir)) {
     throw fail(EXIT.APPLY_FAILED, 'pm2_process_cwd_mismatch', { actual: state.cwd, expected: request.deployDir });
@@ -594,6 +603,7 @@ async function runPreflight(request, deps) {
     'validate-backup-destination-absent',
     'inspect-authorized-pm2-process',
     'stop-authorized-pm2-process-if-present',
+    'recover-original-runtime-in-place-if-pre-swap-failure',
     'atomic-rename-live-to-backup',
     'atomic-rename-release-to-live',
     'start-target-runtime-without-delete',
@@ -636,14 +646,16 @@ async function copyReleaseArtifacts(fsApi, request, releaseDir) {
   if (await exists(fsApi, readme)) await fsApi.cp(readme, path.join(releaseDir, 'README.md'));
 }
 
-async function verifyTarget(request, deps, expectedVersion) {
+async function verifyBackendHttp(request, deps, expectedVersion, { requireStatusEndpoint }) {
   const { runner, httpClient } = deps;
   const checks = [];
   const health = await httpClient({ host: request.host, port: request.port, path: request.healthPath, method: 'GET' });
   addCheck(checks, 'health-200', health.ok && health.statusCode === 200, { statusCode: health.statusCode });
   addCheck(checks, 'health-version', isVersionMatch(parseJsonBody(health), expectedVersion), { expected: expectedVersion });
-  const statusResponse = await httpClient({ host: request.host, port: request.port, path: request.statusPath, method: 'GET' });
-  addCheck(checks, 'status-200', statusResponse.ok && statusResponse.statusCode === 200, { statusCode: statusResponse.statusCode });
+  if (requireStatusEndpoint) {
+    const statusResponse = await httpClient({ host: request.host, port: request.port, path: request.statusPath, method: 'GET' });
+    addCheck(checks, 'status-200', statusResponse.ok && statusResponse.statusCode === 200, { statusCode: statusResponse.statusCode });
+  }
   const method = await httpClient({ host: request.host, port: request.port, path: request.healthPath, method: 'POST' });
   addCheck(checks, 'health-post-405', method.ok && method.statusCode === 405, { statusCode: method.statusCode });
   const missing = await httpClient({ host: request.host, port: request.port, path: `/__missing_${request.operationId}`, method: 'GET' });
@@ -657,6 +669,14 @@ async function verifyTarget(request, deps, expectedVersion) {
   addCheck(checks, `frontend-${protectedPorts[0]}-200`, frontend.ok && frontend.statusCode === 200, { statusCode: frontend.statusCode });
   addCheck(checks, `generator-${protectedPorts[1]}-200`, generator.ok && generator.statusCode === 200, { statusCode: generator.statusCode });
   return { ok: checks.every((check) => check.passed), checks, health };
+}
+
+async function verifyTarget(request, deps) {
+  return verifyBackendHttp(request, deps, request.expectedTargetVersion, { requireStatusEndpoint: true });
+}
+
+async function verifyOriginalRuntime(request, deps) {
+  return verifyBackendHttp(request, deps, request.expectedCurrentVersion, { requireStatusEndpoint: false });
 }
 
 function buildSafePm2Environment(request, sourceEnv = process.env) {
@@ -692,7 +712,78 @@ async function startRuntime(request, deps, script) {
     { cwd: request.deployDir, env, shell: false },
     'pm2-start',
   );
-  return verifyPm2TargetState(request, deps, script);
+  return verifyPm2TargetState(request, deps, script, { requireExactCwd: true });
+}
+
+async function assertOriginalRuntimeStillInPlace(request, deps) {
+  await assertCriticalDeployPath(request, deps.fsApi);
+  await assertTreeNoSymlinks(deps.fsApi, request.deployDir, 'deployDir');
+  const scriptPath = path.join(request.deployDir, request.expectedCurrentScript);
+  if (!(await exists(deps.fsApi, scriptPath))) {
+    throw fail(EXIT.APPLY_FAILED, 'original_runtime_script_missing', { script: scriptPath });
+  }
+  const version = await readPackageVersion(deps.fsApi, path.join(request.deployDir, 'package.json'));
+  if (version !== request.expectedCurrentVersion.replace(/^v/, '')) {
+    throw fail(EXIT.APPLY_FAILED, 'original_runtime_version_mismatch', {
+      actual: version,
+      expected: request.expectedCurrentVersion,
+    });
+  }
+}
+
+function isExpectedPm2Cwd(actualCwd, request) {
+  return Boolean(actualCwd) && path.resolve(actualCwd) === path.resolve(request.deployDir);
+}
+
+async function recoverOriginalRuntimeInPlace(request, deps, context) {
+  if (context.liveMovedToBackup) {
+    throw fail(EXIT.APPLY_FAILED, 'original_runtime_recovery_not_allowed_after_live_backup', {
+      deployDir: request.deployDir,
+    });
+  }
+
+  await assertOriginalRuntimeStillInPlace(request, deps);
+  let state = await getAuthorizedPm2ProcessState(request, deps);
+  let pm2Action = 'none';
+
+  if (
+    state.present
+    && state.online
+    && isExpectedPm2Script(state.script, request, request.expectedCurrentScript)
+    && isExpectedPm2Cwd(state.cwd, request)
+  ) {
+    await verifyPm2TargetState(request, deps, request.expectedCurrentScript, { requireExactCwd: true });
+    pm2Action = 'already-online';
+  } else {
+    if (state.present) {
+      await stopAuthorizedRuntimeIfPresent(request, deps);
+      pm2Action = 'delete-and-start-original';
+    } else {
+      pm2Action = 'start-original';
+    }
+    state = await startRuntime(request, deps, request.expectedCurrentScript);
+  }
+
+  const verification = await verifyOriginalRuntime(request, deps);
+  if (!verification.ok) {
+    throw fail(EXIT.APPLY_FAILED, 'original_runtime_recovery_verification_failed', {
+      checks: verification.checks,
+    });
+  }
+  await runRequired(deps.runner, 'pm2', ['save'], { shell: false }, 'pm2-save-original-recovery');
+  return {
+    deployDir: request.deployDir,
+    operationId: request.operationId,
+    pm2Action,
+    recoveryMode: 'original-runtime-in-place',
+    script: path.resolve(request.deployDir, request.expectedCurrentScript),
+    verification,
+    pm2: {
+      cwd: state.cwd,
+      script: state.script,
+      status: state.status,
+    },
+  };
 }
 
 async function moveFailedReleaseEvidence(request, deps) {
@@ -721,7 +812,7 @@ async function restoreBackupByRename(request, backupDir, deps, { moveFailedRelea
   await fsApi.rename(backupDir, request.deployDir);
   await assertCriticalDeployPath(request, fsApi);
   await startRuntime(request, deps, request.expectedCurrentScript);
-  const verification = await verifyTarget(request, deps, request.expectedCurrentVersion);
+  const verification = await verifyOriginalRuntime(request, deps);
   if (!verification.ok) throw fail(EXIT.ROLLBACK_FAILED, 'rollback_verification_failed', { checks: verification.checks, failedReleaseDir });
   await runRequired(deps.runner, 'pm2', ['save'], { shell: false }, 'pm2-save-rollback');
   return { failedReleaseDir, script: request.expectedCurrentScript, verification };
@@ -744,6 +835,13 @@ async function runApply(request, deps) {
 
   let backupDir = path.join(request.backupRoot, `${new Date().toISOString().replace(/[:.]/g, '-')}-${request.operationId}`);
   let liveMovedToBackup = false;
+  const runtimeStopState = {
+    liveMovedToBackup: false,
+    runtimeAlreadyAbsent: false,
+    runtimeDeleted: false,
+    runtimeStopAttempted: false,
+    runtimeWasPresent: false,
+  };
   const releaseDir = path.join(request.backupRoot, `.prepared-${request.operationId}`);
   const report = { backupDir, hashes: [], mode: 'apply', operationId: request.operationId, releaseDir, steps: [] };
 
@@ -779,12 +877,14 @@ async function runApply(request, deps) {
       release: await collectCriticalHashes(deps.fsApi, releaseDir, ['package.json', 'package-lock.json', 'dist/server.js']),
     };
     report.steps.push('hashes-recorded');
-    await stopAuthorizedRuntimeIfPresent(request, deps);
+    await stopAuthorizedRuntimeIfPresent(request, deps, runtimeStopState);
     report.steps.push('stop-authorized-pm2-process-if-present');
     await assertCriticalDeployPath(request, deps.fsApi);
+    await assertTreeNoSymlinks(deps.fsApi, request.deployDir, 'deployDir');
     await assertCriticalBackupPath(request, deps.fsApi, backupDir, { mustExist: false });
     await deps.fsApi.rename(request.deployDir, backupDir);
     liveMovedToBackup = true;
+    runtimeStopState.liveMovedToBackup = true;
     report.steps.push('atomic-rename-live-to-backup');
     await assertCriticalReleasePath(request, deps.fsApi, releaseDir, { mustExist: true });
     if (await exists(deps.fsApi, request.deployDir)) throw fail(EXIT.APPLY_FAILED, 'deployDir_unexpectedly_exists_before_release_rename');
@@ -792,7 +892,7 @@ async function runApply(request, deps) {
     report.steps.push('atomic-rename-release-to-live');
     await startRuntime(request, deps, request.expectedTargetScript);
     report.steps.push('pm2-target-started');
-    const verification = await verifyTarget(request, deps, request.expectedTargetVersion);
+    const verification = await verifyTarget(request, deps);
     if (!verification.ok) throw fail(EXIT.APPLY_FAILED, 'target_verification_failed', { checks: verification.checks });
     await runRequired(deps.runner, 'pm2', ['save'], { shell: false }, 'pm2-save-apply');
     report.steps.push('pm2-save');
@@ -816,6 +916,40 @@ async function runApply(request, deps) {
         originalError: error.message,
         rollback,
       });
+    }
+    if (!liveMovedToBackup && runtimeStopState.runtimeStopAttempted && runtimeStopState.runtimeDeleted) {
+      try {
+        const recovery = await recoverOriginalRuntimeInPlace(request, deps, runtimeStopState);
+        throw fail(EXIT.APPLY_FAILED, 'apply_failed_original_runtime_recovered_in_place', {
+          deployDir: request.deployDir,
+          expectedCurrentScript: path.resolve(request.deployDir, request.expectedCurrentScript),
+          liveMovedToBackup,
+          originalError: error.message,
+          recovery,
+        });
+      } catch (recoveryOrFinalError) {
+        if (recoveryOrFinalError.message === 'apply_failed_original_runtime_recovered_in_place') throw recoveryOrFinalError;
+        let pm2State;
+        try {
+          const state = await getAuthorizedPm2ProcessState(request, deps);
+          pm2State = {
+            cwd: state.cwd,
+            present: state.present,
+            script: state.script,
+            status: state.status,
+          };
+        } catch (pm2Error) {
+          pm2State = { error: pm2Error.message };
+        }
+        throw fail(EXIT.APPLY_FAILED, 'apply_failed_original_runtime_recovery_failed', {
+          deployDir: request.deployDir,
+          expectedCurrentScript: path.resolve(request.deployDir, request.expectedCurrentScript),
+          liveMovedToBackup,
+          originalError: error.message,
+          pm2State,
+          recoveryError: recoveryOrFinalError.message,
+        });
+      }
     }
     throw error;
   }

@@ -24,15 +24,18 @@ node scripts/lia-agent-backend/deploy-controller.mjs --rollback --request /absol
 - PM2 stop is idempotent: the controller deletes `lia-agent-backend` only when `pm2 jlist` shows it is present, then rechecks that it is absent.
 - Runtime start is separate from stop. Start runs `pm2 start <script> --name lia-agent-backend --interpreter node` from `deployDir` and does not run `pm2 delete`.
 - Runtime start does not inherit the full root environment. Before `pm2 start`, the controller builds a new PM2 environment from a fixed allowlist, validates it, and passes only that object to the runner.
-- After start, PM2 is rechecked for exactly one `lia-agent-backend`, online status, expected script path, and expected cwd when PM2 exposes it.
+- After start, PM2 is rechecked for exactly one `lia-agent-backend`, online status, expected script path, and a present cwd exactly equal to `deployDir`.
 - The live deploy directory is not recursively deleted during normal apply.
 - The target release is prepared and validated before PM2 is stopped or the live deploy path is changed.
+- There is a guarded pre-swap window after `pm2 delete lia-agent-backend` and before the first `rename(deployDir, backupDir)`. If apply fails in that window, the original backend is recovered in-place from the still-existing `deployDir`; the controller does not move, copy, or remove `deployDir`.
+- In-place recovery revalidates `deployDir` with `lstat` and `realpath`, rejects symlinks, confirms `server.mjs`, confirms package version `v4.4.0-b`, inspects PM2 with `pm2 jlist`, avoids duplicate starts only when the original runtime is already online with the expected script and a present cwd exactly equal to `deployDir`, and restarts only the authorized process when it is absent or wrong. Missing, empty, or different PM2 cwd is non-conforming.
+- In-place recovery verifies PM2 online state, script, cwd exactly equal to `deployDir`, `GET /health` 200, version `v4.4.0-b`, `POST /health` 405, missing-route 404, loopback port `127.0.0.1:3014`, frontend `3004`, and generator `3023` before `pm2 save`. The legacy `v4.4.0-b` runtime does not require `GET /api/status` 200; the TypeScript target `v4.10.0-a` still requires `GET /api/status` 200.
 - The controller validates that `deployDir`, `backupRoot`, and the prepared release are on the same filesystem before the live swap.
 - The backup is the original live directory moved with `rename(deployDir, backupDir)`.
 - The target release becomes live with `rename(releaseDir, deployDir)`, not copy plus remove.
-- Rollback restores the original runtime with `rename(backupDir, deployDir)`.
+- Rollback by rename is separate from pre-swap recovery: rollback restores the original runtime with `rename(backupDir, deployDir)` only after the live directory was already moved to backup.
 - If automatic rollback is needed after a target release became live, the failed release is moved under `backupRoot` as evidence instead of being deleted.
-- `pm2 save` runs only after apply or rollback verification succeeds.
+- `pm2 save` runs only after apply, rollback, or original-runtime recovery verification succeeds, including unique PM2 process, online state, expected script, exact cwd, applicable HTTP checks, loopback binding, frontend, and generator checks.
 
 The dry-run plan explicitly lists:
 
@@ -42,6 +45,7 @@ The dry-run plan explicitly lists:
 - `validate-backup-destination-absent`
 - `inspect-authorized-pm2-process`
 - `stop-authorized-pm2-process-if-present`
+- `recover-original-runtime-in-place-if-pre-swap-failure`
 - `atomic-rename-live-to-backup`
 - `atomic-rename-release-to-live`
 - `start-target-runtime-without-delete`
@@ -85,6 +89,8 @@ node --check scripts/lia-agent-backend/deploy-controller.mjs
 node --test scripts/lia-agent-backend/tests/deploy-controller.test.mjs
 ```
 
-The tests use temporary fixtures and a fake command runner that models PM2 presence, status, script, cwd, and version. It returns `[]` when the process is absent, fails a second delete, rejects duplicate starts, and records starts/deletes without touching real PM2.
+The tests use temporary fixtures and a fake command runner that models PM2 presence, status, script path, cwd presence, incorrect cwd, missing cwd after start, save failure, and version independently. It returns `[]` when the process is absent, fails a second delete, rejects duplicate starts, and records starts/deletes without touching real PM2.
 
-No real `--apply`, real `--rollback`, real deploy, real dry-run against the live environment, PM2 operation, or write to `/opt/lia-agent-backend` was executed for this tooling update. `/opt/lia-agent-backups` was not created. The real v4.10.0-C dry-run had already passed before this PM2 environment hardening was identified.
+No real `--apply`, real `--rollback`, real deploy, real dry-run against the live environment, PM2 operation, or write to `/opt/lia-agent-backend` was executed for this tooling update. `/opt/lia-agent-backups` was not created.
+
+R3 real dry-run passed 19/19 checks before this R4 hardening. After this commit is reviewed, the real dry-run must be repeated before any controlled apply is considered.

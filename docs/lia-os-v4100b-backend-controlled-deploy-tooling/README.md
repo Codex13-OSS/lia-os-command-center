@@ -18,13 +18,19 @@ Modos:
 
 PM2 se controla con argumentos separados y `shell: false`. La inspeccion usa exclusivamente `pm2 jlist`; no hay grep, jq, shell, ids arbitrarios, `pm2 delete all` ni `pm2 kill`. Si `pm2 jlist` devuelve JSON invalido o dos entradas con nombre `lia-agent-backend`, el controlador falla cerrado. Los procesos con otro nombre se ignoran y no se operan.
 
-La detencion es idempotente: si `lia-agent-backend` esta ausente, no se ejecuta `pm2 delete`; si esta presente, se ejecuta exactamente una vez `pm2 delete lia-agent-backend` y se vuelve a consultar `pm2 jlist` para confirmar ausencia. El arranque esta separado: `pm2 start <script> --name lia-agent-backend --interpreter node` corre con cwd igual a `deployDir`, host `127.0.0.1` y puerto `3014`; luego se valida que el proceso este online, con script esperado y cwd esperado cuando PM2 lo expone.
+La detencion es idempotente: si `lia-agent-backend` esta ausente, no se ejecuta `pm2 delete`; si esta presente, se ejecuta exactamente una vez `pm2 delete lia-agent-backend` y se vuelve a consultar `pm2 jlist` para confirmar ausencia. El arranque esta separado: `pm2 start <script> --name lia-agent-backend --interpreter node` corre con cwd igual a `deployDir`, host `127.0.0.1` y puerto `3014`; luego se valida que el proceso este online, con script esperado y cwd presente exactamente igual a `deployDir`.
 
 El arranque PM2 no hereda el entorno completo de root. Antes de `pm2 start`, el controlador construye un objeto nuevo con allowlist minima, lo valida y entrega ese objeto al runner con `shell: false`. Las variables operativas permitidas, solo cuando existen, son `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `PM2_HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ` y `TMPDIR`. Las variables funcionales quedan fijadas en `LIA_AGENT_HOST=127.0.0.1`, `LIA_AGENT_PORT=3014`, `LIA_AGENT_CORS_ORIGINS=` vacio, `LIA_AGENT_LOG_LEVEL=info` y `NODE_ENV=production`.
 
 El controlador bloquea variables desconocidas y no propaga `NODE_OPTIONS`, `NODE_PATH`, credenciales de proveedores, URLs de bases de datos, tokens de GitHub ni variables terminadas en `_KEY`, `_TOKEN`, `_SECRET` o `_PASSWORD`. Los reportes pueden listar nombres de claves permitidas, pero no imprimen valores heredados del entorno.
 
 El deploy vivo no se borra recursivamente. El backup es el runtime original obtenido mediante rename atomico del directorio vivo. El release se prepara completamente antes del corte y el intercambio se rechaza si `deployDir`, `backupRoot` y el release preparado no estan en el mismo filesystem.
+
+R4 endurece la ventana posterior a `pm2 delete lia-agent-backend` y anterior al primer `rename(deployDir, backupDir)`. En esa ventana, `deployDir` todavia contiene el backend original `server.mjs`; si falla una revalidacion posterior al stop, la comprobacion post-delete o el primer rename, el controlador intenta recuperar el runtime original in-place sin mover, copiar ni borrar `deployDir`.
+
+La recuperacion in-place revalida `deployDir` con `lstat` y `realpath`, comprueba allowlist, rechaza symlinks, confirma `server.mjs`, confirma `package.json` con version `v4.4.0-b`, consulta `pm2 jlist`, no arranca un duplicado solamente si `lia-agent-backend` ya esta online con script correcto y cwd presente exactamente igual a `/opt/lia-agent-backend`, y elimina de forma controlada solo el proceso autorizado si esta detenido, errored, apunta a otro script o reporta cwd ausente, vacio o distinto. Despues valida PM2 online, script `/opt/lia-agent-backend/server.mjs`, cwd `/opt/lia-agent-backend`, `GET /health` 200, version `v4.4.0-b`, `POST /health` 405, ruta inexistente 404, loopback `127.0.0.1:3014`, frontend `3004` y generador `3023`. El runtime legado `v4.4.0-b` no exige `GET /api/status` 200; el backend TypeScript objetivo `v4.10.0-a` si exige `GET /api/status` 200. `pm2 save` se ejecuta solamente despues de todas las comprobaciones aplicables.
+
+La recuperacion in-place y el rollback por rename son mecanismos separados. La recuperacion in-place solo aplica cuando el live no fue movido al backup. El rollback automatico por rename se mantiene para fallos posteriores a `rename(deployDir, backupDir)`, cuando ya existe un backup fisico del runtime original.
 
 El rollback automatico queda disenado para activarse si `--apply` falla despues de mover el backend vivo al backup. Antes de mover un release fallido, reconsulta PM2 y detiene `lia-agent-backend` solo cuando existe. Esto cubre estados parciales: segundo rename fallido con proceso ausente, start fallido antes de registrar proceso, proceso registrado en estado errored, proceso online con health fallido y proceso ya ausente. Si el release objetivo ya quedo en `deployDir`, se mueve a un directorio `failed-release-<operationId>` dentro de `backupRoot` como evidencia y luego se restaura el backup original por rename. Los releases fallidos se conservan; no se borran automaticamente.
 
@@ -41,7 +47,7 @@ El rollback automatico queda disenado para activarse si `--apply` falla despues 
 
 ## Evidencias
 
-El controlador produce JSON determinista por stdout. Los errores operativos van a stderr. El plan de dry-run lista operaciones en orden estable, release preparado previsto, raiz de backups, validacion de mismo filesystem, validacion de allowlist de entorno PM2, destinos ausentes, renames atomicos, rollback por rename y `pm2 save` posterior a validacion.
+El controlador produce JSON determinista por stdout. Los errores operativos van a stderr. El plan de dry-run lista operaciones en orden estable, release preparado previsto, raiz de backups, validacion de mismo filesystem, validacion de allowlist de entorno PM2, destinos ausentes, recuperacion in-place prevista para fallo pre-swap, renames atomicos, rollback por rename y `pm2 save` posterior a validacion. El dry-run continua siendo read-only y anuncia `recover-original-runtime-in-place-if-pre-swap-failure` sin ejecutar recuperacion real, start, delete, save, mkdir, cp, rm, rename ni writeFile.
 
 ## Pruebas
 
@@ -53,12 +59,12 @@ node --test scripts/lia-agent-backend/tests/deploy-controller.test.mjs
 git diff --check
 ```
 
-Las pruebas usan fixtures temporales y runner falso. El runner falso modela PM2 con `present`, `status`, `script`, `cwd` y `version`: `pm2 jlist` devuelve `[]` si el proceso esta ausente, `pm2 delete` falla si se llama dos veces, `pm2 start` falla si el nombre ya existe y `pm2 save` no cambia estado. La cobertura confirma que el entorno completo no se propaga, que secretos ficticios no aparecen en opciones del runner ni JSON, que `PATH`, `HOME` y `PM2_HOME` se conservan cuando existen, que las variables funcionales quedan fijas y que el codigo fuente no reintroduce `...process.env`. No usan PM2 real, puertos reales, red externa, Nginx, systemctl, GitHub ni secretos.
+Las pruebas usan fixtures temporales y runner falso. El runner falso modela PM2 con `present`, `status`, ruta de script, `cwd` presente o ausente, cwd incorrecto, ausencia de cwd despues de start, fallo de `pm2 save` y `version`: `pm2 jlist` devuelve `[]` si el proceso esta ausente, puede fallar o devolver JSON invalido despues de delete, puede simular proceso online correcto, proceso `errored`, script incorrecto, duplicados, fallo de start y fallo de health de recuperacion. Tambien modela `/api/status` 404 para confirmar que el legado no lo exige y que el target TypeScript si lo exige. `pm2 delete` falla si se llama dos veces, `pm2 start` falla si el nombre ya existe y `pm2 save` no cambia estado salvo en escenarios de fallo controlado. La cobertura confirma que el entorno completo no se propaga, que secretos ficticios no aparecen en opciones del runner ni JSON, que `PATH`, `HOME` y `PM2_HOME` se conservan cuando existen, que las variables funcionales quedan fijas y que el codigo fuente no reintroduce `...process.env`. No usan PM2 real, puertos reales, red externa, Nginx, systemctl, GitHub ni secretos.
 
 ## Exclusiones
 
-En esta subfase no se ejecuto deploy. No se ejecuto `--apply` real, `--rollback` real ni dry-run real contra el entorno vivo. No se toco PM2 real ni `/opt/lia-agent-backend`. No se creo `/opt/lia-agent-backups`. No se toco Nginx, firewall, frontend, CSS, bases de datos, archivos `.env`, secretos ni GitHub. El dry-run real v4.10.0-C ya habia pasado 18/18 antes de detectar este endurecimiento.
+En esta subfase no se ejecuto deploy. No se ejecuto `--apply` real, `--rollback` real ni dry-run real contra el entorno vivo. No se toco PM2 real ni `/opt/lia-agent-backend`. No se creo `/opt/lia-agent-backups`. No se toco Nginx, firewall, frontend, CSS, bases de datos, archivos `.env`, secretos ni GitHub. El dry-run real R3 ya habia pasado 19/19 antes de este endurecimiento R4. Despues del commit R4 sera obligatorio repetir el dry-run antes de considerar cualquier apply controlado.
 
 ## Siguiente Fase Recomendada
 
-v4.10.0-D — Controlled Backend Deploy Apply Preflight
+v4.10.0-D2 — Controlled Backend Deploy Apply Preflight After R4
