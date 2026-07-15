@@ -5,9 +5,37 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { executeController, jsonText, parseArgs } from '../deploy-controller.mjs';
+import { buildSafePm2Environment, executeController, jsonText, parseArgs } from '../deploy-controller.mjs';
 
 const HEAD = 'a'.repeat(40);
+const SAFE_PM2_ENV_KEYS = [
+  'HOME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LIA_AGENT_CORS_ORIGINS',
+  'LIA_AGENT_HOST',
+  'LIA_AGENT_LOG_LEVEL',
+  'LIA_AGENT_PORT',
+  'LOGNAME',
+  'NODE_ENV',
+  'PATH',
+  'PM2_HOME',
+  'SHELL',
+  'TMPDIR',
+  'TZ',
+  'USER',
+].sort();
+const SECRET_ENV_FIXTURE = {
+  ANTHROPIC_API_KEY: 'SHOULD_NOT_LEAK_ANTHROPIC',
+  DATABASE_URL: 'SHOULD_NOT_LEAK_DATABASE',
+  GITHUB_TOKEN: 'SHOULD_NOT_LEAK_GITHUB',
+  NODE_OPTIONS: '--require SHOULD_NOT_LEAK_NODE_OPTIONS',
+  OPENAI_API_KEY: 'SHOULD_NOT_LEAK_OPENAI',
+  RANDOM_SECRET: 'SHOULD_NOT_LEAK_RANDOM_SECRET',
+  SUPABASE_SERVICE_ROLE_KEY: 'SHOULD_NOT_LEAK_SUPABASE',
+};
+const SECRET_VALUES = Object.values(SECRET_ENV_FIXTURE);
 
 async function makeFixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'lia-deploy-controller-test-'));
@@ -25,7 +53,7 @@ async function makeFixture() {
   await writeFile(path.join(deployDir, 'package.json'), JSON.stringify({ name: 'lia-agent-backend', version: '4.4.0-b' }));
 
   const policy = {
-    allowedServicePorts: [4004, 4014, 4023],
+    allowedServicePorts: [3004, 3014, 3023],
     backupRoot,
     branch: 'test-branch',
     currentScript: 'server.mjs',
@@ -34,7 +62,7 @@ async function makeFixture() {
     healthPath: '/health',
     host: '127.0.0.1',
     pm2ProcessName: 'lia-agent-backend',
-    port: 4014,
+    port: 3014,
     repoRoot,
     schemaVersion: 'lia-agent-backend-deploy/v1-test',
     sourceBackendDir,
@@ -96,7 +124,7 @@ function makeRunner({ deployDir = '/tmp/lia-agent-backend', failAfterLiveSwitch 
     if (command === 'pm2' && args[0] === 'jlist') {
       return ok(JSON.stringify(state.present ? [processEntry()] : []));
     }
-    if (command === 'ss') return ok(`LISTEN 0 511 127.0.0.1:4014 0.0.0.0:* users:(("node",pid=1,fd=1))`);
+    if (command === 'ss') return ok(`LISTEN 0 511 127.0.0.1:3014 0.0.0.0:* users:(("node",pid=1,fd=1))`);
     if (command === 'npm' && args.join(' ') === 'run self-check') return ok('self-check-ok');
     if (command === 'npm' && args[0] === 'ci') return ok('npm-ci-ok');
     if (command === 'pm2' && args[0] === 'delete') {
@@ -176,7 +204,7 @@ async function assertLegacyDeployIntact(fixture) {
 
 function makeHttpClient(state = { version: 'v4.4.0-b' }) {
   return async ({ port, path: requestPath, method }) => {
-    if (port === 4004 || port === 4023) return { ok: true, statusCode: 200, body: '{}' };
+    if (port === 3004 || port === 3023) return { ok: true, statusCode: 200, body: '{}' };
     if (method === 'POST' && requestPath === '/health') return { ok: true, statusCode: 405, body: '{}' };
     if (requestPath.startsWith('/__missing_')) return { ok: true, statusCode: 404, body: '{}' };
     if (requestPath === '/health') {
@@ -192,6 +220,22 @@ function makeHttpClient(state = { version: 'v4.4.0-b' }) {
 
 function ok(stdout) {
   return { args: [], code: 0, ok: true, shell: false, stderr: '', stdout };
+}
+
+async function withTemporaryEnv(env, callback) {
+  const previous = new Map();
+  for (const key of Object.keys(env)) {
+    previous.set(key, Object.hasOwn(process.env, key) ? process.env[key] : undefined);
+    process.env[key] = env[key];
+  }
+  try {
+    return await callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 async function runValidDryRun() {
@@ -218,6 +262,7 @@ test('dry-run valido produce plan determinista', async () => {
     'prepare-release',
   ]);
   assert.ok(result.plan.wouldRun.includes('validate-same-filesystem'));
+  assert.ok(result.plan.wouldRun.includes('validate-pm2-environment-allowlist'));
   assert.ok(result.plan.wouldRun.includes('validate-backup-destination-absent'));
   assert.ok(result.plan.wouldRun.includes('atomic-rename-live-to-backup'));
   assert.ok(result.plan.wouldRun.includes('atomic-rename-release-to-live'));
@@ -225,6 +270,47 @@ test('dry-run valido produce plan determinista', async () => {
   assert.ok(result.plan.wouldRun.includes('pm2-save-after-success'));
   assert.match(jsonText(result), /"mode": "dry-run"/);
   await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('constructor de entorno PM2 no propaga process.env completo ni secretos', async () => {
+  const { request, root } = await makeFixture();
+  const sourceEnv = {
+    ...SECRET_ENV_FIXTURE,
+    HOME: '/root',
+    NODE_PATH: 'SHOULD_NOT_LEAK_NODE_PATH',
+    PATH: '/usr/bin:/bin',
+    PM2_HOME: '/root/.pm2',
+    SENDGRID_API_KEY: 'SHOULD_NOT_LEAK_SENDGRID',
+    TWILIO_AUTH_TOKEN: 'SHOULD_NOT_LEAK_TWILIO',
+    UNKNOWN_VARIABLE: 'SHOULD_NOT_LEAK_UNKNOWN',
+    USER: 'root',
+  };
+  const env = buildSafePm2Environment(request, sourceEnv);
+  assert.deepEqual(Object.keys(env).sort(), [
+    'HOME',
+    'LIA_AGENT_CORS_ORIGINS',
+    'LIA_AGENT_HOST',
+    'LIA_AGENT_LOG_LEVEL',
+    'LIA_AGENT_PORT',
+    'NODE_ENV',
+    'PATH',
+    'PM2_HOME',
+    'USER',
+  ].sort());
+  assert.equal(env.PATH, '/usr/bin:/bin');
+  assert.equal(env.HOME, '/root');
+  assert.equal(env.PM2_HOME, '/root/.pm2');
+  assert.equal(env.LIA_AGENT_HOST, '127.0.0.1');
+  assert.equal(env.LIA_AGENT_PORT, '3014');
+  assert.equal(env.LIA_AGENT_CORS_ORIGINS, '');
+  assert.equal(env.LIA_AGENT_LOG_LEVEL, 'info');
+  assert.equal(env.NODE_ENV, 'production');
+  for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'DATABASE_URL', 'GITHUB_TOKEN', 'RANDOM_SECRET', 'NODE_OPTIONS', 'NODE_PATH', 'UNKNOWN_VARIABLE']) {
+    assert.equal(Object.hasOwn(env, key), false);
+  }
+  for (const key of Object.keys(env)) assert.ok(SAFE_PM2_ENV_KEYS.includes(key));
+  assert.equal(JSON.stringify(env).includes('SHOULD_NOT_LEAK'), false);
+  await rm(root, { recursive: true, force: true });
 });
 
 test('request incompleto rechazado', async () => {
@@ -312,6 +398,43 @@ test('apply valido usa rename y nunca elimina deployDir ni backup seleccionado',
   assert.equal(await readFile(path.join(fixture.policy.deployDir, 'dist', 'server.js'), 'utf8'), 'console.log("target");\n');
   assert.equal(await readFile(path.join(result.backupDir, 'server.mjs'), 'utf8'), 'console.log("legacy");\n');
   await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('pm2 start recibe exactamente el entorno seguro y no filtra secretos ficticios', async () => {
+  const operationalEnv = {
+    HOME: '/root',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    LC_CTYPE: 'C.UTF-8',
+    LOGNAME: 'root',
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    PM2_HOME: '/root/.pm2',
+    SHELL: '/bin/bash',
+    TMPDIR: '/tmp',
+    TZ: 'UTC',
+    USER: 'root',
+  };
+  await withTemporaryEnv({ ...operationalEnv, ...SECRET_ENV_FIXTURE }, async () => {
+    const { calls, fixture, result } = await runApplyFixture();
+    const startCall = calls.find((call) => call.command === 'pm2' && call.args[0] === 'start');
+    assert.ok(startCall);
+    assert.deepEqual(startCall.args, ['start', 'dist/server.js', '--name', 'lia-agent-backend', '--interpreter', 'node']);
+    assert.equal(startCall.options.cwd, fixture.policy.deployDir);
+    assert.equal(startCall.options.shell, false);
+    assert.deepEqual(Object.keys(startCall.options.env).sort(), SAFE_PM2_ENV_KEYS);
+    assert.equal(startCall.options.env.PATH, operationalEnv.PATH);
+    assert.equal(startCall.options.env.HOME, operationalEnv.HOME);
+    assert.equal(startCall.options.env.PM2_HOME, operationalEnv.PM2_HOME);
+    assert.equal(startCall.options.env.LIA_AGENT_HOST, '127.0.0.1');
+    assert.equal(startCall.options.env.LIA_AGENT_PORT, '3014');
+    assert.equal(startCall.options.env.LIA_AGENT_CORS_ORIGINS, '');
+    assert.equal(startCall.options.env.LIA_AGENT_LOG_LEVEL, 'info');
+    assert.equal(startCall.options.env.NODE_ENV, 'production');
+    for (const key of Object.keys(SECRET_ENV_FIXTURE)) assert.equal(Object.hasOwn(startCall.options.env, key), false);
+    const serialized = JSON.stringify({ result, runnerOptions: calls.map((call) => call.options) });
+    for (const value of SECRET_VALUES) assert.equal(serialized.includes(value), false);
+    await rm(fixture.root, { recursive: true, force: true });
+  });
 });
 
 test('runner falso rechaza doble delete y el controlador lo evita', async () => {
@@ -697,6 +820,27 @@ test('dry-run no llama mkdir cp rm rename writeFile ni comandos mutables', async
   await rm(fixture.root, { recursive: true, force: true });
 });
 
+test('dry-run no imprime ni reporta variables sensibles del entorno', async () => {
+  await withTemporaryEnv(SECRET_ENV_FIXTURE, async () => {
+    const fixture = await makeFixture();
+    const { calls, runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+    const result = await executeController({
+      argv: ['--dry-run', '--request', '/tmp/request.json'],
+      httpClient: makeHttpClient(state),
+      policy: fixture.policy,
+      request: fixture.request,
+      runner,
+    });
+    const stdoutJson = jsonText(result);
+    assert.equal(result.ok, true);
+    assert.ok(result.checks.some((check) => check.id === 'pm2-environment-allowlist'));
+    assert.equal(calls.some((call) => call.options.env), false);
+    for (const value of SECRET_VALUES) assert.equal(stdoutJson.includes(value), false);
+    for (const key of Object.keys(SECRET_ENV_FIXTURE)) assert.equal(stdoutJson.includes(key), false);
+    await rm(fixture.root, { recursive: true, force: true });
+  });
+});
+
 test('ningun comando usa shell y salida JSON estable', async () => {
   const fixture = await makeFixture();
   const { calls, runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
@@ -710,4 +854,9 @@ test('ningun comando usa shell y salida JSON estable', async () => {
   assert.equal(calls.every((call) => call.options.shell === false), true);
   assert.equal(jsonText(result), jsonText(result));
   await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('self-check estatico impide reintroducir spread completo de process.env', async () => {
+  const source = await readFile(new URL('../deploy-controller.mjs', import.meta.url), 'utf8');
+  assert.equal(source.includes('...process.env'), false);
 });
