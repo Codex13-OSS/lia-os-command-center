@@ -1,8 +1,31 @@
-# LIA Agent Backend Skeleton Local
+# LIA Agent Backend
 
-Este directorio contiene el esqueleto local del backend de LIA O.S para v4.4.0-B.
+Este directorio contiene el backend versionado de LIA O.S. En v4.10.0-A se agrega una base funcional TypeScript/Express sin reemplazar todavia el runtime legado desplegado.
 
-El servicio esta aislado del frontend, usa solo Node nativo y arranca en modo read-only. Su objetivo es exponer una base local observable antes de conectar cualquier flujo real.
+## Runtime legado
+
+`server.mjs` se conserva como runtime legado. Es el formato del backend minimo que ya fue validado y desplegado fuera de este repositorio en `/opt/lia-agent-backend`.
+
+Esta subfase no modifica PM2, no despliega y no copia archivos a `/opt/lia-agent-backend`.
+
+## Backend TypeScript nuevo
+
+El nuevo backend esta en `src/`:
+
+- `src/app.ts`: crea la aplicacion Express sin escuchar puerto.
+- `src/server.ts`: carga configuracion y escucha en host/puerto local.
+- `src/config.ts`: valida variables permitidas.
+- `src/routes/`: rutas `GET /health` y `GET /api/status`.
+- `src/middleware/`: 404, 405 y errores JSON.
+- `src/contracts/`: contratos tipados de health y status.
+
+## Rutas
+
+- `GET /health`: health compatible con el contrato seguro existente.
+- `GET /api/status`: estado interno seguro con capacidades desactivadas.
+- `POST /health`: 405 con `Allow: GET`.
+- `POST /api/status`: 405 con `Allow: GET`.
+- Rutas desconocidas: 404 JSON determinista.
 
 ## Limites actuales
 
@@ -16,32 +39,47 @@ El servicio esta aislado del frontend, usa solo Node nativo y arranca en modo re
 - Sin modelos externos.
 - Sin claves reales.
 - Sin conexion con frontend.
+- Sin integraciones externas.
+- Sin acciones mutables.
 
 ## Scripts
 
 ```bash
-npm run self-check
+npm run dev
+npm run build
 npm run start
+npm run typecheck
+npm test
+npm run self-check
 npm run health
+npm run legacy:start
 ```
 
-## Validacion local
+`npm run start` ejecuta solo `dist/server.js`, por lo que requiere `npm run build` previo. `npm run dev` usa `tsx` para desarrollo local del backend TypeScript.
+`npm run legacy:start` ejecuta `server.mjs`, el runtime legado conservado durante la transicion.
+
+## Configuracion permitida
+
+- `LIA_AGENT_HOST`: host de escucha. Por defecto `127.0.0.1`; solo se aceptan `127.0.0.1` y `localhost`.
+- `LIA_AGENT_PORT`: puerto de escucha. Por defecto `3014`; valores invalidos se rechazan.
+- `LIA_AGENT_CORS_ORIGINS`: allowlist separada por comas. Por defecto no habilita CORS externo.
+- `LIA_AGENT_LOG_LEVEL`: `silent`, `error`, `warn` o `info`.
+
+No se leen archivos `.env` y no se imprime el entorno completo.
+
+## Validacion local TypeScript
 
 Desde este directorio:
 
 ```bash
+npm run typecheck
+npm run build
+npm test
 npm run self-check
-npm run start
 ```
 
-En otra terminal:
-
-```bash
-curl http://127.0.0.1:3014/health
-```
-
-La respuesta debe indicar `ok: true`, `mode: read_only_foundation`, `transport: local_http_only` y todas las capacidades reales apagadas.
+Las pruebas levantan la aplicacion en `127.0.0.1` con puerto efimero asignado por el sistema; no usan `3004`, `3014` ni `3023`.
 
 ## Nota de seguridad
 
-Este skeleton no esta listo para produccion ni para exposicion publica. Cualquier host distinto a `127.0.0.1` o `localhost` queda bloqueado salvo que se defina una compuerta explicita de seguridad.
+Este backend no esta listo para exposicion publica. Por defecto escucha en `127.0.0.1`, desactiva `x-powered-by`, limita JSON a `64kb`, no expone stack traces en respuestas y mantiene CORS cerrado salvo allowlist explicita.

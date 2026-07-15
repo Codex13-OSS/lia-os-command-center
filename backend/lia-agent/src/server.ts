@@ -1,0 +1,25 @@
+import { createApp } from './app.js';
+import { loadConfig } from './config.js';
+
+const config = loadConfig();
+const app = createApp(config);
+const server = app.listen(config.port, config.host, () => {
+  if (config.logLevel !== 'silent') {
+    console.log(`LIA agent TypeScript backend listening on http://${config.host}:${config.port}`);
+  }
+});
+
+server.on('error', (error) => {
+  console.error('LIA agent TypeScript backend refused to start.');
+  console.error(error instanceof Error ? error.message : 'unknown_error');
+  process.exitCode = 1;
+});
+
+function shutdown() {
+  server.close(() => {
+    process.exit(0);
+  });
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
