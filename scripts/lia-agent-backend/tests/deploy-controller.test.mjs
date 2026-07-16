@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { buildSafePm2Environment, executeController, jsonText, parseArgs } from '../deploy-controller.mjs';
+import { buildSafePm2Environment, executeController as rawExecuteController, jsonText, parseArgs } from '../deploy-controller.mjs';
 
 const HEAD = 'a'.repeat(40);
 const SAFE_PM2_ENV_KEYS = [
@@ -36,6 +36,19 @@ const SECRET_ENV_FIXTURE = {
   SUPABASE_SERVICE_ROLE_KEY: 'SHOULD_NOT_LEAK_SUPABASE',
 };
 const SECRET_VALUES = Object.values(SECRET_ENV_FIXTURE);
+const NOOP_SLEEP = async () => {};
+
+function makeRecordingSleep() {
+  const calls = [];
+  const sleep = async (ms) => {
+    calls.push(ms);
+  };
+  return { calls, sleep };
+}
+
+async function executeController(options) {
+  return rawExecuteController({ sleep: NOOP_SLEEP, ...options });
+}
 
 async function makeFixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'lia-deploy-controller-test-'));
@@ -225,7 +238,7 @@ function applyRequest(request) {
   return { ...request, applyAuthorization: `APPLY:lia-agent-backend:${request.operationId}` };
 }
 
-async function runApplyFixture({ fsApi, runnerOptions, httpClient } = {}) {
+async function runApplyFixture({ fsApi, runnerOptions, httpClient, sleep = NOOP_SLEEP } = {}) {
   const fixture = await makeFixture();
   const { calls, runner, state } = makeRunner({ ...runnerOptions, deployDir: fixture.policy.deployDir });
   const result = await executeController({
@@ -235,6 +248,7 @@ async function runApplyFixture({ fsApi, runnerOptions, httpClient } = {}) {
     policy: fixture.policy,
     request: applyRequest(fixture.request),
     runner,
+    sleep,
   });
   return { calls, fixture, result, state };
 }
@@ -274,6 +288,75 @@ function makeHttpClient(state = { version: 'v4.4.0-b' }) {
     }
     return { ok: true, statusCode: 404, body: '{}' };
   };
+}
+
+function makeSequencedHttpClient(state, sequences = {}) {
+  const calls = [];
+  const counters = new Map();
+  const base = makeHttpClient(state);
+  const nextFor = (key) => {
+    const index = counters.get(key) ?? 0;
+    counters.set(key, index + 1);
+    const sequence = sequences[key] ?? [];
+    return index < sequence.length ? sequence[index] : undefined;
+  };
+  const materialize = (entry, request) => {
+    if (!entry) return undefined;
+    if (entry instanceof Error) throw entry;
+    if (entry.error) return { ok: false, statusCode: 0, body: entry.body ?? '', error: entry.error };
+    if (entry.statusCode !== undefined || entry.version !== undefined) {
+      const statusCode = entry.statusCode ?? 200;
+      const version = entry.version ?? state.version;
+      return { ok: entry.ok ?? true, statusCode, body: entry.body ?? JSON.stringify({ version }) };
+    }
+    if (typeof entry === 'function') return entry(request);
+    return entry;
+  };
+  const httpClient = async (request) => {
+    calls.push(request);
+    if (request.port !== 3014) return base(request);
+    const key = `${request.method ?? 'GET'} ${request.path}`;
+    const entry = nextFor(key);
+    const response = materialize(entry, request);
+    return response ?? base(request);
+  };
+  httpClient.calls = calls;
+  return httpClient;
+}
+
+function makeRuntimeReadinessHttpClient(state, { originalHealth = [], targetHealth = [], targetStatus = [] } = {}) {
+  const calls = [];
+  const counters = { originalHealth: 0, targetHealth: 0, targetStatus: 0 };
+  const base = makeHttpClient(state);
+  const responseFrom = (sequence, counterName, fallback) => {
+    const index = counters[counterName];
+    counters[counterName] += 1;
+    const entry = sequence[index];
+    if (!entry) return fallback();
+    if (entry instanceof Error) throw entry;
+    if (entry.error) return { ok: false, statusCode: 0, body: entry.body ?? '', error: entry.error };
+    return {
+      ok: entry.ok ?? true,
+      statusCode: entry.statusCode ?? 200,
+      body: entry.body ?? JSON.stringify({ version: entry.version ?? state.version }),
+    };
+  };
+  const httpClient = async (request) => {
+    calls.push(request);
+    if (request.port !== 3014) return base(request);
+    if (request.method === 'GET' && request.path === '/health' && state.version === 'v4.10.0-a') {
+      return responseFrom(targetHealth, 'targetHealth', () => base(request));
+    }
+    if (request.method === 'GET' && request.path === '/api/status' && state.version === 'v4.10.0-a') {
+      return responseFrom(targetStatus, 'targetStatus', () => base(request));
+    }
+    if (request.method === 'GET' && request.path === '/health' && state.version === 'v4.4.0-b' && state.deleteCount > 0) {
+      return responseFrom(originalHealth, 'originalHealth', () => base(request));
+    }
+    return base(request);
+  };
+  httpClient.calls = calls;
+  return httpClient;
 }
 
 function ok(stdout) {
@@ -1174,6 +1257,444 @@ test('pm2 save ocurre solo despues de validacion exitosa en apply y rollback', a
   });
   assert.equal(result.ok, true);
   assert.ok(commandIndex(calls2, 'pm2', 'save') > commandIndex(calls2, 'ss'));
+  await rm(fixture2.root, { recursive: true, force: true });
+});
+
+test('readiness target listo en primer intento queda reportado sin sleep', async () => {
+  const sleeps = makeRecordingSleep();
+  const { fixture, result } = await runApplyFixture({ sleep: sleeps.sleep });
+  assert.equal(result.ok, true);
+  assert.equal(result.readiness.target.kind, 'target');
+  assert.equal(result.readiness.target.attempts, 1);
+  assert.equal(result.readiness.target.outcome, 'immediate');
+  assert.deepEqual(sleeps.calls, []);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness target maneja ECONNREFUSED simulado y segundo intento exitoso', async () => {
+  const fixture = await makeFixture();
+  const { calls, runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const refused = new Error('SHOULD_NOT_LEAK_BODY');
+  refused.code = 'ECONNREFUSED';
+  const httpClient = makeRuntimeReadinessHttpClient(state, { targetHealth: [refused, { version: 'v4.10.0-a' }] });
+  const sleeps = makeRecordingSleep();
+  const result = await executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: sleeps.sleep,
+  });
+  assert.equal(result.readiness.target.outcome, 'transient-success');
+  assert.equal(result.readiness.target.attempts, 2);
+  assert.deepEqual(sleeps.calls, [500]);
+  assert.equal(JSON.stringify(result.readiness).includes('SHOULD_NOT_LEAK'), false);
+  assert.ok(commandCount(calls, 'pm2', 'save') === 1);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness target soporta varios fallos transitorios antes de exito', async () => {
+  const fixture = await makeFixture();
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: [{ statusCode: 503 }, { statusCode: 502 }, { statusCode: 200, version: 'v4.10.0-a' }],
+  });
+  const sleeps = makeRecordingSleep();
+  const result = await executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: sleeps.sleep,
+  });
+  assert.equal(result.readiness.target.attempts, 3);
+  assert.deepEqual(sleeps.calls, [500, 500]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness target exige version correcta tras health 200 con version incorrecta', async () => {
+  const fixture = await makeFixture();
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: [{ statusCode: 200, version: 'v4.4.0-b' }, { statusCode: 200, version: 'v4.10.0-a' }],
+  });
+  const sleeps = makeRecordingSleep();
+  const result = await executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: sleeps.sleep,
+  });
+  assert.equal(result.readiness.target.attempts, 2);
+  assert.equal(result.readiness.target.lastObservation.versionMatched, true);
+  assert.equal(httpClient.calls.filter((call) => call.path === '/api/status').length, 2);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness target retrasa status temporalmente no disponible hasta status 200', async () => {
+  const fixture = await makeFixture();
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetStatus: [{ statusCode: 503 }, { statusCode: 200 }],
+  });
+  const sleeps = makeRecordingSleep();
+  const result = await executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: sleeps.sleep,
+  });
+  assert.equal(result.readiness.target.attempts, 2);
+  assert.equal(result.readiness.target.lastObservation.statusStatusCode, 200);
+  assert.deepEqual(sleeps.calls, [500]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness target agotado produce target_verification_failed y evidencia', async () => {
+  const fixture = await makeFixture();
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: Array.from({ length: 6 }, () => ({ statusCode: 503 })),
+  });
+  const sleeps = makeRecordingSleep();
+  await assert.rejects(() => executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: sleeps.sleep,
+  }), (error) => {
+    assert.equal(error.message, 'apply_failed_automatic_rollback_succeeded');
+    assert.equal(error.details.originalError, 'target_verification_failed');
+    assert.equal(error.details.originalDetails.readiness.outcome, 'exhausted');
+    assert.equal(error.details.originalDetails.readiness.attempts, 6);
+    return true;
+  });
+  assert.deepEqual(sleeps.calls, [500, 500, 500, 500, 500]);
+  await assertLegacyDeployIntact(fixture);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness target agotado conserva rollback automatico', async () => {
+  const fixture = await makeFixture();
+  const { calls, runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: Array.from({ length: 6 }, () => ({ statusCode: 500 })),
+  });
+  await assert.rejects(() => executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: NOOP_SLEEP,
+  }), /apply_failed_automatic_rollback_succeeded/);
+  assert.equal(state.script, 'server.mjs');
+  assert.equal(commandCount(calls, 'pm2', 'delete'), 2);
+  await assertLegacyDeployIntact(fixture);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness original recovery supera fallos transitorios', async () => {
+  const fixture = await makeFixture();
+  const fsApi = makeRecordingFsApi({ failRenameAt: 1 });
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    originalHealth: [{ statusCode: 503 }, { statusCode: 200, version: 'v4.4.0-b' }],
+  });
+  const sleeps = makeRecordingSleep();
+  await assert.rejects(() => executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    fsApi,
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: sleeps.sleep,
+  }), (error) => {
+    assert.equal(error.message, 'apply_failed_original_runtime_recovered_in_place');
+    assert.equal(error.details.recovery.readiness.outcome, 'transient-success');
+    assert.equal(error.details.recovery.readiness.attempts, 2);
+    return true;
+  });
+  assert.deepEqual(sleeps.calls, [500]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness original recovery agotado falla cerrado', async () => {
+  const fixture = await makeFixture();
+  const fsApi = makeRecordingFsApi({ failRenameAt: 1 });
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    originalHealth: Array.from({ length: 6 }, () => ({ statusCode: 503 })),
+  });
+  await assert.rejects(() => executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    fsApi,
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: NOOP_SLEEP,
+  }), (error) => {
+    assert.equal(error.message, 'apply_failed_original_runtime_recovery_failed');
+    assert.equal(error.details.recoveryError, 'original_runtime_recovery_verification_failed');
+    assert.equal(error.details.recoveryDetails.readiness.outcome, 'exhausted');
+    return true;
+  });
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness rollback original supera fallos transitorios', async () => {
+  const fixture = await makeFixture();
+  const backupDir = path.join(fixture.policy.backupRoot, 'selected-backup-readiness');
+  await mkdir(fixture.policy.backupRoot, { recursive: true });
+  await fsPromises.rename(fixture.policy.deployDir, backupDir);
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    originalHealth: [{ statusCode: 503 }, { statusCode: 200, version: 'v4.4.0-b' }],
+  });
+  const sleeps = makeRecordingSleep();
+  const result = await executeController({
+    argv: ['--rollback', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: { ...fixture.request, rollback: { backupDir } },
+    runner,
+    sleep: sleeps.sleep,
+  });
+  assert.equal(result.rollback.readiness.outcome, 'transient-success');
+  assert.deepEqual(sleeps.calls, [500]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness rollback original agotado falla cerrado', async () => {
+  const fixture = await makeFixture();
+  const backupDir = path.join(fixture.policy.backupRoot, 'selected-backup-readiness-fail');
+  await mkdir(fixture.policy.backupRoot, { recursive: true });
+  await fsPromises.rename(fixture.policy.deployDir, backupDir);
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    originalHealth: Array.from({ length: 6 }, () => ({ statusCode: 503 })),
+  });
+  await assert.rejects(() => executeController({
+    argv: ['--rollback', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: { ...fixture.request, rollback: { backupDir } },
+    runner,
+    sleep: NOOP_SLEEP,
+  }), (error) => {
+    assert.equal(error.message, 'rollback_verification_failed');
+    assert.equal(error.details.readiness.outcome, 'exhausted');
+    return true;
+  });
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness no duerme despues de exito transitorio', async () => {
+  const fixture = await makeFixture();
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: [{ statusCode: 503 }, { statusCode: 200, version: 'v4.10.0-a' }],
+  });
+  const sleeps = makeRecordingSleep();
+  const result = await executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: sleeps.sleep,
+  });
+  assert.equal(result.readiness.target.attempts, 2);
+  assert.deepEqual(sleeps.calls, [500]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness agotado duerme exactamente attempts menos uno', async () => {
+  const fixture = await makeFixture();
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: Array.from({ length: 6 }, () => ({ statusCode: 503 })),
+  });
+  const sleeps = makeRecordingSleep();
+  await assert.rejects(() => executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: sleeps.sleep,
+  }), /apply_failed_automatic_rollback_succeeded/);
+  assert.deepEqual(sleeps.calls, [500, 500, 500, 500, 500]);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness no ejecuta acciones PM2 durante la espera', async () => {
+  const fixture = await makeFixture();
+  const { calls, runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: [{ statusCode: 503 }, { statusCode: 200, version: 'v4.10.0-a' }],
+  });
+  const pm2CountsDuringSleep = [];
+  const sleep = async () => {
+    const before = calls.filter((call) => call.command === 'pm2').length;
+    await Promise.resolve();
+    const after = calls.filter((call) => call.command === 'pm2').length;
+    pm2CountsDuringSleep.push({ after, before });
+  };
+  await executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep,
+  });
+  assert.equal(pm2CountsDuringSleep.length, 1);
+  assert.equal(pm2CountsDuringSleep[0].after, pm2CountsDuringSleep[0].before);
+  assert.equal(pm2CountsDuringSleep[0].before < calls.filter((call) => call.command === 'pm2').length, true);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('revalidacion PM2 ocurre despues de readiness target', async () => {
+  const fixture = await makeFixture();
+  const { calls, runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: [{ statusCode: 503 }, { statusCode: 200, version: 'v4.10.0-a' }],
+  });
+  const result = await executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: NOOP_SLEEP,
+  });
+  const lastReadinessHttp = httpClient.calls.findLastIndex((call) => call.path === '/api/status' && call.method === 'GET');
+  const postStep = result.steps.indexOf('pm2-target-revalidated-after-readiness');
+  assert.ok(lastReadinessHttp >= 0);
+  assert.ok(postStep > result.steps.indexOf('pm2-target-started'));
+  assert.equal(commandCount(calls, 'pm2', 'jlist') >= 3, true);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('pm2 save ocurre despues de readiness revalidacion PM2 y verificacion final', async () => {
+  const { calls, fixture, result } = await runApplyFixture();
+  assert.ok(result.steps.indexOf('pm2-target-revalidated-after-readiness') < result.steps.indexOf('pm2-save'));
+  assert.ok(lastCommandIndex(calls, 'pm2', 'save') > lastCommandIndex(calls, 'ss'));
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('dry-run no ejecuta sleep ni HTTP adicional de readiness', async () => {
+  const fixture = await makeFixture();
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeHttpClient(state);
+  let sleepCalled = false;
+  const result = await executeController({
+    argv: ['--dry-run', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: fixture.request,
+    runner,
+    sleep: async () => { sleepCalled = true; },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(sleepCalled, false);
+  assert.equal(result.checks.filter((check) => check.id === 'current-health').length, 1);
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('dry-run contiene operaciones bounded target y original en orden', async () => {
+  const { fixture, result } = await runValidDryRun();
+  const plan = result.plan.wouldRun;
+  assert.ok(plan.indexOf('verify-pm2-target-state') < plan.indexOf('wait-for-target-runtime-readiness-bounded'));
+  assert.ok(plan.indexOf('wait-for-target-runtime-readiness-bounded') < plan.indexOf('verify-target'));
+  assert.ok(plan.indexOf('start-original-runtime-without-delete') < plan.indexOf('wait-for-original-runtime-readiness-bounded'));
+  assert.ok(plan.indexOf('wait-for-original-runtime-readiness-bounded') < plan.indexOf('automatic-rollback-by-rename'));
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness usa exclusivamente host y port autorizados', async () => {
+  const fixture = await makeFixture();
+  const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+  const httpClient = makeRuntimeReadinessHttpClient(state, {
+    targetHealth: [{ statusCode: 503 }, { statusCode: 200, version: 'v4.10.0-a' }],
+  });
+  await executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    httpClient,
+    policy: fixture.policy,
+    request: applyRequest(fixture.request),
+    runner,
+    sleep: NOOP_SLEEP,
+  });
+  const readinessCalls = httpClient.calls.filter((call) => call.path === '/health' || call.path === '/api/status');
+  assert.ok(readinessCalls.every((call) => call.host === '127.0.0.1' && call.port === 3014));
+  await rm(fixture.root, { recursive: true, force: true });
+});
+
+test('readiness evidencia no contiene bodies headers env ni secretos', async () => {
+  await withTemporaryEnv(SECRET_ENV_FIXTURE, async () => {
+    const fixture = await makeFixture();
+    const { runner, state } = makeRunner({ deployDir: fixture.policy.deployDir });
+    const refused = new Error('HTTP body SHOULD_NOT_LEAK_OPENAI header authorization');
+    refused.code = 'ECONNREFUSED';
+    const httpClient = makeRuntimeReadinessHttpClient(state, {
+      targetHealth: [refused, { statusCode: 200, version: 'v4.10.0-a' }],
+    });
+    const result = await executeController({
+      argv: ['--apply', '--request', '/tmp/request.json'],
+      httpClient,
+      policy: fixture.policy,
+      request: applyRequest(fixture.request),
+      runner,
+      sleep: NOOP_SLEEP,
+    });
+    const serialized = JSON.stringify(result.readiness);
+    assert.equal(serialized.includes('SHOULD_NOT_LEAK'), false);
+    assert.equal(serialized.includes('authorization'), false);
+    assert.equal(serialized.includes('headers'), false);
+    for (const key of Object.keys(SECRET_ENV_FIXTURE)) assert.equal(serialized.includes(key), false);
+    await rm(fixture.root, { recursive: true, force: true });
+  });
+});
+
+test('checks finales existentes permanecen con semantica target y original', async () => {
+  const { fixture, result } = await runApplyFixture();
+  const targetIds = result.verification.checks.map((check) => check.id);
+  for (const id of ['health-200', 'health-version', 'status-200', 'health-post-405', 'missing-404', 'loopback-only', 'frontend-3004-200', 'generator-3023-200']) {
+    assert.ok(targetIds.includes(id), id);
+  }
+  await rm(fixture.root, { recursive: true, force: true });
+
+  const fixture2 = await makeFixture();
+  const fsApi = makeRecordingFsApi({ failRenameAt: 1 });
+  const { runner, state } = makeRunner({ deployDir: fixture2.policy.deployDir });
+  await assert.rejects(() => executeController({
+    argv: ['--apply', '--request', '/tmp/request.json'],
+    fsApi,
+    httpClient: makeHttpClient(state),
+    policy: fixture2.policy,
+    request: applyRequest(fixture2.request),
+    runner,
+    sleep: NOOP_SLEEP,
+  }), (error) => {
+    const originalIds = error.details.recovery.verification.checks.map((check) => check.id);
+    for (const id of ['health-200', 'health-version', 'health-post-405', 'missing-404', 'loopback-only', 'frontend-3004-200', 'generator-3023-200']) {
+      assert.ok(originalIds.includes(id), id);
+    }
+    assert.equal(originalIds.includes('status-200'), false);
+    return true;
+  });
   await rm(fixture2.root, { recursive: true, force: true });
 });
 

@@ -60,6 +60,9 @@ const REQUIRED_FIELDS = [
 ];
 
 const APPLY_AUTH_PREFIX = 'APPLY:lia-agent-backend:';
+const BACKEND_HTTP_TIMEOUT_MS = 1500;
+const READINESS_MAX_ATTEMPTS = 6;
+const READINESS_INTERVAL_MS = 500;
 
 const PM2_OPERATIONAL_ENV_KEYS = Object.freeze([
   'PATH',
@@ -272,7 +275,7 @@ function createDefaultRunner() {
 function createDefaultHttpClient() {
   return function requestLocal({ host, port, path: requestPath, method = 'GET' }) {
     return new Promise((resolve) => {
-      const request = http.request({ host, port, path: requestPath, method, timeout: 1500 }, (response) => {
+      const request = http.request({ host, port, path: requestPath, method, timeout: BACKEND_HTTP_TIMEOUT_MS }, (response) => {
         let body = '';
         response.setEncoding('utf8');
         response.on('data', (chunk) => { body += chunk; });
@@ -283,6 +286,12 @@ function createDefaultHttpClient() {
       request.end();
     });
   };
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 const realFs = { readFile, readdir, stat, lstat, access, mkdir, cp, rename, realpath };
@@ -529,6 +538,89 @@ function isVersionMatch(body, expectedVersion) {
   return body?.version === expectedVersion || body?.service?.version === expectedVersion || body?.data?.version === expectedVersion;
 }
 
+function sanitizeLocalError(error) {
+  if (!error) return null;
+  const raw = typeof error === 'string' ? error : error.code || error.message || String(error);
+  return String(raw).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 160);
+}
+
+function readinessBudget(kind) {
+  const requestsPerAttempt = kind === 'target' ? 2 : 1;
+  return (READINESS_MAX_ATTEMPTS * requestsPerAttempt * BACKEND_HTTP_TIMEOUT_MS)
+    + ((READINESS_MAX_ATTEMPTS - 1) * READINESS_INTERVAL_MS);
+}
+
+function emptyReadinessObservation() {
+  return {
+    healthStatusCode: null,
+    localError: null,
+    statusStatusCode: null,
+    versionMatched: false,
+  };
+}
+
+async function observeRuntimeReadiness(request, deps, kind) {
+  const expectedVersion = kind === 'target' ? request.expectedTargetVersion : request.expectedCurrentVersion;
+  const observation = emptyReadinessObservation();
+  let health;
+  try {
+    health = await deps.httpClient({ host: request.host, port: request.port, path: request.healthPath, method: 'GET' });
+  } catch (error) {
+    observation.localError = sanitizeLocalError(error);
+    return { ok: false, observation };
+  }
+
+  observation.healthStatusCode = Number.isInteger(health?.statusCode) ? health.statusCode : null;
+  if (!health?.ok && health?.error) observation.localError = sanitizeLocalError(health.error);
+  observation.versionMatched = isVersionMatch(parseJsonBody(health ?? {}), expectedVersion);
+  if (!health?.ok || health.statusCode !== 200 || !observation.versionMatched) {
+    return { ok: false, observation };
+  }
+
+  if (kind === 'original') return { ok: true, observation };
+
+  try {
+    const status = await deps.httpClient({ host: request.host, port: request.port, path: request.statusPath, method: 'GET' });
+    observation.statusStatusCode = Number.isInteger(status?.statusCode) ? status.statusCode : null;
+    if (!status?.ok && status?.error) observation.localError = sanitizeLocalError(status.error);
+    return { ok: Boolean(status?.ok && status.statusCode === 200), observation };
+  } catch (error) {
+    observation.localError = sanitizeLocalError(error);
+    return { ok: false, observation };
+  }
+}
+
+async function waitForRuntimeReadiness(request, deps, kind) {
+  let lastObservation = emptyReadinessObservation();
+  for (let attempt = 1; attempt <= READINESS_MAX_ATTEMPTS; attempt += 1) {
+    const result = await observeRuntimeReadiness(request, deps, kind);
+    lastObservation = result.observation;
+    if (result.ok) {
+      return {
+        approximateBudgetMs: readinessBudget(kind),
+        attempts: attempt,
+        intervalMs: READINESS_INTERVAL_MS,
+        kind,
+        lastObservation,
+        maxAttempts: READINESS_MAX_ATTEMPTS,
+        outcome: attempt === 1 ? 'immediate' : 'transient-success',
+        perRequestTimeoutMs: BACKEND_HTTP_TIMEOUT_MS,
+      };
+    }
+    if (attempt < READINESS_MAX_ATTEMPTS) await deps.sleep(READINESS_INTERVAL_MS);
+  }
+  return {
+    approximateBudgetMs: readinessBudget(kind),
+    attempts: READINESS_MAX_ATTEMPTS,
+    intervalMs: READINESS_INTERVAL_MS,
+    kind,
+    lastObservation,
+    maxAttempts: READINESS_MAX_ATTEMPTS,
+    outcome: 'exhausted',
+    perRequestTimeoutMs: BACKEND_HTTP_TIMEOUT_MS,
+  };
+}
+
 async function runPreflight(request, deps) {
   const { fsApi, runner, httpClient } = deps;
   const checks = [];
@@ -608,9 +700,11 @@ async function runPreflight(request, deps) {
     'atomic-rename-release-to-live',
     'start-target-runtime-without-delete',
     'verify-pm2-target-state',
+    'wait-for-target-runtime-readiness-bounded',
     'verify-target',
     'automatic-rollback-stop-if-present',
     'start-original-runtime-without-delete',
+    'wait-for-original-runtime-readiness-bounded',
     'automatic-rollback-by-rename',
     'pm2-save-after-success',
     'write-json-report',
@@ -764,10 +858,26 @@ async function recoverOriginalRuntimeInPlace(request, deps, context) {
     state = await startRuntime(request, deps, request.expectedCurrentScript);
   }
 
+  const readiness = await waitForRuntimeReadiness(request, deps, 'original');
+  if (readiness.outcome === 'exhausted') {
+    throw fail(EXIT.APPLY_FAILED, 'original_runtime_recovery_verification_failed', {
+      readiness,
+    });
+  }
+  try {
+    state = await verifyPm2TargetState(request, deps, request.expectedCurrentScript, { requireExactCwd: true });
+  } catch (pm2Error) {
+    throw fail(EXIT.APPLY_FAILED, 'original_runtime_recovery_verification_failed', {
+      pm2Details: pm2Error.details ?? {},
+      pm2Error: pm2Error.message,
+      readiness,
+    });
+  }
   const verification = await verifyOriginalRuntime(request, deps);
   if (!verification.ok) {
     throw fail(EXIT.APPLY_FAILED, 'original_runtime_recovery_verification_failed', {
       checks: verification.checks,
+      readiness,
     });
   }
   await runRequired(deps.runner, 'pm2', ['save'], { shell: false }, 'pm2-save-original-recovery');
@@ -775,6 +885,7 @@ async function recoverOriginalRuntimeInPlace(request, deps, context) {
     deployDir: request.deployDir,
     operationId: request.operationId,
     pm2Action,
+    readiness,
     recoveryMode: 'original-runtime-in-place',
     script: path.resolve(request.deployDir, request.expectedCurrentScript),
     verification,
@@ -812,10 +923,24 @@ async function restoreBackupByRename(request, backupDir, deps, { moveFailedRelea
   await fsApi.rename(backupDir, request.deployDir);
   await assertCriticalDeployPath(request, fsApi);
   await startRuntime(request, deps, request.expectedCurrentScript);
+  const readiness = await waitForRuntimeReadiness(request, deps, 'original');
+  if (readiness.outcome === 'exhausted') {
+    throw fail(EXIT.ROLLBACK_FAILED, 'rollback_verification_failed', { failedReleaseDir, readiness });
+  }
+  try {
+    await verifyPm2TargetState(request, deps, request.expectedCurrentScript, { requireExactCwd: true });
+  } catch (pm2Error) {
+    throw fail(EXIT.ROLLBACK_FAILED, 'rollback_verification_failed', {
+      failedReleaseDir,
+      pm2Details: pm2Error.details ?? {},
+      pm2Error: pm2Error.message,
+      readiness,
+    });
+  }
   const verification = await verifyOriginalRuntime(request, deps);
-  if (!verification.ok) throw fail(EXIT.ROLLBACK_FAILED, 'rollback_verification_failed', { checks: verification.checks, failedReleaseDir });
+  if (!verification.ok) throw fail(EXIT.ROLLBACK_FAILED, 'rollback_verification_failed', { checks: verification.checks, failedReleaseDir, readiness });
   await runRequired(deps.runner, 'pm2', ['save'], { shell: false }, 'pm2-save-rollback');
-  return { failedReleaseDir, script: request.expectedCurrentScript, verification };
+  return { failedReleaseDir, readiness, script: request.expectedCurrentScript, verification };
 }
 
 async function runRollback(request, deps) {
@@ -843,7 +968,7 @@ async function runApply(request, deps) {
     runtimeWasPresent: false,
   };
   const releaseDir = path.join(request.backupRoot, `.prepared-${request.operationId}`);
-  const report = { backupDir, hashes: [], mode: 'apply', operationId: request.operationId, releaseDir, steps: [] };
+  const report = { backupDir, hashes: [], mode: 'apply', operationId: request.operationId, readiness: {}, releaseDir, steps: [] };
 
   try {
     await runRequired(deps.runner, 'npm', ['run', 'self-check'], { cwd: request.sourceBackendDir, shell: false }, 'source-self-check');
@@ -892,8 +1017,23 @@ async function runApply(request, deps) {
     report.steps.push('atomic-rename-release-to-live');
     await startRuntime(request, deps, request.expectedTargetScript);
     report.steps.push('pm2-target-started');
+    const readiness = await waitForRuntimeReadiness(request, deps, 'target');
+    report.readiness.target = readiness;
+    if (readiness.outcome === 'exhausted') {
+      throw fail(EXIT.APPLY_FAILED, 'target_verification_failed', { readiness });
+    }
+    try {
+      await verifyPm2TargetState(request, deps, request.expectedTargetScript, { requireExactCwd: true });
+    } catch (pm2Error) {
+      throw fail(EXIT.APPLY_FAILED, 'target_verification_failed', {
+        pm2Details: pm2Error.details ?? {},
+        pm2Error: pm2Error.message,
+        readiness,
+      });
+    }
+    report.steps.push('pm2-target-revalidated-after-readiness');
     const verification = await verifyTarget(request, deps);
-    if (!verification.ok) throw fail(EXIT.APPLY_FAILED, 'target_verification_failed', { checks: verification.checks });
+    if (!verification.ok) throw fail(EXIT.APPLY_FAILED, 'target_verification_failed', { checks: verification.checks, readiness });
     await runRequired(deps.runner, 'pm2', ['save'], { shell: false }, 'pm2-save-apply');
     report.steps.push('pm2-save');
     return { ...report, backupDir, ok: true, verification };
@@ -906,13 +1046,16 @@ async function runApply(request, deps) {
         throw fail(EXIT.ROLLBACK_FAILED, 'apply_failed_automatic_rollback_failed', {
           backupDir,
           failedReleaseDir: path.join(request.backupRoot, `failed-release-${request.operationId}`),
+          originalDetails: error.details ?? {},
           originalError: error.message,
+          rollbackDetails: rollbackError.details ?? {},
           rollbackError: rollbackError.message,
         });
       }
       throw fail(EXIT.APPLY_FAILED, 'apply_failed_automatic_rollback_succeeded', {
         backupDir,
         failedReleaseDir: rollback.failedReleaseDir,
+        originalDetails: error.details ?? {},
         originalError: error.message,
         rollback,
       });
@@ -924,6 +1067,7 @@ async function runApply(request, deps) {
           deployDir: request.deployDir,
           expectedCurrentScript: path.resolve(request.deployDir, request.expectedCurrentScript),
           liveMovedToBackup,
+          originalDetails: error.details ?? {},
           originalError: error.message,
           recovery,
         });
@@ -945,8 +1089,10 @@ async function runApply(request, deps) {
           deployDir: request.deployDir,
           expectedCurrentScript: path.resolve(request.deployDir, request.expectedCurrentScript),
           liveMovedToBackup,
+          originalDetails: error.details ?? {},
           originalError: error.message,
           pm2State,
+          recoveryDetails: recoveryOrFinalError.details ?? {},
           recoveryError: recoveryOrFinalError.message,
         });
       }
@@ -955,7 +1101,7 @@ async function runApply(request, deps) {
   }
 }
 
-export async function executeController({ argv, request, policy = REAL_POLICY, runner = createDefaultRunner(), httpClient = createDefaultHttpClient(), fsApi = realFs } = {}) {
+export async function executeController({ argv, request, policy = REAL_POLICY, runner = createDefaultRunner(), httpClient = createDefaultHttpClient(), fsApi = realFs, sleep = defaultSleep } = {}) {
   const parsed = argv ? parseArgs(argv) : null;
   const mode = parsed?.mode ?? argv?.mode ?? request?.mode;
   let loadedRequest = request;
@@ -965,8 +1111,8 @@ export async function executeController({ argv, request, policy = REAL_POLICY, r
   await validateRequestPaths(normalized, fsApi);
 
   if (mode === 'dry-run') return runPreflight(normalized, { fsApi, runner, httpClient });
-  if (mode === 'apply') return runApply(normalized, { fsApi, runner, httpClient });
-  if (mode === 'rollback') return runRollback(normalized, { fsApi, runner, httpClient });
+  if (mode === 'apply') return runApply(normalized, { fsApi, runner, httpClient, sleep });
+  if (mode === 'rollback') return runRollback(normalized, { fsApi, runner, httpClient, sleep });
   throw fail(EXIT.CLI, 'mode_not_supported', { mode });
 }
 
