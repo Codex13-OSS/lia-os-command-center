@@ -13,6 +13,7 @@ import { ExecutiveEnvironmentCard } from './components/ExecutiveEnvironmentCard'
 import { DynamicCommandLayer } from './components/DynamicCommandLayer';
 import { LiaAgentBridgeStatusCard } from './components/LiaAgentBridgeStatusCard';
 import { LiaAgentBackendStatusCard } from './components/LiaAgentBackendStatusCard';
+import { LiaLoginScreen } from './components/LiaLoginScreen';
 
 type View = 'dashboard' | 'agenda' | 'tracking' | 'documents' | 'alerts';
 
@@ -354,95 +355,22 @@ export default function App() {
 
   if (!logged) {
     return (
-      <main className="lia-login-premium">
-        <style>{styles}</style>
-        <style>{connectorPremiumStyles}</style>
-        <style>{mobileLÍAFixStyles}</style>
+      <LiaLoginScreen
+        email={loginEmail}
+        password={loginPassword}
+        error={loginError}
+        onEmailChange={setLoginEmail}
+        onPasswordChange={setLoginPassword}
+        onSubmit={() => {
+          if (loginEmail !== 'ejecutivo@lia.local' || loginPassword !== 'lia2026') {
+            setLoginError('Credenciales de acceso: ejecutivo@lia.local / lia2026');
+            return;
+          }
 
-        <div className="login-cinematic-bg" aria-hidden="true" />
-        <div className="login-mesh-glow" aria-hidden="true" />
-
-        <header className="login-brand-premium">
-          <div className="login-brand-mark">LÍA</div>
-          <div>
-            <strong>LÍA O.S</strong>
-            <span>Centro de mando ejecutivo</span>
-          </div>
-        </header>
-
-        <aside className="login-sync-panel">
-          <p className="login-eyebrow">Centro de mando ejecutivo</p>
-          <h1>NÚCLEO COGNITIVO</h1>
-          <p>
-            Acceso ejecutivo seguro. Verificando identidad, enlazando contexto operativo
-            y preparando el mapa cognitivo de dirección.
-          </p>
-        </aside>
-
-        <section className="login-orb-stage" aria-label="Núcleo cognitivo LÍA">
-          <div className="orb-halo-system">
-            <NeuralCore />
-          </div>
-        </section>
-
-        <section className="executive-access-panel">
-          <div className="access-panel-head">
-            <p className="login-eyebrow">ACCESO EJECUTIVO</p>
-            <h2>Verificación requerida</h2>
-            <p>Ingresa con tus credenciales para iniciar el centro de comando.</p>
-          </div>
-
-          <form
-            className="login-premium-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-
-              if (loginEmail !== 'ejecutivo@lia.local' || loginPassword !== 'lia2026') {
-                setLoginError('Credenciales de acceso: ejecutivo@lia.local / lia2026');
-                return;
-              }
-
-              setLoginError(null);
-              setLogged(true);
-            }}
-          >
-            <label className="login-field">
-              <span>Correo ejecutivo</span>
-              <input
-                type="email"
-                value={loginEmail}
-                onChange={(event) => setLoginEmail(event.target.value)}
-                placeholder="ejecutivo@lia.local"
-                autoComplete="email"
-                className="login-autofill-dark-fix-v088"
-              />
-            </label>
-
-            <label className="login-field">
-              <span>Clave de acceso</span>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(event) => setLoginPassword(event.target.value)}
-                placeholder="lia2026"
-                autoComplete="current-password"
-                className="login-autofill-dark-fix-v088"
-              />
-            </label>
-
-            {loginError ? <p className="login-error">{loginError}</p> : null}
-
-            <button type="submit" className="login-premium-submit">
-              Iniciar sesión <span>→</span>
-            </button>
-
-            <button type="button" className="login-biometric">
-              Acceso biométrico
-            </button>
-          </form>
-        </section>
-
-      </main>
+          setLoginError(null);
+          setLogged(true);
+        }}
+      />
     );
   }
 
