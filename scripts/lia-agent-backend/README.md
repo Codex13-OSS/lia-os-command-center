@@ -94,3 +94,67 @@ The tests use temporary fixtures and a fake command runner that models PM2 prese
 No real `--apply`, real `--rollback`, real deploy, real dry-run against the live environment, PM2 operation, or write to `/opt/lia-agent-backend` was executed for this tooling update. `/opt/lia-agent-backups` was not created.
 
 R3 real dry-run passed 19/19 checks before this R4 hardening. After this commit is reviewed, the real dry-run must be repeated before any controlled apply is considered.
+
+<!-- BEGIN LIA-AGENT-BACKEND-D7-DURABLE-CLOSEOUT -->
+## D7 — Cierre del despliegue controlado R5
+
+### Estado vigente
+
+La operación `lia-agent-backend-d7-apply-r5-001` quedó completada, desplegada y validada.
+
+- Backend activo: `v4.10.0-a`.
+- Proceso PM2: `lia-agent-backend`, único y `online`.
+- Script: `/opt/lia-agent-backend/dist/server.js`.
+- CWD: `/opt/lia-agent-backend`.
+- Listener: exclusivamente `127.0.0.1:3014`.
+- `GET /health`: 200 y versión `v4.10.0-a`.
+- `GET /api/status`: 200.
+- `POST /health`: 405.
+- Ruta inexistente: 404.
+- Frontend 3004: 200.
+- Generador 3023: 200.
+- Readiness R5: `transient-success`, intento 2 de 6.
+- Rollback automático: no ejecutado.
+- `pm2 save`: ejecutado únicamente después del éxito completo.
+
+### Evidencia aprobada
+
+- `D7_DRY_RUN_APROBADO`
+- `D7_FINAL_APPLY_PREFLIGHT_APROBADO`
+- `D7_APPLY_COMPLETADO_Y_VALIDADO`
+- `D7_POST_DEPLOY_VALIDACION_READ_ONLY_APROBADA`
+- Solicitud durable:
+  `/var/lib/lia-agent-deploy/requests/lia-agent-backend-d7-apply-r5-001.json`
+- SHA-256:
+  `e39a53134aa57515dae5bc365954e65cc103680af07093e10b8c49d8376a6dd5`
+- Backup legado:
+  `/opt/lia-agent-backups/2026-07-16T00-51-53-408Z-lia-agent-backend-d7-apply-r5-001`
+- Versión respaldada: `4.4.0-b`.
+
+### Decisión operativa
+
+El apply D7 fue consumido y no debe repetirse. No se debe ejecutar rollback
+manual sin una nueva autorización explícita. El runtime vigente aceptado es
+el backend `v4.10.0-a` desplegado mediante el controlador R5.
+
+### Capacidades aún desactivadas
+
+El servicio permanece en modo `read_only_foundation`:
+
+- `realActionsEnabled=false`
+- `voiceEnabled=false`
+- `whatsappEnabled=false`
+- `memoryWriteEnabled=false`
+- `externalModelsEnabled=false`
+- `frontendConnected=false`
+- `secretsLoaded=false`
+
+### Siguiente paso
+
+Diseñar, sin iniciar todavía, una subfase independiente de integración
+controlada entre el frontend de LÍA O.S. y el backend local `v4.10.0-a`.
+
+La integración deberá mantener desactivadas las acciones reales, secretos,
+escritura de memoria, voz, WhatsApp y modelos externos hasta recibir
+autorizaciones separadas, específicas y verificables.
+<!-- END LIA-AGENT-BACKEND-D7-DURABLE-CLOSEOUT -->
