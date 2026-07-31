@@ -2,7 +2,7 @@
   "schemaVersion": "lia-agent-backend-deploy/v1",
   "operationId": "v501-hermes-YYYYMMDDTHHMMSSZ",
   "expectedRepoRoot": "/opt/executive-platform-demo-hermes",
-  "expectedBranch": "feat/lia-os-v501-hermes-adapter-foundation",
+  "expectedBranch": "feat/lia-os-v500-hermes-adapter-foundation",
   "expectedHead": "REPLACE_WITH_AUTHORIZED_40_CHAR_COMMIT_SHA",
   "expectedTag": "REPLACE_WITH_AUTHORIZED_RELEASE_TAG",
   "sourceBackendDir": "/opt/executive-platform-demo-hermes/backend/lia-agent",
