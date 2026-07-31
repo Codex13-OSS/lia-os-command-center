@@ -6,6 +6,8 @@ import { loadConfig } from './config.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
 import { createHealthRouter } from './routes/health.js';
+import { createHermesRouter } from './routes/hermes.js';
+import { createHermesQueryRouter } from './routes/hermesQuery.js';
 import { createStatusRouter } from './routes/status.js';
 
 export function createApp(config: LiaAgentConfig = loadConfig()): Express {
@@ -31,6 +33,8 @@ export function createApp(config: LiaAgentConfig = loadConfig()): Express {
   app.use(express.json({ limit: '64kb' }));
   app.use(createHealthRouter());
   app.use(createStatusRouter());
+  app.use(createHermesRouter(config));
+  app.use(createHermesQueryRouter(config));
   app.use(notFound);
   app.use(errorHandler);
 

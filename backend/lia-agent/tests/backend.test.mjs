@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { createApp } from '../dist/app.js';
 import { loadConfig } from '../dist/config.js';
@@ -174,4 +177,157 @@ test('invalid port configuration is rejected', () => {
 
 test('non-loopback host configuration is rejected', () => {
   assert.throws(() => loadConfig({ LIA_AGENT_HOST: '0.0.0.0' }), /invalid_lia_agent_host/);
+});
+
+
+test('GET /api/hermes/status is fail-closed when Hermes is not configured', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/status`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.integration, 'hermes');
+    assert.equal(body.mode, 'read_only_adapter_foundation');
+    assert.equal(body.configured, false);
+    assert.equal(body.runtimeDetected, false);
+    assert.equal(body.state, 'unconfigured');
+    assert.equal(body.executionEnabled, false);
+    assert.equal(body.toolsEnabled, false);
+    assert.equal(body.memoryWriteEnabled, false);
+    assert.equal(body.handoffEnabled, false);
+    assert.equal(body.multiplexEnabled, false);
+    assert.equal(body.isolationStrategy, 'one_process_per_tenant');
+  });
+});
+
+test('GET /api/hermes/status detects a complete read-only Hermes runtime', async () => {
+  const hermesRoot = await mkdtemp(join(tmpdir(), 'lia-hermes-runtime-'));
+  const markers = [
+    'run_agent.py',
+    'hermes_state.py',
+    'tools/registry.py',
+    'gateway/run.py',
+  ];
+
+  try {
+    for (const marker of markers) {
+      const path = join(hermesRoot, marker);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, '# test marker\n', 'utf8');
+    }
+
+    const app = createApp(loadConfig({ LIA_HERMES_ROOT: hermesRoot }));
+
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/hermes/status`);
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(body.configured, true);
+      assert.equal(body.runtimeDetected, true);
+      assert.equal(body.state, 'available');
+      assert.equal(body.requiredMarkers, 4);
+      assert.equal(body.detectedMarkers, 4);
+      assert.equal('hermesRoot' in body, false);
+    });
+  } finally {
+    await rm(hermesRoot, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/hermes/contracts exposes the disabled integration boundary', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/contracts`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.integration, 'hermes');
+    assert.equal(body.adapterMode, 'external_process_boundary');
+    assert.equal(body.tenantIsolation, 'one_process_per_tenant');
+    assert.equal(body.failClosed, true);
+    assert.equal(body.directDatabaseAccess, false);
+    assert.equal(body.secretsInherited, false);
+    assert.equal(body.pluginAllowlistRequired, true);
+    assert.equal(body.capabilities.runtimeProbe, true);
+    assert.equal(body.capabilities.promptExecution, false);
+    assert.equal(body.capabilities.toolExecution, false);
+    assert.equal(body.capabilities.memoryWrite, false);
+    assert.equal(body.capabilities.channelDelivery, false);
+  });
+});
+
+test('POST /api/hermes/status returns deterministic 405 JSON', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/status`, { method: 'POST' });
+    const body = await response.json();
+
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get('allow'), 'GET');
+    assert.equal(body.error, 'method_not_allowed');
+  });
+});
+
+test('relative Hermes root configuration is rejected', () => {
+  assert.throws(
+    () => loadConfig({ LIA_HERMES_ROOT: './hermes-agent' }),
+    /invalid_lia_hermes_root/,
+  );
+});
+
+
+test('POST /api/hermes/query is disabled by default', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'Hola' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 503);
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'execution_disabled');
+  });
+});
+
+test('POST /api/hermes/query rejects missing and oversized queries', async () => {
+  const app = createApp(loadConfig({ LIA_HERMES_MAX_QUERY_CHARACTERS: '5' }));
+
+  await withServer(app, async (baseUrl) => {
+    for (const payload of [{}, { query: '' }, { query: '123456' }]) {
+      const response = await fetch(`${baseUrl}/api/hermes/query`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 400);
+      assert.equal(body.error, 'invalid_query');
+      assert.equal(body.maxCharacters, 5);
+    }
+  });
+});
+
+test('GET /api/hermes/query returns deterministic 405 JSON', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/query`);
+    const body = await response.json();
+
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get('allow'), 'POST');
+    assert.equal(body.error, 'method_not_allowed');
+  });
+});
+
+test('invalid Hermes execution limits are rejected', () => {
+  assert.throws(
+    () => loadConfig({ LIA_HERMES_TIMEOUT_MS: '0' }),
+    /invalid_lia_hermes_timeout/,
+  );
+  assert.throws(
+    () => loadConfig({ LIA_HERMES_MAX_QUERY_CHARACTERS: 'abc' }),
+    /invalid_lia_hermes_max_query_characters/,
+  );
 });

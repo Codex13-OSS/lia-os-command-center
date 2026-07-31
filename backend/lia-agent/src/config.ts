@@ -1,7 +1,20 @@
+import { isAbsolute } from 'node:path';
+
 export type LiaAgentConfig = {
   host: string;
   port: number;
   corsOrigins: string[];
+  hermesRoot: string;
+  hermesExecutionEnabled: boolean;
+  hermesExecutable: string;
+  hermesHome: string;
+  hermesUser: string;
+  hermesUserHome: string;
+  hermesPath: string;
+  hermesProvider: string;
+  hermesModel: string;
+  hermesTimeoutMs: number;
+  hermesMaxQueryCharacters: number;
   logLevel: 'silent' | 'error' | 'warn' | 'info';
 };
 
@@ -37,6 +50,66 @@ function parseCorsOrigins(rawOrigins: string | undefined): string[] {
     .filter((origin) => origin.length > 0);
 }
 
+function parseHermesRoot(rawRoot: string | undefined): string {
+  const candidate = rawRoot?.trim() ?? '';
+
+  if (candidate === '') {
+    return '';
+  }
+
+  if (!isAbsolute(candidate) || candidate.includes('\\0')) {
+    throw new Error('invalid_lia_hermes_root');
+  }
+
+  return candidate;
+}
+
+function parseBoolean(rawValue: string | undefined): boolean {
+  return rawValue?.trim().toLowerCase() === 'true';
+}
+
+function parsePositiveInteger(
+  rawValue: string | undefined,
+  fallback: number,
+  errorCode: string,
+): number {
+  if (rawValue === undefined || rawValue.trim() === '') {
+    return fallback;
+  }
+
+  if (!/^\d+$/.test(rawValue.trim())) {
+    throw new Error(errorCode);
+  }
+
+  const value = Number.parseInt(rawValue.trim(), 10);
+
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(errorCode);
+  }
+
+  return value;
+}
+
+function parseAbsolutePath(rawValue: string | undefined, fallback: string): string {
+  const candidate = rawValue?.trim() || fallback;
+
+  if (!isAbsolute(candidate) || candidate.includes('\0')) {
+    throw new Error('invalid_lia_hermes_path');
+  }
+
+  return candidate;
+}
+
+function parseIdentifier(rawValue: string | undefined, fallback: string): string {
+  const candidate = rawValue?.trim() || fallback;
+
+  if (!/^[A-Za-z0-9._/-]{1,128}$/.test(candidate)) {
+    throw new Error('invalid_lia_hermes_identifier');
+  }
+
+  return candidate;
+}
+
 function parseLogLevel(rawLogLevel: string | undefined): LiaAgentConfig['logLevel'] {
   const candidate = rawLogLevel === undefined || rawLogLevel.trim() === '' ? 'info' : rawLogLevel.trim();
 
@@ -58,6 +131,29 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LiaAgentConfig
     host,
     port: parsePort(env.LIA_AGENT_PORT),
     corsOrigins: parseCorsOrigins(env.LIA_AGENT_CORS_ORIGINS),
+    hermesRoot: parseHermesRoot(env.LIA_HERMES_ROOT),
+    hermesExecutionEnabled: parseBoolean(env.LIA_HERMES_EXECUTION_ENABLED),
+    hermesExecutable: parseAbsolutePath(
+      env.LIA_HERMES_EXECUTABLE,
+      '/home/hermes-agent/.local/bin/hermes',
+    ),
+    hermesHome: parseAbsolutePath(env.LIA_HERMES_HOME, '/home/hermes-agent/.hermes'),
+    hermesUser: parseIdentifier(env.LIA_HERMES_USER, 'hermes-agent'),
+    hermesUserHome: parseAbsolutePath(env.LIA_HERMES_USER_HOME, '/home/hermes-agent'),
+    hermesPath: env.LIA_HERMES_PATH?.trim()
+      || '/home/hermes-agent/.local/bin:/usr/local/bin:/usr/bin:/bin',
+    hermesProvider: parseIdentifier(env.LIA_HERMES_PROVIDER, 'openai-codex'),
+    hermesModel: parseIdentifier(env.LIA_HERMES_MODEL, 'gpt-5.6-terra'),
+    hermesTimeoutMs: parsePositiveInteger(
+      env.LIA_HERMES_TIMEOUT_MS,
+      120_000,
+      'invalid_lia_hermes_timeout',
+    ),
+    hermesMaxQueryCharacters: parsePositiveInteger(
+      env.LIA_HERMES_MAX_QUERY_CHARACTERS,
+      8_000,
+      'invalid_lia_hermes_max_query_characters',
+    ),
     logLevel: parseLogLevel(env.LIA_AGENT_LOG_LEVEL),
   };
 }
