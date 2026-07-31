@@ -201,7 +201,7 @@ test('GET /api/hermes/status is fail-closed when Hermes is not configured', asyn
   });
 });
 
-test('GET /api/hermes/status detects a complete read-only Hermes runtime', async () => {
+test('GET /api/hermes/status reports guarded prompt execution when enabled', async () => {
   const hermesRoot = await mkdtemp(join(tmpdir(), 'lia-hermes-runtime-'));
   const markers = [
     'run_agent.py',
@@ -217,7 +217,10 @@ test('GET /api/hermes/status detects a complete read-only Hermes runtime', async
       await writeFile(path, '# test marker\n', 'utf8');
     }
 
-    const app = createApp(loadConfig({ LIA_HERMES_ROOT: hermesRoot }));
+    const app = createApp(loadConfig({
+      LIA_HERMES_ROOT: hermesRoot,
+      LIA_HERMES_EXECUTION_ENABLED: 'true',
+    }));
 
     await withServer(app, async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/hermes/status`);
@@ -229,6 +232,10 @@ test('GET /api/hermes/status detects a complete read-only Hermes runtime', async
       assert.equal(body.state, 'available');
       assert.equal(body.requiredMarkers, 4);
       assert.equal(body.detectedMarkers, 4);
+      assert.equal(body.mode, 'guarded_prompt_execution');
+      assert.equal(body.executionEnabled, true);
+      assert.equal(body.toolsEnabled, false);
+      assert.equal(body.memoryWriteEnabled, false);
       assert.equal('hermesRoot' in body, false);
     });
   } finally {
@@ -251,6 +258,25 @@ test('GET /api/hermes/contracts exposes the disabled integration boundary', asyn
     assert.equal(body.pluginAllowlistRequired, true);
     assert.equal(body.capabilities.runtimeProbe, true);
     assert.equal(body.capabilities.promptExecution, false);
+    assert.equal(body.capabilities.toolExecution, false);
+    assert.equal(body.capabilities.memoryWrite, false);
+    assert.equal(body.capabilities.channelDelivery, false);
+  });
+});
+
+
+test('GET /api/hermes/contracts reports prompt execution when enabled', async () => {
+  const app = createApp(loadConfig({
+    LIA_HERMES_EXECUTION_ENABLED: 'true',
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/contracts`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.capabilities.runtimeProbe, true);
+    assert.equal(body.capabilities.promptExecution, true);
     assert.equal(body.capabilities.toolExecution, false);
     assert.equal(body.capabilities.memoryWrite, false);
     assert.equal(body.capabilities.channelDelivery, false);

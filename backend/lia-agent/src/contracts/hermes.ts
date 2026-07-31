@@ -1,4 +1,11 @@
-export type HermesIntegrationState = 'unconfigured' | 'available' | 'unavailable';
+export type HermesIntegrationState =
+  | 'unconfigured'
+  | 'available'
+  | 'unavailable';
+
+export type HermesAdapterMode =
+  | 'read_only_adapter_foundation'
+  | 'guarded_prompt_execution';
 
 export type HermesRuntimeProbe = {
   configured: boolean;
@@ -12,13 +19,13 @@ export type HermesStatusSnapshot = {
   ok: true;
   service: 'lia-agent-backend';
   integration: 'hermes';
-  mode: 'read_only_adapter_foundation';
+  mode: HermesAdapterMode;
   configured: boolean;
   runtimeDetected: boolean;
   state: HermesIntegrationState;
   requiredMarkers: number;
   detectedMarkers: number;
-  executionEnabled: false;
+  executionEnabled: boolean;
   toolsEnabled: false;
   memoryWriteEnabled: false;
   handoffEnabled: false;
@@ -40,25 +47,30 @@ export type HermesContractsSnapshot = {
   multiplexEnabled: false;
   capabilities: {
     runtimeProbe: true;
-    promptExecution: false;
+    promptExecution: boolean;
     toolExecution: false;
     memoryWrite: false;
     channelDelivery: false;
   };
 };
 
-export function createHermesStatusSnapshot(probe: HermesRuntimeProbe): HermesStatusSnapshot {
+export function createHermesStatusSnapshot(
+  probe: HermesRuntimeProbe,
+  executionEnabled: boolean,
+): HermesStatusSnapshot {
   return {
     ok: true,
     service: 'lia-agent-backend',
     integration: 'hermes',
-    mode: 'read_only_adapter_foundation',
+    mode: executionEnabled
+      ? 'guarded_prompt_execution'
+      : 'read_only_adapter_foundation',
     configured: probe.configured,
     runtimeDetected: probe.runtimeDetected,
     state: probe.state,
     requiredMarkers: probe.requiredMarkers,
     detectedMarkers: probe.detectedMarkers,
-    executionEnabled: false,
+    executionEnabled,
     toolsEnabled: false,
     memoryWriteEnabled: false,
     handoffEnabled: false,
@@ -67,7 +79,9 @@ export function createHermesStatusSnapshot(probe: HermesRuntimeProbe): HermesSta
   };
 }
 
-export function createHermesContractsSnapshot(): HermesContractsSnapshot {
+export function createHermesContractsSnapshot(
+  executionEnabled: boolean,
+): HermesContractsSnapshot {
   return {
     ok: true,
     service: 'lia-agent-backend',
@@ -82,7 +96,7 @@ export function createHermesContractsSnapshot(): HermesContractsSnapshot {
     multiplexEnabled: false,
     capabilities: {
       runtimeProbe: true,
-      promptExecution: false,
+      promptExecution: executionEnabled,
       toolExecution: false,
       memoryWrite: false,
       channelDelivery: false,

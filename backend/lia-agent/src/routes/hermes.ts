@@ -12,11 +12,11 @@ export function createHermesRouter(config: LiaAgentConfig): Router {
 
   router.route('/api/hermes/status').get(async (_request, response) => {
     const probe = await inspectHermesRuntime(config.hermesRoot);
-    response.status(200).json(createHermesStatusSnapshot(probe));
+    response.status(200).json(createHermesStatusSnapshot(probe, config.hermesExecutionEnabled));
   }).all(methodNotAllowed(['GET']));
 
   router.route('/api/hermes/contracts').get((_request, response) => {
-    response.status(200).json(createHermesContractsSnapshot());
+    response.status(200).json(createHermesContractsSnapshot(config.hermesExecutionEnabled));
   }).all(methodNotAllowed(['GET']));
 
   return router;
