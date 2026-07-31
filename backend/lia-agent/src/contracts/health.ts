@@ -13,7 +13,7 @@ export type LiaAgentBackendHealthSnapshot = {
   secretsLoaded: false;
 };
 
-export const LIA_AGENT_BACKEND_VERSION = 'v4.10.0-a';
+export const LIA_AGENT_BACKEND_VERSION = 'v5.0.0';
 
 export function createHealthSnapshot(): LiaAgentBackendHealthSnapshot {
   return {

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { buildSafePm2Environment, executeController as rawExecuteController, jsonText, parseArgs } from '../deploy-controller.mjs';
+import { buildSafePm2Environment, executeController as rawExecuteController, jsonText, parseArgs, validateSafePm2Environment } from '../deploy-controller.mjs';
 
 const HEAD = 'a'.repeat(40);
 const SAFE_PM2_ENV_KEYS = [
@@ -1855,4 +1855,42 @@ test('ningun comando usa shell y salida JSON estable', async () => {
 test('self-check estatico impide reintroducir spread completo de process.env', async () => {
   const source = await readFile(new URL('../deploy-controller.mjs', import.meta.url), 'utf8');
   assert.equal(source.includes('...process.env'), false);
+});
+
+
+test('custom functional PM2 environment is isolated and validated', () => {
+  const functionalEnv = {
+    LIA_AGENT_CORS_ORIGINS: '',
+    LIA_AGENT_HOST: '127.0.0.1',
+    LIA_AGENT_LOG_LEVEL: 'info',
+    LIA_AGENT_PORT: '3014',
+    LIA_HERMES_EXECUTION_ENABLED: 'true',
+    LIA_HERMES_HOME: '/home/hermes-agent/.hermes',
+    LIA_HERMES_MODEL: 'gpt-5.6-terra',
+    LIA_HERMES_PROVIDER: 'openai-codex',
+    NODE_ENV: 'production',
+  };
+
+  const env = buildSafePm2Environment(
+    { host: '127.0.0.1', port: 3014 },
+    {
+      HOME: '/root',
+      PATH: '/usr/bin:/bin',
+      OPENAI_API_KEY: 'must-not-leak',
+      RANDOM_SECRET: 'must-not-leak',
+    },
+    functionalEnv,
+  );
+
+  assert.equal(env.LIA_HERMES_EXECUTION_ENABLED, 'true');
+  assert.equal(env.LIA_HERMES_PROVIDER, 'openai-codex');
+  assert.equal(env.LIA_HERMES_MODEL, 'gpt-5.6-terra');
+  assert.equal(env.OPENAI_API_KEY, undefined);
+  assert.equal(env.RANDOM_SECRET, undefined);
+
+  assert.doesNotThrow(() => validateSafePm2Environment(
+    { host: '127.0.0.1', port: 3014 },
+    env,
+    functionalEnv,
+  ));
 });

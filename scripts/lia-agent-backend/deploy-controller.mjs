@@ -676,8 +676,15 @@ async function runPreflight(request, deps) {
   const generator = await httpClient({ host: request.host, port: protectedPorts[1], path: '/', method: 'GET' });
   addCheck(checks, `frontend-${protectedPorts[0]}-health`, frontend.ok && frontend.statusCode === 200, { statusCode: frontend.statusCode });
   addCheck(checks, `generator-${protectedPorts[1]}-health`, generator.ok && generator.statusCode === 200, { statusCode: generator.statusCode });
-  const pm2EnvironmentKeys = validateSafePm2Environment(request, buildSafePm2Environment(request));
-  addCheck(checks, 'pm2-environment-allowlist', true, { keys: pm2EnvironmentKeys });
+  const pm2FunctionalEnv = deps.pm2FunctionalEnv ?? PM2_FUNCTIONAL_ENV;
+  const pm2EnvironmentKeys = validateSafePm2Environment(
+    request,
+    buildSafePm2Environment(request, process.env, pm2FunctionalEnv),
+    pm2FunctionalEnv,
+  );
+  addCheck(checks, 'pm2-environment-allowlist', true, {
+    keys: pm2EnvironmentKeys,
+  });
 
   const operations = [
     'validate-request',
@@ -773,32 +780,76 @@ async function verifyOriginalRuntime(request, deps) {
   return verifyBackendHttp(request, deps, request.expectedCurrentVersion, { requireStatusEndpoint: false });
 }
 
-function buildSafePm2Environment(request, sourceEnv = process.env) {
+function buildSafePm2Environment(
+  request,
+  sourceEnv = process.env,
+  functionalEnv = PM2_FUNCTIONAL_ENV,
+) {
   const env = {};
   for (const key of PM2_OPERATIONAL_ENV_KEYS) {
     if (Object.hasOwn(sourceEnv, key) && sourceEnv[key] !== undefined) {
       env[key] = String(sourceEnv[key]);
     }
   }
-  return { ...env, ...PM2_FUNCTIONAL_ENV };
+  return { ...env, ...functionalEnv };
 }
 
-function validateSafePm2Environment(request, env) {
+function validateSafePm2Environment(
+  request,
+  env,
+  functionalEnv = PM2_FUNCTIONAL_ENV,
+) {
   assertPlainObject(env, 'pm2Environment');
+  assertPlainObject(functionalEnv, 'pm2FunctionalEnvironment');
+
   const keys = Object.keys(env).sort();
-  const unexpected = keys.filter((key) => !SAFE_PM2_ENV_KEY_SET.has(key));
-  if (unexpected.length > 0) throw fail(EXIT.APPLY_FAILED, 'pm2_environment_unexpected_keys', { keys: unexpected });
-  for (const [key, value] of Object.entries(PM2_FUNCTIONAL_ENV)) {
-    if (env[key] !== value) throw fail(EXIT.APPLY_FAILED, 'pm2_environment_functional_value_invalid', { key });
+  const allowedKeys = new Set([
+    ...PM2_OPERATIONAL_ENV_KEYS,
+    ...Object.keys(functionalEnv),
+  ]);
+  const unexpected = keys.filter((key) => !allowedKeys.has(key));
+
+  if (unexpected.length > 0) {
+    throw fail(EXIT.APPLY_FAILED, 'pm2_environment_unexpected_keys', {
+      keys: unexpected,
+    });
   }
-  if (request.host !== PM2_FUNCTIONAL_ENV.LIA_AGENT_HOST) throw fail(EXIT.APPLY_FAILED, 'pm2_environment_host_request_mismatch');
-  if (String(request.port) !== PM2_FUNCTIONAL_ENV.LIA_AGENT_PORT) throw fail(EXIT.APPLY_FAILED, 'pm2_environment_port_request_mismatch');
+
+  for (const [key, value] of Object.entries(functionalEnv)) {
+    if (env[key] !== value) {
+      throw fail(
+        EXIT.APPLY_FAILED,
+        'pm2_environment_functional_value_invalid',
+        { key },
+      );
+    }
+  }
+
+  if (request.host !== functionalEnv.LIA_AGENT_HOST) {
+    throw fail(
+      EXIT.APPLY_FAILED,
+      'pm2_environment_host_request_mismatch',
+    );
+  }
+
+  if (String(request.port) !== functionalEnv.LIA_AGENT_PORT) {
+    throw fail(
+      EXIT.APPLY_FAILED,
+      'pm2_environment_port_request_mismatch',
+    );
+  }
+
   return keys;
 }
 
 async function startRuntime(request, deps, script) {
-  const env = buildSafePm2Environment(request);
-  validateSafePm2Environment(request, env);
+  const pm2FunctionalEnv = deps.pm2FunctionalEnv ?? PM2_FUNCTIONAL_ENV;
+  const env = buildSafePm2Environment(
+    request,
+    process.env,
+    pm2FunctionalEnv,
+  );
+  validateSafePm2Environment(request, env, pm2FunctionalEnv);
   await runRequired(
     deps.runner,
     'pm2',
@@ -1101,7 +1152,16 @@ async function runApply(request, deps) {
   }
 }
 
-export async function executeController({ argv, request, policy = REAL_POLICY, runner = createDefaultRunner(), httpClient = createDefaultHttpClient(), fsApi = realFs, sleep = defaultSleep } = {}) {
+export async function executeController({
+  argv,
+  request,
+  policy = REAL_POLICY,
+  pm2FunctionalEnv = PM2_FUNCTIONAL_ENV,
+  runner = createDefaultRunner(),
+  httpClient = createDefaultHttpClient(),
+  fsApi = realFs,
+  sleep = defaultSleep,
+} = {}) {
   const parsed = argv ? parseArgs(argv) : null;
   const mode = parsed?.mode ?? argv?.mode ?? request?.mode;
   let loadedRequest = request;
@@ -1110,9 +1170,9 @@ export async function executeController({ argv, request, policy = REAL_POLICY, r
   const normalized = normalizeRequest(loadedRequest, policy);
   await validateRequestPaths(normalized, fsApi);
 
-  if (mode === 'dry-run') return runPreflight(normalized, { fsApi, runner, httpClient });
-  if (mode === 'apply') return runApply(normalized, { fsApi, runner, httpClient, sleep });
-  if (mode === 'rollback') return runRollback(normalized, { fsApi, runner, httpClient, sleep });
+  if (mode === 'dry-run') return runPreflight(normalized, { fsApi, runner, httpClient, pm2FunctionalEnv });
+  if (mode === 'apply') return runApply(normalized, { fsApi, runner, httpClient, sleep, pm2FunctionalEnv });
+  if (mode === 'rollback') return runRollback(normalized, { fsApi, runner, httpClient, sleep, pm2FunctionalEnv });
   throw fail(EXIT.CLI, 'mode_not_supported', { mode });
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "lia-agent-backend",
-  "version": "4.10.0-a",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
