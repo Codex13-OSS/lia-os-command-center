@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { CognitiveSpaceEngine } from './components/CognitiveSpaceEngine';
 import { NeuralCore } from './components/NeuralCore';
-import { activity, agenda, alerts, tracking } from './data/liaOsExecutiveData';
+import { activity, agenda, tracking } from './data/liaOsExecutiveData';
 import { getExecutiveAgendaEventsForDay, getExecutiveTodayDayId } from './data/executiveAgendaData';
 import { connectorPremiumStyles, mobileLÍAFixStyles, styles } from './styles/liaOsStyles';
 import { ExecutiveAgendaTimeline } from './components/ExecutiveAgendaTimeline';
@@ -14,6 +14,7 @@ import { DynamicCommandLayer } from './components/DynamicCommandLayer';
 import { LiaAgentBridgeStatusCard } from './components/LiaAgentBridgeStatusCard';
 import { LiaAgentBackendStatusCard } from './components/LiaAgentBackendStatusCard';
 import { LiaLoginScreen } from './components/LiaLoginScreen';
+import { requestLiaHermesResponse } from './integrations/liaHermesChatClient';
 
 type View = 'dashboard' | 'agenda' | 'tracking' | 'documents' | 'alerts';
 
@@ -34,7 +35,6 @@ export default function App() {
     'Esperando instrucción ejecutiva.',
   ]);
   const [activityFeed, setActivityFeed] = useState(activity);
-  const [, setAlertsList] = useState(alerts);
   const [livePulse, setLivePulse] = useState(0);
   const [liaMessages, setLÍAMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([
     {
@@ -46,6 +46,8 @@ export default function App() {
   const [mobileOrbListening, setMobileOrbListening] = useState(false);
   const [mobileLÍAOpen, setMobileLÍAOpen] = useState(false);
   const [activeLiaAction, setActiveLiaAction] = useState<string | null>(null);
+  const [liaQueryPending, setLiaQueryPending] = useState(false);
+  const liaQueryPendingRef = useRef(false);
   const mobileInputRef = useRef<HTMLInputElement | null>(null);
   const orbTimeoutRef = useRef<number | null>(null);
 
@@ -116,24 +118,7 @@ export default function App() {
     window.open(DOCUMENT_GENERATOR_URL, '_blank', 'noopener,noreferrer');
   };
 
-  const addDocument = (title = 'Documento listo para revisión') => {
-    const stamp = new Date().toLocaleTimeString('es-MX', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
 
-    addActivity(`${title}: generador documental abierto a las ${stamp}.`);
-    openDocumentGenerator();
-  };
-
-  const addAlert = (title = 'Nuevo recordatorio ejecutivo') => {
-    setAlertsList((prev) => [
-      ['Alta', title, 'Alerta ejecutiva preparada. Confirmación pendiente.'],
-      ...prev,
-    ].slice(0, 6));
-
-    setView('alerts');
-  };
 
   const runLÍAAction = (instruction: string, result: string, onConfirm?: () => void) => {
     const flowContext = viewContext[view];
@@ -256,39 +241,66 @@ export default function App() {
     runLÍAAction(label, result, () => addActivity(activityText));
   };
 
-  const sendLÍA = () => {
+  const sendLÍA = async () => {
     const clean = message.trim();
-    if (!clean) return;
 
-    const lower = clean.toLowerCase();
+    if (!clean || liaQueryPendingRef.current) return;
 
-    if (lower.includes('documento') || lower.includes('reporte') || lower.includes('contrato')) {
-      runLÍAAction(
-        clean,
-        'Documento conectado al centro documental con estado, responsable y decisión pendiente.',
-        () => addDocument(clean.length > 34 ? `${clean.slice(0, 34)}…` : clean)
-      );
-    } else if (lower.includes('recordatorio') || lower.includes('alerta')) {
-      runLÍAAction(
-        clean,
-        'Recordatorio conectado al centro de alertas con origen, prioridad y validación pendiente.',
-        () => addAlert(clean.length > 36 ? `${clean.slice(0, 36)}…` : clean)
-      );
-    } else if (lower.includes('resumen') || lower.includes('agenda')) {
-      runLÍAAction(
-        clean,
-        'Resumen conectado a agenda: objetivo, riesgos y salida esperada preparados.',
-        () => addActivity('Resumen ejecutivo solicitado por texto.')
-      );
-    } else {
-      runLÍAAction(
-        clean,
-        'Instrucción conectada al flujo ejecutivo. LÍA actualizó contexto y siguiente movimiento.',
-        () => addActivity(`LÍA procesó: ${clean.length > 44 ? `${clean.slice(0, 44)}…` : clean}`)
-      );
-    }
+    const pendingText = 'Consultando el núcleo de LÍA...';
 
+    liaQueryPendingRef.current = true;
+    setLiaQueryPending(true);
+    setActiveLiaAction(clean);
+    setLÍAState('Procesando');
     setMessage('');
+    setLÍAMessages((current) => [
+      ...current.slice(-4),
+      { role: 'user' as const, text: clean },
+      { role: 'assistant' as const, text: pendingText },
+    ].slice(-6));
+
+    try {
+      const result = await requestLiaHermesResponse(clean);
+      const responseText = result.ok ? result.response : result.message;
+
+      setLÍAMessages((current) => {
+        const next = [...current];
+
+        for (let index = next.length - 1; index >= 0; index -= 1) {
+          const item = next[index];
+
+          if (item.role === 'assistant' && item.text === pendingText) {
+            next[index] = {
+              role: 'assistant',
+              text: responseText,
+            };
+            return next.slice(-6);
+          }
+        }
+
+        return [
+          ...next,
+          {
+            role: 'assistant' as const,
+            text: responseText,
+          },
+        ].slice(-6);
+      });
+
+      if (result.ok) {
+        pushLÍALog(`Hermes · ${result.model} · respuesta recibida`);
+        addActivity(
+          `LÍA respondió: ${clean.length > 44 ? `${clean.slice(0, 44)}…` : clean}`,
+        );
+      } else {
+        pushLÍALog('Hermes · consulta no completada');
+      }
+    } finally {
+      liaQueryPendingRef.current = false;
+      setLiaQueryPending(false);
+      setActiveLiaAction(null);
+      setLÍAState('En línea');
+    }
   };
 
   const closeMobileLÍA = () => {
@@ -632,19 +644,25 @@ export default function App() {
           <div className="lia-input">
             <input
               value={message}
+              disabled={liaQueryPending}
               onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && sendLÍA()}
-              placeholder="Habla con LÍA..."
+              onKeyDown={(e) => e.key === 'Enter' && void sendLÍA()}
+              placeholder={liaQueryPending ? "LÍA está procesando..." : "Habla con LÍA..."}
             />
-            <button aria-label="Preparar instrucción para LÍA" onClick={sendLÍA}>↗</button>
+            <button aria-label="Enviar instrucción a LÍA" disabled={liaQueryPending} onClick={() => void sendLÍA()}>↗</button>
           </div>
           <small>Escribe o prepara una instrucción.</small>
         </div>
 
         <section className="lia-response-panel-v411">
           <p className="eyebrow">ÚLTIMA RESPUESTA</p>
-          <strong>Centro ejecutivo listo.</strong>
-          <span>Puedo ayudarte con agenda, prioridades y seguimiento.</span>
+          <strong>{liaQueryPending ? 'LÍA está procesando...' : 'Respuesta de LÍA'}</strong>
+          <span>
+            {[...liaMessages]
+              .reverse()
+              .find((item) => item.role === 'assistant')?.text ||
+              'Puedo ayudarte con agenda, prioridades y seguimiento.'}
+          </span>
         </section>
 
         <div className="quick-actions lia-context-actions-v411">
@@ -732,8 +750,8 @@ export default function App() {
         </div>
 
         <div className="mobile-lia-stream">
-          {liaMessages.slice(-3).map((item, index) => (
-            <div className={`lia-bubble ${item.role} ${item.role === 'assistant' && index === liaMessages.length - 1 ? 'lia-action-response-v090' : ''}`} key={`mobile-${item.role}-${index}-${item.text}`}>
+          {liaMessages.slice(-3).map((item, index, visibleMessages) => (
+            <div className={`lia-bubble ${item.role} ${item.role === 'assistant' && index === visibleMessages.length - 1 ? 'lia-action-response-v090' : ''}`} key={`mobile-${item.role}-${index}-${item.text}`}>
               {item.text}
             </div>
           ))}
@@ -743,11 +761,12 @@ export default function App() {
           <input
             ref={mobileInputRef}
             value={message}
+            disabled={liaQueryPending}
             onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && sendLÍA()}
-            placeholder="Habla con LÍA..."
+            onKeyDown={(e) => e.key === 'Enter' && void sendLÍA()}
+            placeholder={liaQueryPending ? "LÍA está procesando..." : "Habla con LÍA..."}
           />
-          <button onClick={sendLÍA}>↑</button>
+          <button disabled={liaQueryPending} onClick={() => void sendLÍA()}>↑</button>
         </div>
       </section>
     )}

@@ -17,10 +17,21 @@ const DEFAULT_PORT = 3424;
 const DEFAULT_CONTROLLED_ADAPTER_PORT = 3224;
 const NON_LOCALHOST_GATE = 'ALLOW_PRODUCTION_SCAFFOLD_REHEARSAL_ONLY';
 const MESSAGING_FLAG = ['whats', 'appEnabled'].join('');
+const DEFAULT_INTERNAL_BACKEND_PORT = 3014;
+const HERMES_QUERY_PATH = '/api/hermes/query';
+const SAME_ORIGIN_QUERY_PATH = '/api/lia-agent/query';
+const MAX_QUERY_CHARACTERS = 8_000;
+const MAX_REQUEST_BYTES = 16 * 1024;
+const MAX_RESPONSE_BYTES = 96 * 1024;
+const QUERY_TIMEOUT_MS = 125_000;
+const ALLOWED_HERMES_ERRORS = new Set(['invalid_query', 'execution_disabled', 'timeout', 'execution_failed', 'empty_response', 'internal_error']);
 
 const host = process.env.LIA_PRODUCTION_RUNTIME_HOST || DEFAULT_HOST;
 const rawPort = process.env.LIA_PRODUCTION_RUNTIME_PORT || String(DEFAULT_PORT);
 const port = Number.parseInt(rawPort, 10);
+const rawInternalBackendPort =
+  process.env.LIA_HERMES_BACKEND_PORT || String(DEFAULT_INTERNAL_BACKEND_PORT);
+const INTERNAL_BACKEND_PORT = Number.parseInt(rawInternalBackendPort, 10);
 const allowNonLocalhost = process.env.LIA_PRODUCTION_RUNTIME_ALLOW_NON_LOCALHOST === NON_LOCALHOST_GATE;
 
 let controlledAdapter = null;
@@ -120,8 +131,26 @@ function parseJsonBody(response) {
 function requestLocal(targetPort, pathname, options = {}) {
   const method = options.method || 'GET';
   const timeout = options.timeout || 1200;
+  const requestBody = typeof options.body === 'string' ? options.body : '';
+  const headers = { ...(options.headers || {}) };
+  const maxResponseBytes =
+    Number.isInteger(options.maxResponseBytes) && options.maxResponseBytes > 0
+      ? options.maxResponseBytes
+      : MAX_RESPONSE_BYTES;
+
+  if (requestBody.length > 0) {
+    headers['Content-Length'] = Buffer.byteLength(requestBody);
+  }
 
   return new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const request = httpRequest(
       {
         host: DEFAULT_HOST,
@@ -129,20 +158,51 @@ function requestLocal(targetPort, pathname, options = {}) {
         method,
         path: pathname,
         timeout,
+        headers,
       },
       (response) => {
-        let body = '';
+        let responseBody = '';
+        let responseBytes = 0;
 
         response.setEncoding('utf8');
+
         response.on('data', (chunk) => {
-          body += chunk;
+          if (settled) return;
+
+          responseBytes += Buffer.byteLength(chunk, 'utf8');
+
+          if (responseBytes > maxResponseBytes) {
+            finish({
+              ok: false,
+              statusCode: response.statusCode || 0,
+              headers: response.headers,
+              body: '',
+              error: 'response_too_large',
+            });
+            response.destroy();
+            request.destroy();
+            return;
+          }
+
+          responseBody += chunk;
         });
+
         response.on('end', () => {
-          resolve({
+          finish({
             ok: true,
             statusCode: response.statusCode || 0,
             headers: response.headers,
-            body,
+            body: responseBody,
+          });
+        });
+
+        response.on('error', (error) => {
+          finish({
+            ok: false,
+            statusCode: response.statusCode || 0,
+            headers: response.headers,
+            body: '',
+            error: error.message,
           });
         });
       },
@@ -151,8 +211,9 @@ function requestLocal(targetPort, pathname, options = {}) {
     request.on('timeout', () => {
       request.destroy(new Error('request_timeout'));
     });
+
     request.on('error', (error) => {
-      resolve({
+      finish({
         ok: false,
         statusCode: 0,
         headers: {},
@@ -160,7 +221,65 @@ function requestLocal(targetPort, pathname, options = {}) {
         error: error.message,
       });
     });
+
+    if (requestBody.length > 0) {
+      request.write(requestBody);
+    }
+
     request.end();
+  });
+}
+
+function readJsonRequestBody(request) {
+  return new Promise((resolve) => {
+    let body = '';
+    let bytes = 0;
+    let completed = false;
+
+    const finish = (result) => {
+      if (completed) return;
+      completed = true;
+      resolve(result);
+    };
+
+    request.on('data', (chunk) => {
+      if (completed) return;
+
+      bytes += chunk.length;
+
+      if (bytes > MAX_REQUEST_BYTES) {
+        finish({
+          ok: false,
+          error: 'payload_too_large',
+        });
+        return;
+      }
+
+      body += chunk.toString('utf8');
+    });
+
+    request.on('end', () => {
+      if (completed) return;
+
+      try {
+        finish({
+          ok: true,
+          body: JSON.parse(body || '{}'),
+        });
+      } catch {
+        finish({
+          ok: false,
+          error: 'invalid_json',
+        });
+      }
+    });
+
+    request.on('error', () => {
+      finish({
+        ok: false,
+        error: 'invalid_request',
+      });
+    });
   });
 }
 
@@ -341,6 +460,105 @@ async function readControlledAdapter() {
   return isSanitizedAdapterPayload(payload) ? payload : createDegradedAdapterPayload();
 }
 
+function createSafeHermesError(error = 'backend_unavailable') {
+  return {
+    ok: false,
+    error,
+  };
+}
+
+function sanitizeHermesPayload(payload) {
+  if (
+    payload?.ok === true &&
+    payload?.integration === 'hermes' &&
+    typeof payload?.model === 'string' &&
+    payload.model.length > 0 &&
+    payload.model.length <= 128 &&
+    typeof payload?.response === 'string' &&
+    payload.response.trim().length > 0 &&
+    Buffer.byteLength(payload.response, 'utf8') <= 64 * 1024
+  ) {
+    return {
+      ok: true,
+      integration: 'hermes',
+      model: payload.model,
+      response: payload.response.trim(),
+    };
+  }
+
+  if (
+    payload?.ok === false &&
+    typeof payload?.error === 'string' &&
+    ALLOWED_HERMES_ERRORS.has(payload.error)
+  ) {
+    return createSafeHermesError(payload.error);
+  }
+
+  return null;
+}
+
+async function proxyHermesQuery(request, response) {
+  const contentType = String(request.headers['content-type'] || '').toLowerCase();
+
+  if (!contentType.includes('application/json')) {
+    sendJson(response, 415, createSafeHermesError('unsupported_media_type'));
+    return;
+  }
+
+  const parsedRequest = await readJsonRequestBody(request);
+
+  if (!parsedRequest.ok) {
+    const statusCode = parsedRequest.error === 'payload_too_large' ? 413 : 400;
+    sendJson(response, statusCode, createSafeHermesError(parsedRequest.error));
+    return;
+  }
+
+  const query = typeof parsedRequest.body?.query === 'string'
+    ? parsedRequest.body.query.trim()
+    : '';
+
+  if (query.length === 0 || query.length > MAX_QUERY_CHARACTERS) {
+    sendJson(response, 400, {
+      ...createSafeHermesError('invalid_query'),
+      maxCharacters: MAX_QUERY_CHARACTERS,
+    });
+    return;
+  }
+
+  const upstream = await requestLocal(
+    INTERNAL_BACKEND_PORT,
+    HERMES_QUERY_PATH,
+    {
+      method: 'POST',
+      timeout: QUERY_TIMEOUT_MS,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query }),
+    },
+  );
+
+  if (!upstream.ok) {
+    sendJson(response, 502, createSafeHermesError('backend_unavailable'));
+    return;
+  }
+
+  const sanitized = sanitizeHermesPayload(parseJsonBody(upstream));
+
+  if (sanitized === null) {
+    sendJson(response, 502, createSafeHermesError('invalid_backend_response'));
+    return;
+  }
+
+  const allowedStatusCodes = new Set([200, 400, 502, 503]);
+  const statusCode = allowedStatusCodes.has(upstream.statusCode)
+    ? upstream.statusCode
+    : 502;
+
+  sendJson(response, statusCode, sanitized);
+}
+
 function createRuntimeServer(distExists) {
   return createServer(async (request, response) => {
     const requestUrl = new URL(request.url || '/', `http://${host}:${port}`);
@@ -370,6 +588,20 @@ function createRuntimeServer(distExists) {
       }
 
       sendJson(response, 200, await readControlledAdapter());
+      return;
+    }
+
+    if (requestUrl.pathname === SAME_ORIGIN_QUERY_PATH) {
+      if (request.method !== 'POST') {
+        sendJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed',
+          allowedMethods: ['POST'],
+        });
+        return;
+      }
+
+      await proxyHermesQuery(request, response);
       return;
     }
 
@@ -415,7 +647,14 @@ async function shutdownAndExit(server, exitCode = 0) {
   process.exit(exitCode);
 }
 
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
+if (
+  !Number.isInteger(port) ||
+  port < 1 ||
+  port > 65535 ||
+  !Number.isInteger(INTERNAL_BACKEND_PORT) ||
+  INTERNAL_BACKEND_PORT < 1 ||
+  INTERNAL_BACKEND_PORT > 65535
+) {
   console.error(JSON.stringify(createStartupSnapshot(false, existsSync(path.join(distDir, 'index.html'))), null, 2));
   process.exit(1);
 }
