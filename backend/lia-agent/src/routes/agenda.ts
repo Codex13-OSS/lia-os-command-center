@@ -1,49 +1,18 @@
 import { Router } from 'express';
-import { createAgendaContextSnapshot } from '../contracts/agenda.js';
-import { validateAgendaReadPayload } from '../contracts/agendaValidation.js';
 import { methodNotAllowed } from '../middleware/methodNotAllowed.js';
 import {
-  createUnconfiguredAgendaReadSource,
   type AgendaReadSource,
 } from '../services/agendaReadSource.js';
+import { readSafeAgendaContext } from '../services/agendaContextReader.js';
 
 export function createAgendaRouter(
-  source: AgendaReadSource = createUnconfiguredAgendaReadSource(),
+  source?: AgendaReadSource,
 ): Router {
   const router = Router();
 
   router.route('/api/agenda/context').get(async (_request, response) => {
-    try {
-      const result = await source.read();
-      const validation = validateAgendaReadPayload(result);
-
-      if (!validation.success) {
-        response.status(200).json(
-          createAgendaContextSnapshot(
-            'unavailable',
-            [],
-            'America/Mexico_City',
-          ),
-        );
-        return;
-      }
-
-      response.status(200).json(
-        createAgendaContextSnapshot(
-          validation.payload.state,
-          validation.payload.events,
-          validation.payload.timezone,
-        ),
-      );
-    } catch {
-      response.status(200).json(
-        createAgendaContextSnapshot(
-          'unavailable',
-          [],
-          'America/Mexico_City',
-        ),
-      );
-    }
+    const snapshot = await readSafeAgendaContext(source);
+    response.status(200).json(snapshot);
   }).all(methodNotAllowed(['GET']));
 
   return router;
