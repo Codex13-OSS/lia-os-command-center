@@ -357,3 +357,226 @@ test('invalid Hermes execution limits are rejected', () => {
     /invalid_lia_hermes_max_query_characters/,
   );
 });
+
+test('GET /api/agenda/context returns safe unconfigured read-only context by default', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/agenda/context`, {
+      headers: { Accept: 'application/json' },
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.service, 'lia-agent-backend');
+    assert.equal(body.integration, 'agenda');
+    assert.equal(body.mode, 'read_only');
+    assert.equal(body.state, 'unconfigured');
+    assert.equal(body.timezone, 'America/Mexico_City');
+    assert.equal(body.readOnly, true);
+    assert.equal(body.realActionsEnabled, false);
+    assert.equal(body.hermesDirectAccess, false);
+    assert.equal(body.sourceOfTruth, 'lia');
+    assert.equal(body.eventCount, 0);
+    assert.deepEqual(body.events, []);
+  });
+});
+
+test('POST /api/agenda/context returns deterministic 405 JSON with Allow', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/agenda/context`, {
+      method: 'POST',
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get('allow'), 'GET');
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'method_not_allowed');
+    assert.deepEqual(body.allowedMethods, ['GET']);
+  });
+});
+
+test('Agenda read source can provide available events without gaining write authority', async () => {
+  const source = {
+    async read() {
+      return {
+        state: 'available',
+        timezone: 'America/Mexico_City',
+        events: [
+          {
+            id: 'agenda-test-001',
+            title: 'Revisión ejecutiva',
+            startTime: '2026-08-03T15:00:00.000Z',
+            endTime: '2026-08-03T15:30:00.000Z',
+            timezone: 'America/Mexico_City',
+            mode: 'virtual',
+            priority: 'high',
+            status: 'confirmed',
+            attendees: [],
+            responsible: { name: 'Dirección' },
+            preparationMinutes: 10,
+            parkingMinutes: 0,
+            walkingMinutes: 0,
+            followUpRequired: true,
+            recurrence: { frequency: 'none' },
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+            source: 'external',
+          },
+        ],
+        realActionsEnabled: true,
+        hermesDirectAccess: true,
+      };
+    },
+  };
+
+  const app = createApp(loadConfig({}), { agendaReadSource: source });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/agenda/context`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.state, 'available');
+    assert.equal(body.eventCount, 1);
+    assert.equal(body.events[0].id, 'agenda-test-001');
+    assert.equal(body.events[0].title, 'Revisión ejecutiva');
+
+    assert.equal(body.mode, 'read_only');
+    assert.equal(body.readOnly, true);
+    assert.equal(body.realActionsEnabled, false);
+    assert.equal(body.hermesDirectAccess, false);
+    assert.equal(body.sourceOfTruth, 'lia');
+  });
+});
+
+test('Agenda read source failure degrades safely without leaking errors or stale events', async () => {
+  const source = {
+    async read() {
+      throw new Error('SHOULD_NOT_LEAK_AGENDA_SOURCE_FAILURE');
+    },
+  };
+
+  const app = createApp(loadConfig({}), { agendaReadSource: source });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/agenda/context`);
+    const rawBody = await response.text();
+    const body = JSON.parse(rawBody);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.integration, 'agenda');
+    assert.equal(body.mode, 'read_only');
+    assert.equal(body.state, 'unavailable');
+    assert.equal(body.readOnly, true);
+    assert.equal(body.realActionsEnabled, false);
+    assert.equal(body.hermesDirectAccess, false);
+    assert.equal(body.sourceOfTruth, 'lia');
+    assert.equal(body.eventCount, 0);
+    assert.deepEqual(body.events, []);
+    assert.equal(rawBody.includes('SHOULD_NOT_LEAK_AGENDA_SOURCE_FAILURE'), false);
+  });
+});
+
+test('Agenda rejects invalid source payloads before they enter LIA context', async () => {
+  const source = {
+    async read() {
+      return {
+        state: 'available',
+        timezone: 'Invalid/Timezone',
+        events: [
+          {
+            id: 'bad-event',
+            title: 'Evento corrupto',
+            startTime: '2026-08-03T16:00:00.000Z',
+            endTime: '2026-08-03T15:00:00.000Z',
+            timezone: 'America/Mexico_City',
+            mode: 'virtual',
+            priority: 'high',
+            status: 'confirmed',
+            attendees: [],
+            responsible: { name: 'Dirección' },
+            preparationMinutes: 0,
+            parkingMinutes: 0,
+            walkingMinutes: 0,
+            followUpRequired: false,
+            recurrence: { frequency: 'none' },
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+            source: 'seed',
+          },
+        ],
+      };
+    },
+  };
+
+  const app = createApp(loadConfig({}), { agendaReadSource: source });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/agenda/context`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.state, 'unavailable');
+    assert.equal(body.eventCount, 0);
+    assert.deepEqual(body.events, []);
+    assert.equal(body.readOnly, true);
+    assert.equal(body.realActionsEnabled, false);
+    assert.equal(body.hermesDirectAccess, false);
+  });
+});
+
+test('Agenda normalizes safe recurrence fields from a valid source', async () => {
+  const source = {
+    async read() {
+      return {
+        state: 'available',
+        timezone: 'America/Mexico_City',
+        events: [
+          {
+            id: 'recurring-001',
+            title: 'Seguimiento semanal',
+            startTime: '2026-08-03T15:00:00.000Z',
+            endTime: '2026-08-03T15:30:00.000Z',
+            timezone: 'America/Mexico_City',
+            mode: 'virtual',
+            priority: 'medium',
+            status: 'confirmed',
+            attendees: [],
+            responsible: { name: 'Dirección' },
+            preparationMinutes: 5,
+            parkingMinutes: 0,
+            walkingMinutes: 0,
+            followUpRequired: true,
+            recurrence: {
+              frequency: 'weekly',
+              interval: 1,
+              byWeekday: [3, 1, 3],
+              exceptions: ['2026-08-17', '2026-08-10', '2026-08-17'],
+            },
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+            source: 'external',
+          },
+        ],
+      };
+    },
+  };
+
+  const app = createApp(loadConfig({}), { agendaReadSource: source });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/agenda/context`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.state, 'available');
+    assert.equal(body.eventCount, 1);
+    assert.deepEqual(body.events[0].recurrence.byWeekday, [1, 3]);
+    assert.deepEqual(
+      body.events[0].recurrence.exceptions,
+      ['2026-08-10', '2026-08-17'],
+    );
+  });
+});

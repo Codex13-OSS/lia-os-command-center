@@ -5,12 +5,21 @@ import type { LiaAgentConfig } from './config.js';
 import { loadConfig } from './config.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
+import { createAgendaRouter } from './routes/agenda.js';
 import { createHealthRouter } from './routes/health.js';
 import { createHermesRouter } from './routes/hermes.js';
 import { createHermesQueryRouter } from './routes/hermesQuery.js';
 import { createStatusRouter } from './routes/status.js';
+import type { AgendaReadSource } from './services/agendaReadSource.js';
 
-export function createApp(config: LiaAgentConfig = loadConfig()): Express {
+export type LiaAgentDependencies = {
+  agendaReadSource?: AgendaReadSource;
+};
+
+export function createApp(
+  config: LiaAgentConfig = loadConfig(),
+  dependencies: LiaAgentDependencies = {},
+): Express {
   const app = express();
 
   app.disable('x-powered-by');
@@ -32,6 +41,7 @@ export function createApp(config: LiaAgentConfig = loadConfig()): Express {
 
   app.use(express.json({ limit: '64kb' }));
   app.use(createHealthRouter());
+  app.use(createAgendaRouter(dependencies.agendaReadSource));
   app.use(createStatusRouter());
   app.use(createHermesRouter(config));
   app.use(createHermesQueryRouter(config));
