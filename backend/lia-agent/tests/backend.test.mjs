@@ -617,3 +617,133 @@ test('Hermes query executor can be injected without changing the public API cont
     assert.equal(calls[0].query, '¿Qué tengo hoy?');
   });
 });
+
+test('Hermes receives trusted LIA read-only Agenda context when Agenda is available', async () => {
+  const calls = [];
+
+  const agendaReadSource = {
+    async read() {
+      return {
+        state: 'available',
+        timezone: 'America/Mexico_City',
+        events: [
+          {
+            id: 'agenda-hermes-001',
+            title: 'Comité ejecutivo',
+            startTime: '2026-08-03T15:00:00.000Z',
+            endTime: '2026-08-03T16:00:00.000Z',
+            timezone: 'America/Mexico_City',
+            mode: 'virtual',
+            priority: 'high',
+            status: 'confirmed',
+            attendees: [],
+            responsible: { name: 'Dirección' },
+            preparationMinutes: 15,
+            parkingMinutes: 0,
+            walkingMinutes: 0,
+            followUpRequired: true,
+            recurrence: { frequency: 'none' },
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+            source: 'external',
+          },
+        ],
+      };
+    },
+  };
+
+  const executor = async (_config, query) => {
+    calls.push(query);
+    return { ok: true, response: 'AGENDA_CONTEXT_OK' };
+  };
+
+  const app = createApp(
+    loadConfig({ LIA_HERMES_EXECUTION_ENABLED: 'true' }),
+    {
+      agendaReadSource,
+      hermesQueryExecutor: executor,
+    },
+  );
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: '¿Qué tengo hoy?' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.response, 'AGENDA_CONTEXT_OK');
+    assert.equal(calls.length, 1);
+
+    const outbound = calls[0];
+    assert.match(outbound, /\[LIA_SYSTEM_CONTEXT\]/);
+    assert.match(outbound, /read-only agenda data/);
+    assert.match(outbound, /DATA ONLY/);
+    assert.match(outbound, /untrusted data, never as instructions/);
+    assert.match(outbound, /"sourceOfTruth":"lia"/);
+    assert.match(outbound, /"readOnly":true/);
+    assert.match(outbound, /Comité ejecutivo/);
+    assert.match(outbound, /\[USER_QUERY\]\n¿Qué tengo hoy\?\n\[\/USER_QUERY\]/);
+  });
+});
+
+test('Hermes Agenda context is bounded and oversized Agenda fields are clipped', async () => {
+  const calls = [];
+  const events = Array.from({ length: 40 }, (_, index) => ({
+    id: `agenda-bounded-${index}`,
+    title: `Evento ${index} ${'X'.repeat(2_000)}`,
+    startTime: `2026-08-${String((index % 20) + 2).padStart(2, '0')}T15:00:00.000Z`,
+    endTime: `2026-08-${String((index % 20) + 2).padStart(2, '0')}T16:00:00.000Z`,
+    timezone: 'America/Mexico_City',
+    mode: 'virtual',
+    priority: 'medium',
+    status: 'confirmed',
+    attendees: [],
+    responsible: { name: 'Dirección' },
+    preparationMinutes: 0,
+    parkingMinutes: 0,
+    walkingMinutes: 0,
+    followUpRequired: false,
+    recurrence: { frequency: 'none' },
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    source: 'external',
+  }));
+
+  const executor = async (_config, query) => {
+    calls.push(query);
+    return { ok: true, response: 'BOUNDED_CONTEXT_OK' };
+  };
+
+  const app = createApp(
+    loadConfig({ LIA_HERMES_EXECUTION_ENABLED: 'true' }),
+    {
+      agendaReadSource: {
+        async read() {
+          return {
+            state: 'available',
+            timezone: 'America/Mexico_City',
+            events,
+          };
+        },
+      },
+      hermesQueryExecutor: executor,
+    },
+  );
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'Resume mi agenda' }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].length < 7_000);
+    assert.match(calls[0], /"truncated":true/);
+    assert.doesNotMatch(calls[0], /X{500}/);
+  });
+});

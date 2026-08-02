@@ -48,6 +48,7 @@ export function createApp(
   app.use(createHermesRouter(config));
   app.use(createHermesQueryRouter(config, {
     executeQuery: dependencies.hermesQueryExecutor,
+    agendaReadSource: dependencies.agendaReadSource,
   }));
   app.use(notFound);
   app.use(errorHandler);

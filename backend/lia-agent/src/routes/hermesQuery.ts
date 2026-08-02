@@ -1,10 +1,13 @@
 import { Router } from 'express';
 import type { LiaAgentConfig } from '../config.js';
 import { methodNotAllowed } from '../middleware/methodNotAllowed.js';
+import type { AgendaReadSource } from '../services/agendaReadSource.js';
+import { readSafeAgendaContext } from '../services/agendaContextReader.js';
 import {
   executeHermesQuery,
   type HermesQueryExecutor,
 } from '../services/hermesExecutor.js';
+import { buildHermesQueryWithAgendaContext } from '../services/hermesPromptBuilder.js';
 
 type HermesQueryBody = {
   query?: unknown;
@@ -12,6 +15,7 @@ type HermesQueryBody = {
 
 export type HermesQueryRouterDependencies = {
   executeQuery?: HermesQueryExecutor;
+  agendaReadSource?: AgendaReadSource;
 };
 
 export function createHermesQueryRouter(
@@ -34,7 +38,14 @@ export function createHermesQueryRouter(
       return;
     }
 
-    const result = await executeQuery(config, query);
+    const agendaContext = await readSafeAgendaContext(
+      dependencies.agendaReadSource,
+    );
+    const outboundQuery = buildHermesQueryWithAgendaContext(
+      query,
+      agendaContext,
+    );
+    const result = await executeQuery(config, outboundQuery);
 
     if (!result.ok) {
       const status = result.error === 'execution_disabled' ? 503 : 502;
