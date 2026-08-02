@@ -747,3 +747,63 @@ test('Hermes Agenda context is bounded and oversized Agenda fields are clipped',
     assert.doesNotMatch(calls[0], /X{500}/);
   });
 });
+
+test('Hermes outbound prompt preserves the full user query and enforces a total character budget', async () => {
+  const calls = [];
+  const userQuery = 'Q'.repeat(8_000);
+  const events = Array.from({ length: 20 }, (_, index) => ({
+    id: `agenda-total-budget-${index}`,
+    title: `Evento ${index} ${'Y'.repeat(1_500)}`,
+    startTime: `2026-08-${String((index % 20) + 2).padStart(2, '0')}T15:00:00.000Z`,
+    endTime: `2026-08-${String((index % 20) + 2).padStart(2, '0')}T16:00:00.000Z`,
+    timezone: 'America/Mexico_City',
+    mode: 'virtual',
+    priority: 'medium',
+    status: 'confirmed',
+    attendees: [],
+    responsible: { name: 'Dirección' },
+    preparationMinutes: 0,
+    parkingMinutes: 0,
+    walkingMinutes: 0,
+    followUpRequired: false,
+    recurrence: { frequency: 'none' },
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    source: 'external',
+  }));
+
+  const executor = async (_config, query) => {
+    calls.push(query);
+    return { ok: true, response: 'TOTAL_BUDGET_OK' };
+  };
+
+  const app = createApp(
+    loadConfig({ LIA_HERMES_EXECUTION_ENABLED: 'true' }),
+    {
+      agendaReadSource: {
+        async read() {
+          return {
+            state: 'available',
+            timezone: 'America/Mexico_City',
+            events,
+          };
+        },
+      },
+      hermesQueryExecutor: executor,
+    },
+  );
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: userQuery }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].length <= 12_000);
+    assert.ok(calls[0].includes(userQuery));
+    assert.match(calls[0], /"truncated":true/);
+  });
+});

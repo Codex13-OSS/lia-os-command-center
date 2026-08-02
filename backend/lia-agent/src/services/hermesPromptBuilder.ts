@@ -6,6 +6,7 @@ import type {
 const MAX_AGENDA_CONTEXT_CHARACTERS = 6_000;
 const MAX_AGENDA_EVENTS = 20;
 const MAX_STRING_FIELD_CHARACTERS = 320;
+const MAX_HERMES_OUTBOUND_QUERY_CHARACTERS = 12_000;
 
 function clipValue(value: unknown, depth = 0): unknown {
   if (depth > 5) {
@@ -56,35 +57,65 @@ function minimalEvent(event: AgendaEvent): Record<string, unknown> {
   };
 }
 
-function buildAgendaPayload(snapshot: AgendaContextSnapshot): string {
-  const includedEvents: unknown[] = [];
-  let truncated = snapshot.events.length > MAX_AGENDA_EVENTS;
-
-  const createPayload = (events: unknown[], wasTruncated: boolean) => ({
+function createAgendaPayload(
+  snapshot: AgendaContextSnapshot,
+  events: unknown[],
+  truncated: boolean,
+): Record<string, unknown> {
+  return {
     sourceOfTruth: 'lia',
     readOnly: true,
     timezone: snapshot.timezone,
     totalEventCount: snapshot.eventCount,
     includedEventCount: events.length,
-    truncated: wasTruncated,
+    truncated,
     events,
-  });
+  };
+}
+
+function buildAgendaPayload(
+  snapshot: AgendaContextSnapshot,
+  maxCharacters: number,
+): string | null {
+  const budget = Math.min(
+    MAX_AGENDA_CONTEXT_CHARACTERS,
+    Math.max(0, maxCharacters),
+  );
+
+  const emptyPayload = JSON.stringify(
+    createAgendaPayload(snapshot, [], snapshot.events.length > 0),
+  );
+
+  if (emptyPayload.length > budget) {
+    return null;
+  }
+
+  const includedEvents: unknown[] = [];
+  let truncated = snapshot.events.length > MAX_AGENDA_EVENTS;
 
   for (const event of snapshot.events.slice(0, MAX_AGENDA_EVENTS)) {
     const candidateEvent = clipValue(event);
     const candidateEvents = [...includedEvents, candidateEvent];
     const hasMore = candidateEvents.length < snapshot.events.length;
-    const serialized = JSON.stringify(createPayload(
-      candidateEvents,
-      truncated || hasMore,
-    ));
+    const serialized = JSON.stringify(
+      createAgendaPayload(
+        snapshot,
+        candidateEvents,
+        truncated || hasMore,
+      ),
+    );
 
-    if (serialized.length > MAX_AGENDA_CONTEXT_CHARACTERS) {
+    if (serialized.length > budget) {
       truncated = true;
 
       if (includedEvents.length === 0) {
-        const fallback = [minimalEvent(event)];
-        return JSON.stringify(createPayload(fallback, true));
+        const minimal = JSON.stringify(
+          createAgendaPayload(snapshot, [minimalEvent(event)], true),
+        );
+
+        if (minimal.length <= budget) {
+          return minimal;
+        }
       }
 
       break;
@@ -94,19 +125,15 @@ function buildAgendaPayload(snapshot: AgendaContextSnapshot): string {
     truncated = truncated || hasMore;
   }
 
-  return JSON.stringify(createPayload(includedEvents, truncated));
+  return JSON.stringify(
+    createAgendaPayload(snapshot, includedEvents, truncated),
+  );
 }
 
-export function buildHermesQueryWithAgendaContext(
+function renderPrompt(
   userQuery: string,
-  agenda: AgendaContextSnapshot,
+  agendaPayload: string,
 ): string {
-  if (agenda.state !== 'available' || agenda.events.length === 0) {
-    return userQuery;
-  }
-
-  const agendaPayload = buildAgendaPayload(agenda);
-
   return [
     '[LIA_SYSTEM_CONTEXT]',
     'LÍA is providing read-only agenda data for reasoning.',
@@ -122,7 +149,41 @@ export function buildHermesQueryWithAgendaContext(
   ].join('\n');
 }
 
+export function buildHermesQueryWithAgendaContext(
+  userQuery: string,
+  agenda: AgendaContextSnapshot,
+): string {
+  if (agenda.state !== 'available' || agenda.events.length === 0) {
+    return userQuery;
+  }
+
+  const emptyPromptLength = renderPrompt(userQuery, '').length;
+  const agendaBudget = Math.min(
+    MAX_AGENDA_CONTEXT_CHARACTERS,
+    MAX_HERMES_OUTBOUND_QUERY_CHARACTERS - emptyPromptLength,
+  );
+
+  if (agendaBudget <= 0) {
+    return userQuery;
+  }
+
+  const agendaPayload = buildAgendaPayload(agenda, agendaBudget);
+
+  if (agendaPayload === null) {
+    return userQuery;
+  }
+
+  const outboundQuery = renderPrompt(userQuery, agendaPayload);
+
+  if (outboundQuery.length > MAX_HERMES_OUTBOUND_QUERY_CHARACTERS) {
+    return userQuery;
+  }
+
+  return outboundQuery;
+}
+
 export const hermesAgendaPromptLimits = Object.freeze({
   maxAgendaContextCharacters: MAX_AGENDA_CONTEXT_CHARACTERS,
   maxAgendaEvents: MAX_AGENDA_EVENTS,
+  maxOutboundQueryCharacters: MAX_HERMES_OUTBOUND_QUERY_CHARACTERS,
 });
