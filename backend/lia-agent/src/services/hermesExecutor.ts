@@ -5,6 +5,11 @@ export type HermesExecutionResult =
   | { ok: true; response: string }
   | { ok: false; error: 'execution_disabled' | 'timeout' | 'execution_failed' | 'empty_response' };
 
+export type HermesQueryExecutor = (
+  config: LiaAgentConfig,
+  query: string,
+) => Promise<HermesExecutionResult>;
+
 const MAX_OUTPUT_BYTES = 64 * 1024;
 
 function cleanOutput(value: string): string {

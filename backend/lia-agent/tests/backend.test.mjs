@@ -580,3 +580,40 @@ test('Agenda normalizes safe recurrence fields from a valid source', async () =>
     );
   });
 });
+
+test('Hermes query executor can be injected without changing the public API contract', async () => {
+  const calls = [];
+  const executor = async (config, query) => {
+    calls.push({
+      executionEnabled: config.hermesExecutionEnabled,
+      query,
+    });
+
+    return {
+      ok: true,
+      response: 'RESPUESTA_HERMES_SIMULADA',
+    };
+  };
+
+  const app = createApp(
+    loadConfig({ LIA_HERMES_EXECUTION_ENABLED: 'true' }),
+    { hermesQueryExecutor: executor },
+  );
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/hermes/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: '  ¿Qué tengo hoy?  ' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.integration, 'hermes');
+    assert.equal(body.response, 'RESPUESTA_HERMES_SIMULADA');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].executionEnabled, true);
+    assert.equal(calls[0].query, '¿Qué tengo hoy?');
+  });
+});

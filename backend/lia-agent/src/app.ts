@@ -11,9 +11,11 @@ import { createHermesRouter } from './routes/hermes.js';
 import { createHermesQueryRouter } from './routes/hermesQuery.js';
 import { createStatusRouter } from './routes/status.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
+import type { HermesQueryExecutor } from './services/hermesExecutor.js';
 
 export type LiaAgentDependencies = {
   agendaReadSource?: AgendaReadSource;
+  hermesQueryExecutor?: HermesQueryExecutor;
 };
 
 export function createApp(
@@ -44,7 +46,9 @@ export function createApp(
   app.use(createAgendaRouter(dependencies.agendaReadSource));
   app.use(createStatusRouter());
   app.use(createHermesRouter(config));
-  app.use(createHermesQueryRouter(config));
+  app.use(createHermesQueryRouter(config, {
+    executeQuery: dependencies.hermesQueryExecutor,
+  }));
   app.use(notFound);
   app.use(errorHandler);
 

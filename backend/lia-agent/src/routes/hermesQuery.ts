@@ -1,14 +1,25 @@
 import { Router } from 'express';
 import type { LiaAgentConfig } from '../config.js';
 import { methodNotAllowed } from '../middleware/methodNotAllowed.js';
-import { executeHermesQuery } from '../services/hermesExecutor.js';
+import {
+  executeHermesQuery,
+  type HermesQueryExecutor,
+} from '../services/hermesExecutor.js';
 
 type HermesQueryBody = {
   query?: unknown;
 };
 
-export function createHermesQueryRouter(config: LiaAgentConfig): Router {
+export type HermesQueryRouterDependencies = {
+  executeQuery?: HermesQueryExecutor;
+};
+
+export function createHermesQueryRouter(
+  config: LiaAgentConfig,
+  dependencies: HermesQueryRouterDependencies = {},
+): Router {
   const router = Router();
+  const executeQuery = dependencies.executeQuery ?? executeHermesQuery;
 
   router.route('/api/hermes/query').post(async (request, response) => {
     const body = request.body as HermesQueryBody;
@@ -23,7 +34,7 @@ export function createHermesQueryRouter(config: LiaAgentConfig): Router {
       return;
     }
 
-    const result = await executeHermesQuery(config, query);
+    const result = await executeQuery(config, query);
 
     if (!result.ok) {
       const status = result.error === 'execution_disabled' ? 503 : 502;
