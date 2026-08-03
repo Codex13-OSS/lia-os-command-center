@@ -7,6 +7,7 @@ type DashboardSidebarR3Props = {
   activeSection: ExecutiveSectionR3;
   onDashboard: () => void;
   onAgenda: () => void;
+  onProjects: () => void;
   onTracking: () => void;
   onDocuments: () => void;
   onAlerts: () => void;
@@ -24,6 +25,7 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
   const actions: Record<string, (() => void) | undefined> = {
     dashboard: props.onDashboard,
     agenda: props.onAgenda,
+    projects: props.onProjects,
     tracking: props.onTracking,
     documents: props.onDocuments,
     alerts: props.onAlerts,

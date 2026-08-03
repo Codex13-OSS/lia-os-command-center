@@ -21,6 +21,7 @@ import type { LiaConversationController } from '../lia-r3/liaConversationControl
 type DashboardShellR3Props = {
   onDashboard: () => void;
   onAgenda: () => void;
+  onProjects: () => void;
   onTracking: () => void;
   onDocuments: () => void;
   onAlerts: () => void;

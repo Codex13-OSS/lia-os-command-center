@@ -17,10 +17,11 @@ import { LiaLoginScreen } from './components/LiaLoginScreen';
 import { requestLiaHermesResponse } from './integrations/liaHermesChatClient';
 import { DashboardShellR3 } from './components/dashboard-r3/DashboardShellR3';
 import { AgendaShellR3 } from './components/agenda-r3/AgendaShellR3';
+import { ProjectsShellR3 } from './components/projects-r3/ProjectsShellR3';
 import type { LiaConversationController } from './components/lia-r3/liaConversationController';
 import './styles/agendaExecutiveR3.css';
 
-type View = 'dashboard' | 'agenda' | 'tracking' | 'documents' | 'alerts';
+type View = 'dashboard' | 'agenda' | 'projects' | 'tracking' | 'documents' | 'alerts';
 
 const DOCUMENT_GENERATOR_URL = 'http://38.242.222.25:3023';
 const agendaR3Enabled = true;
@@ -61,6 +62,7 @@ export default function App() {
   const viewContext: Record<View, string> = {
     dashboard: 'Centro ejecutivo',
     agenda: 'Agenda ejecutiva',
+    projects: 'Proyectos',
     tracking: 'Seguimiento operativo',
     documents: 'Documentos',
     alerts: 'Alertas',
@@ -412,6 +414,7 @@ export default function App() {
       <DashboardShellR3
         onDashboard={() => setView('dashboard')}
         onAgenda={() => setView('agenda')}
+        onProjects={() => setView('projects')}
         onTracking={() => setView('tracking')}
         onDocuments={openDocumentGenerator}
         onAlerts={() => setView('alerts')}
@@ -422,12 +425,17 @@ export default function App() {
   }
 
   if (view === 'agenda' && agendaR3Enabled) {
-    return <AgendaShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={() => setLogged(false)} />;
+    return <AgendaShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={() => setLogged(false)} />;
+  }
+
+  if (view === 'projects') {
+    return <ProjectsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={() => setLogged(false)} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} />;
   }
 
   const nav = [
     ['dashboard', 'Inicio'],
     ['agenda', 'Agenda'],
+    ['projects', 'Proyectos'],
     ['tracking', 'Seguimiento'],
     ['documents', 'Generador de documentos'],
     ['alerts', 'Alertas'],

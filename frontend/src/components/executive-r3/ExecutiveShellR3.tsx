@@ -4,8 +4,8 @@ import { DashboardSidebarR3 } from '../dashboard-r3/DashboardSidebarR3';
 import { LiaConversationPanelR3 } from '../lia-r3/LiaConversationPanelR3';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 
-export type ExecutiveSectionR3 = 'dashboard' | 'agenda' | 'processes' | 'documents' | 'alerts' | 'agents' | 'settings';
-type Props = { activeSection: ExecutiveSectionR3; onDashboard:()=>void; onAgenda:()=>void; onTracking:()=>void; onDocuments:()=>void; onAlerts:()=>void; onLogout:()=>void; mainAriaLabel:string; mainClassName?:string; rail:ReactNode; children:ReactNode; now?:Date; conversationController?:LiaConversationController };
+export type ExecutiveSectionR3 = 'dashboard' | 'agenda' | 'projects' | 'processes' | 'documents' | 'alerts' | 'agents' | 'settings';
+type Props = { activeSection: ExecutiveSectionR3; onDashboard:()=>void; onAgenda:()=>void; onProjects:()=>void; onTracking:()=>void; onDocuments:()=>void; onAlerts:()=>void; onLogout:()=>void; mainAriaLabel:string; mainClassName?:string; rail:ReactNode; children:ReactNode; now?:Date; conversationController?:LiaConversationController };
 const COMPACT=72, SNAP=206, EXPANDED=230, QUERY='(max-width: 720px)';
 const subscribe=(fn:()=>void)=>{const q=window.matchMedia(QUERY);q.addEventListener('change',fn);return()=>q.removeEventListener('change',fn)};
 const snapshot=()=>window.matchMedia(QUERY).matches;

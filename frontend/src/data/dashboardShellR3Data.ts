@@ -33,6 +33,7 @@ export const dashboardMetricsR3 = [
 export const dashboardNavigationR3 = [
   { id: 'dashboard', label: 'Inicio', icon: 'inicio' },
   { id: 'agenda', label: 'Agenda', icon: 'agenda' },
+  { id: 'projects', label: 'Proyectos', icon: 'procesos' },
   { id: 'tracking', label: 'Procesos', icon: 'procesos' },
   { id: 'documents', label: 'Documentos', icon: 'documentos' },
   { id: 'alerts', label: 'Alertas', icon: 'alertas', badge: 3 },

@@ -57,6 +57,7 @@ const workdayIso = (dateKey: string, hour: number) => {
 type Props = {
   onDashboard: () => void;
   onAgenda: () => void;
+  onProjects: () => void;
   onTracking: () => void;
   onDocuments: () => void;
   onAlerts: () => void;
