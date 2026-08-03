@@ -1,0 +1,218 @@
+import type { LiaAgentConfig } from '../config.js';
+import type { ProjectCodexCommitResult } from '../contracts/projectCodexCommit.js';
+import type { ProjectCodexExecutionResult } from '../contracts/projectCodexExecution.js';
+import type { ProjectCodexHandoff } from '../contracts/projectCodexHandoff.js';
+import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
+import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
+import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
+import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
+import type { HermesExecutionResult, HermesQueryExecutor } from './hermesExecutor.js';
+import { executeHermesReasoningOnly } from './hermesReasoningExecutor.js';
+import { commitVerifiedProjectCodexWorkspace } from './projectCodexCommit.js';
+import { executeProjectCodexHandoff } from './projectCodexExecutor.js';
+import { buildProjectCodexHandoff } from './projectCodexHandoff.js';
+import {
+  verifyProjectCodexWorkspace,
+  type ProjectCodexVerificationResult,
+} from './projectCodexVerification.js';
+import { planProjectTask } from './projectExecutionPlanner.js';
+import { buildProjectOrchestrationPrompt } from './projectOrchestrationPrompt.js';
+import { validateProjectOrchestrationProposal } from './projectOrchestrationValidation.js';
+
+type CodexExecutor = (handoff: ProjectCodexHandoff) => Promise<ProjectCodexExecutionResult>;
+type VerificationExecutor = typeof verifyProjectCodexWorkspace;
+type CommitExecutor = typeof commitVerifiedProjectCodexWorkspace;
+
+export interface ProjectTaskWorkflowDependencies {
+  executeHermes?: HermesQueryExecutor;
+  executeCodex?: CodexExecutor;
+  executeVerification?: VerificationExecutor;
+  executeCommit?: CommitExecutor;
+}
+
+const failed = (
+  stage: Extract<ProjectTaskWorkflowResult, { ok: false }>['stage'],
+  error: Extract<ProjectTaskWorkflowResult, { ok: false }>['error'],
+  summary: string,
+  identifiers: { projectId?: string; executionId?: string } = {},
+): ProjectTaskWorkflowResult => ({ ok: false, status: 'failed', stage, error, summary, ...identifiers });
+
+export async function executeProjectTaskWorkflow(
+  config: LiaAgentConfig,
+  request: ProjectTaskRequest,
+  projectRegistrySource: ProjectRegistrySource,
+  verificationRegistry?: ProjectVerificationRegistry,
+  dependencies: ProjectTaskWorkflowDependencies = {},
+): Promise<ProjectTaskWorkflowResult> {
+  const planning = await planProjectTask(request, projectRegistrySource);
+  if (!planning.ok) {
+    return failed('planning', planning.error, 'Project task planning failed.');
+  }
+
+  const { plan } = planning;
+  const identifiers = { projectId: plan.projectId };
+  if (
+    plan.approvedCapabilities.includes('local_commit')
+    && !plan.approvedCapabilities.includes('run_tests')
+  ) {
+    return failed(
+      'planning',
+      'local_commit_requires_run_tests',
+      'Local commit requires successful verification.',
+      identifiers,
+    );
+  }
+
+  let prompt: string;
+  try {
+    prompt = buildProjectOrchestrationPrompt(plan);
+  } catch (error) {
+    return failed(
+      'hermes',
+      error instanceof Error && error.message === 'project_orchestration_prompt_too_large'
+        ? 'prompt_too_large'
+        : 'execution_failed',
+      'Hermes reasoning could not be prepared.',
+      identifiers,
+    );
+  }
+
+  let hermesResult: HermesExecutionResult;
+  try {
+    hermesResult = await (dependencies.executeHermes ?? executeHermesReasoningOnly)(config, prompt);
+  } catch {
+    return failed('hermes', 'execution_failed', 'Hermes reasoning did not complete.', identifiers);
+  }
+  if (!hermesResult.ok) {
+    return failed('hermes', hermesResult.error, 'Hermes reasoning did not complete.', identifiers);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(hermesResult.response);
+  } catch {
+    return failed('hermes', 'invalid_hermes_json', 'Hermes returned invalid JSON.', identifiers);
+  }
+
+  const validation = validateProjectOrchestrationProposal(parsed, plan);
+  if (!validation.success) {
+    return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+  }
+  if (validation.proposal.requiresHumanApproval || validation.proposal.blockedActions.length > 0) {
+    return failed('approval', 'human_approval_required', 'Human approval is required.', identifiers);
+  }
+
+  const handoffResult = buildProjectCodexHandoff(plan, validation.proposal);
+  if (!handoffResult.success) {
+    return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+  }
+
+  let codexResult: ProjectCodexExecutionResult;
+  try {
+    codexResult = await (dependencies.executeCodex ?? executeProjectCodexHandoff)(handoffResult.handoff);
+  } catch {
+    return failed('codex', 'codex_execution_failed', 'Codex execution did not complete.', identifiers);
+  }
+  if (!codexResult.success) {
+    return failed('codex', codexResult.error, codexResult.summary, {
+      ...identifiers,
+      executionId: codexResult.executionId,
+    });
+  }
+
+  const executionIdentifiers = { ...identifiers, executionId: codexResult.executionId };
+  if (!plan.approvedCapabilities.includes('run_tests')) {
+    return {
+      ok: true,
+      ...executionIdentifiers,
+      status: 'ready_for_review',
+      executionSummary: codexResult.summary,
+    };
+  }
+  if (verificationRegistry === undefined) {
+    return failed(
+      'verification',
+      'verification_unavailable',
+      'Verification is not available for this project.',
+      executionIdentifiers,
+    );
+  }
+
+  let verificationResult: ProjectCodexVerificationResult;
+  try {
+    verificationResult = await (dependencies.executeVerification ?? verifyProjectCodexWorkspace)(
+      plan.repositoryRoot,
+      plan.projectId,
+      codexResult.executionId,
+      verificationRegistry,
+    );
+  } catch {
+    return failed(
+      'verification',
+      'verification_unavailable',
+      'Verification is not available for this project.',
+      executionIdentifiers,
+    );
+  }
+  if (!verificationResult.success) {
+    return failed('verification', verificationResult.error, verificationResult.summary, executionIdentifiers);
+  }
+  if (verificationResult.executionId !== codexResult.executionId) {
+    return failed(
+      'verification',
+      'invalid_generated_path',
+      'The retained workspace could not be resolved safely.',
+      executionIdentifiers,
+    );
+  }
+
+  const verification = {
+    status: 'verified' as const,
+    checksPassed: verificationResult.checksPassed,
+    totalChecks: verificationResult.totalChecks,
+  };
+  if (!plan.approvedCapabilities.includes('local_commit')) {
+    return {
+      ok: true,
+      ...executionIdentifiers,
+      status: 'verified',
+      executionSummary: codexResult.summary,
+      verification,
+    };
+  }
+
+  let commitResult: ProjectCodexCommitResult;
+  try {
+    commitResult = await (dependencies.executeCommit ?? commitVerifiedProjectCodexWorkspace)(
+      plan.repositoryRoot,
+      codexResult.executionId,
+      plan.approvedCapabilities,
+      verificationResult,
+    );
+  } catch {
+    return failed('commit', 'git_commit_failed', 'The local commit could not be created.', executionIdentifiers);
+  }
+  if (!commitResult.success) {
+    return failed('commit', commitResult.error, commitResult.summary, executionIdentifiers);
+  }
+  if (
+    commitResult.executionId !== codexResult.executionId
+    || !/^[0-9a-fA-F]{40,64}$/.test(commitResult.commit)
+  ) {
+    return failed(
+      'commit',
+      'git_revision_failed',
+      'The local commit revision could not be validated.',
+      executionIdentifiers,
+    );
+  }
+
+  return {
+    ok: true,
+    ...executionIdentifiers,
+    status: 'committed',
+    executionSummary: codexResult.summary,
+    verification,
+    commit: commitResult.commit,
+  };
+}
