@@ -30,6 +30,7 @@ import {
   createHermesReasoningOnlyExecutor,
 } from '../dist/services/hermesReasoningExecutor.js';
 import { validateProjectOrchestrationProposal } from '../dist/services/projectOrchestrationValidation.js';
+import { buildProjectCodexHandoff } from '../dist/services/projectCodexHandoff.js';
 
 function createPermissiveAgendaSqliteTables(database, {
   schemaVersion = AGENDA_SQLITE_SCHEMA_VERSION,
@@ -1960,6 +1961,111 @@ test("project orchestration enforces structural limits", () => {
   assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: [] }), orchestrationPlan()).success, false);
   assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: Array.from({ length: 13 }, () => ({ ...step })) }), orchestrationPlan()).success, false);
   assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ summary: "   " }), orchestrationPlan()).success, false);
+});
+
+const codexHandoffPlan = (overrides = {}) => ({
+  ...orchestrationPlan(),
+  orchestrator: "hermes",
+  executor: "codex",
+  workspaceIsolation: "isolated_worktree_only",
+  requiresHumanApprovalForBlockedActions: true,
+  productionAccess: false,
+  databaseWriteAccess: false,
+  secretAccess: false,
+  ...overrides,
+});
+
+test("internal Codex handoff is derived from validated plan and proposal", () => {
+  const result = buildProjectCodexHandoff(codexHandoffPlan(), orchestrationProposal());
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.handoff, {
+    projectId: "project-safe-1",
+    projectDisplayName: "Proyecto Seguro",
+    repositoryRoot: "/internal/private/repository-root",
+    instruction: "Analiza la tarea sin ejecutar nada.",
+    priority: "high",
+    approvedCapabilities: ["repository_read", "run_tests"],
+    proposal: {
+      summary: "Propuesta segura",
+      steps: [{
+        title: "Inspeccionar",
+        objective: "Entender la tarea",
+        requiredCapabilities: ["repository_read"],
+      }],
+    },
+    executor: "codex",
+    workspaceIsolation: "isolated_worktree_only",
+    productionAccess: false,
+    databaseWriteAccess: false,
+    secretAccess: false,
+  });
+});
+
+test("internal Codex handoff owns independent capability and step copies", () => {
+  const plan = codexHandoffPlan();
+  const proposal = orchestrationProposal();
+  const result = buildProjectCodexHandoff(plan, proposal);
+  assert.equal(result.success, true);
+
+  plan.approvedCapabilities.push("local_commit");
+  proposal.steps[0].requiredCapabilities.push("run_tests");
+  proposal.steps[0].title = "Mutado";
+
+  assert.deepEqual(result.handoff.approvedCapabilities, ["repository_read", "run_tests"]);
+  assert.deepEqual(result.handoff.proposal.steps[0], {
+    title: "Inspeccionar",
+    objective: "Entender la tarea",
+    requiredCapabilities: ["repository_read"],
+  });
+});
+
+test("internal Codex handoff rejects capability escalation", () => {
+  const result = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: ["repository_read"] }),
+    orchestrationProposal({
+      steps: [{
+        title: "Probar",
+        objective: "Ejecutar pruebas",
+        requiredCapabilities: ["run_tests"],
+      }],
+    }),
+  );
+  assert.equal(result.success, false);
+});
+
+test("internal Codex handoff rejects unknown source fields", () => {
+  assert.equal(buildProjectCodexHandoff(
+    codexHandoffPlan({ shell: "/bin/sh" }),
+    orchestrationProposal(),
+  ).success, false);
+  assert.equal(buildProjectCodexHandoff(
+    codexHandoffPlan(),
+    orchestrationProposal({ branch: "main" }),
+  ).success, false);
+});
+
+test("internal Codex handoff never accepts repositoryRoot or command from proposal", () => {
+  for (const field of ["repositoryRoot", "command"]) {
+    const result = buildProjectCodexHandoff(
+      codexHandoffPlan(),
+      orchestrationProposal({ [field]: "untrusted" }),
+    );
+    assert.equal(result.success, false, field);
+  }
+});
+
+test("internal Codex handoff blocks proposals that request blocked actions", () => {
+  for (const blockedAction of ["push", "merge", "deploy", "secret_access"]) {
+    const result = buildProjectCodexHandoff(
+      codexHandoffPlan(),
+      orchestrationProposal({
+        requiresHumanApproval: true,
+        blockedActions: [blockedAction],
+      }),
+    );
+    assert.equal(result.success, false, blockedAction);
+  }
 });
 
 const orchestrationRegistry = () => createStaticProjectRegistry([{
