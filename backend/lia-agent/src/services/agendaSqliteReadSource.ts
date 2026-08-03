@@ -20,17 +20,33 @@ export function createAgendaSqliteReadSource(
         database.exec('PRAGMA query_only=ON');
 
         const rows = database.prepare(`
-          SELECT payload_json
+          SELECT id, start_time, payload_json
           FROM agenda_events
           ORDER BY start_time ASC, id ASC
-        `).all() as Array<{ payload_json: unknown }>;
+        `).all() as Array<{
+          id: unknown;
+          start_time: unknown;
+          payload_json: unknown;
+        }>;
 
-        const events = rows.map(({ payload_json }) => {
+        const events = rows.map(({ id, start_time, payload_json }) => {
           if (typeof payload_json !== 'string') {
             throw new Error('invalid_agenda_payload_json');
           }
 
-          return JSON.parse(payload_json) as AgendaEvent;
+          const event = JSON.parse(payload_json) as unknown;
+
+          if (typeof event !== 'object' || event === null || Array.isArray(event)) {
+            throw new Error('invalid_agenda_payload_json');
+          }
+
+          const agendaEvent = event as AgendaEvent;
+
+          if (agendaEvent.id !== id || agendaEvent.startTime !== start_time) {
+            throw new Error('agenda_sqlite_metadata_mismatch');
+          }
+
+          return agendaEvent;
         });
 
         return {
