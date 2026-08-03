@@ -20,6 +20,7 @@ import {
   createStaticProjectRegistry,
   resolveAuthorizedProject,
 } from '../dist/services/projectRegistry.js';
+import { planProjectTask } from '../dist/services/projectExecutionPlanner.js';
 
 function createPermissiveAgendaSqliteTables(database, {
   schemaVersion = AGENDA_SQLITE_SCHEMA_VERSION,
@@ -1635,4 +1636,130 @@ test('duplicate project IDs fail closed and static registry owns its snapshot', 
     ok: false,
     error: 'registry_unavailable',
   });
+});
+
+test('project execution planner creates a safe internal plan from the authorized project', async () => {
+  const source = createStaticProjectRegistry([{
+    projectId: 'lia-agent',
+    displayName: 'LÍA Agent',
+    repositoryRoot: '/srv/projects/lia-agent',
+    enabled: true,
+  }]);
+
+  const result = await planProjectTask({
+    projectId: ' lia-agent ',
+    instruction: ' Implementa la siguiente fase ',
+    priority: 'high',
+    requestedCapabilities: ['repository_read', 'run_tests'],
+  }, source);
+
+  assert.deepEqual(result, {
+    ok: true,
+    plan: {
+      projectId: 'lia-agent',
+      projectDisplayName: 'LÍA Agent',
+      repositoryRoot: '/srv/projects/lia-agent',
+      instruction: 'Implementa la siguiente fase',
+      priority: 'high',
+      approvedCapabilities: ['repository_read', 'run_tests'],
+      orchestrator: 'hermes',
+      executor: 'codex',
+      workspaceIsolation: 'isolated_worktree_only',
+      requiresHumanApprovalForBlockedActions: true,
+      productionAccess: false,
+      databaseWriteAccess: false,
+      secretAccess: false,
+    },
+  });
+});
+
+test('project execution planner rejects invalid tasks before reading the registry', async () => {
+  let reads = 0;
+  const source = {
+    async read() {
+      reads += 1;
+      return [];
+    },
+  };
+
+  const result = await planProjectTask({
+    projectId: 'lia-agent',
+    instruction: 'Ejecuta una tarea',
+    priority: 'normal',
+    requestedCapabilities: ['repository_read'],
+    repositoryPath: '/request-controlled/path',
+    command: 'unsafe command',
+  }, source);
+
+  assert.deepEqual(result, { ok: false, error: 'invalid_task' });
+  assert.equal(reads, 0);
+});
+
+test('project execution planner reports an unknown project', async () => {
+  const source = createStaticProjectRegistry([]);
+
+  assert.deepEqual(await planProjectTask({
+    projectId: 'unknown',
+    instruction: 'Inspecciona el proyecto',
+    priority: 'normal',
+    requestedCapabilities: ['repository_read'],
+  }, source), { ok: false, error: 'project_not_found' });
+});
+
+test('project execution planner rejects a disabled project', async () => {
+  const source = createStaticProjectRegistry([{
+    projectId: 'lia-agent',
+    displayName: 'LÍA Agent',
+    repositoryRoot: '/srv/projects/lia-agent',
+    enabled: false,
+  }]);
+
+  assert.deepEqual(await planProjectTask({
+    projectId: 'lia-agent',
+    instruction: 'Inspecciona el proyecto',
+    priority: 'normal',
+    requestedCapabilities: ['repository_read'],
+  }, source), { ok: false, error: 'project_disabled' });
+});
+
+test('project execution planner fails closed for registry errors and owns capability copies', async () => {
+  const rawRequest = {
+    projectId: 'lia-agent',
+    instruction: 'Prueba el proyecto',
+    priority: 'normal',
+    requestedCapabilities: ['repository_read', 'run_tests'],
+  };
+  const unavailable = {
+    async read() {
+      throw new Error('registry failure');
+    },
+  };
+
+  assert.deepEqual(await planProjectTask(rawRequest, unavailable), {
+    ok: false,
+    error: 'registry_unavailable',
+  });
+
+  const normalized = validateProjectTaskRequest(rawRequest);
+  assert.equal(normalized.success, true);
+  const available = createStaticProjectRegistry([{
+    projectId: 'lia-agent',
+    displayName: 'LÍA Agent',
+    repositoryRoot: '/srv/projects/lia-agent',
+    enabled: true,
+  }]);
+  const first = await planProjectTask(rawRequest, available);
+  assert.equal(first.ok, true);
+  first.plan.approvedCapabilities.push('local_commit');
+
+  assert.deepEqual(normalized.request.requestedCapabilities, [
+    'repository_read',
+    'run_tests',
+  ]);
+  const second = await planProjectTask(rawRequest, available);
+  assert.equal(second.ok, true);
+  assert.deepEqual(second.plan.approvedCapabilities, [
+    'repository_read',
+    'run_tests',
+  ]);
 });
