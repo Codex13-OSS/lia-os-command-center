@@ -3,6 +3,7 @@ import express from 'express';
 import type { Express } from 'express';
 import type { LiaAgentConfig } from './config.js';
 import type { ProjectRegistrySource } from './contracts/projectRegistry.js';
+import type { ProjectVerificationRegistry } from './contracts/projectVerification.js';
 import { loadConfig } from './config.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
@@ -15,6 +16,10 @@ import {
   createProjectTaskExecutionRouter,
   type ProjectTaskExecutionExecutor,
 } from './routes/projectTaskExecution.js';
+import {
+  createProjectTaskWorkflowRouter,
+  type ProjectTaskWorkflowExecutor,
+} from './routes/projectTaskWorkflow.js';
 import { createStatusRouter } from './routes/status.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
 import type { HermesQueryExecutor } from './services/hermesExecutor.js';
@@ -25,6 +30,8 @@ export type LiaAgentDependencies = {
   projectRegistrySource?: ProjectRegistrySource;
   projectOrchestrationExecutor?: HermesQueryExecutor;
   projectTaskExecutionExecutor?: ProjectTaskExecutionExecutor;
+  projectVerificationRegistry?: ProjectVerificationRegistry;
+  projectTaskWorkflowExecutor?: ProjectTaskWorkflowExecutor;
 };
 
 export function createApp(
@@ -66,6 +73,11 @@ export function createApp(
   app.use(createProjectTaskExecutionRouter(config, {
     projectRegistrySource: dependencies.projectRegistrySource,
     executeTask: dependencies.projectTaskExecutionExecutor,
+  }));
+  app.use(createProjectTaskWorkflowRouter(config, {
+    projectRegistrySource: dependencies.projectRegistrySource,
+    projectVerificationRegistry: dependencies.projectVerificationRegistry,
+    executeWorkflow: dependencies.projectTaskWorkflowExecutor,
   }));
   app.use(notFound);
   app.use(errorHandler);

@@ -2,10 +2,9 @@ import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createAgendaSqliteReadSource } from './services/agendaSqliteReadSource.js';
 import { createProjectRegistryFileSource } from './services/projectRegistryFileSource.js';
+import { createFileProjectVerificationRegistry } from './services/projectVerificationFileSource.js';
 
 const config = loadConfig();
-// Verification policy is intentionally not constructed here until the internal
-// project-task workflow has a dependency slot that does not expose a public route.
 const dependencies = {
   ...(config.agendaSqlitePath === ''
     ? {}
@@ -13,6 +12,12 @@ const dependencies = {
   ...(config.projectRegistryPath === ''
     ? {}
     : { projectRegistrySource: createProjectRegistryFileSource(config.projectRegistryPath) }),
+  ...(config.projectVerificationPath === ''
+    ? {}
+    : {
+        projectVerificationRegistry:
+          createFileProjectVerificationRegistry(config.projectVerificationPath),
+      }),
 };
 const app = createApp(config, dependencies);
 const server = app.listen(config.port, config.host, () => {
