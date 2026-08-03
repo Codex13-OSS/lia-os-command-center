@@ -1,14 +1,18 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ProjectCodexHandoff } from "../contracts/projectCodexHandoff.js";
 import type {
   ProjectCodexExecutionError,
   ProjectCodexExecutionResult,
 } from "../contracts/projectCodexExecution.js";
+import {
+  PROJECT_CODEX_WORKTREE_ROOT,
+  discardProjectCodexWorkspace,
+  resolveProjectCodexWorkspace,
+} from "./projectCodexWorkspace.js";
 
-export const PROJECT_CODEX_WORKTREE_ROOT = "/tmp/lia-project-executor-runs";
+export { PROJECT_CODEX_WORKTREE_ROOT } from "./projectCodexWorkspace.js";
 export const PROJECT_CODEX_MAX_PROMPT_CHARS = 16_000;
 export const PROJECT_CODEX_MAX_OUTPUT_BYTES = 64 * 1024;
 export const PROJECT_CODEX_TIMEOUT_MS = 10 * 60 * 1000;
@@ -141,16 +145,11 @@ export async function executeProjectCodexHandoff(
   if (prompt.length > PROJECT_CODEX_MAX_PROMPT_CHARS) {
     return failed(executionId, "prompt_too_large");
   }
-  if (!/^[A-Za-z0-9-]+$/.test(executionId)) {
+  const workspace = resolveProjectCodexWorkspace(executionId);
+  if (!workspace.success) {
     return failed("invalid-execution-id", "invalid_generated_path");
   }
-
-  const worktreePath = resolve(PROJECT_CODEX_WORKTREE_ROOT, executionId);
-  const relativePath = relative(PROJECT_CODEX_WORKTREE_ROOT, worktreePath);
-  if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
-    return failed(executionId, "invalid_generated_path");
-  }
-  const branch = `lia/executor/${executionId}`;
+  const { worktreePath, branch } = workspace;
   const gitRunner = dependencies.gitRunner ?? runProjectCodexProcess;
   const codexRunner = dependencies.codexRunner ?? runProjectCodexProcess;
   const timeoutMs = dependencies.timeoutMs ?? PROJECT_CODEX_TIMEOUT_MS;
@@ -190,15 +189,12 @@ export async function executeProjectCodexHandoff(
   } catch {
     result = failed(executionId, stage === "create" ? "worktree_create_failed" : "codex_execution_failed");
   } finally {
-    if (worktreeAttempted) {
-      try {
-        const cleaned = await gitRunner({
-          file: "git",
-          args: ["-C", handoff.repositoryRoot, "worktree", "remove", "--force", worktreePath],
-          ...processOptions,
-        });
-        if (!cleaned.success) result = failed(executionId, "worktree_cleanup_failed");
-      } catch {
+    if (worktreeAttempted && !result?.success) {
+      const cleaned = await discardProjectCodexWorkspace(handoff.repositoryRoot, executionId, {
+        gitRunner,
+        timeoutMs,
+      });
+      if (!cleaned.success) {
         result = failed(executionId, "worktree_cleanup_failed");
       }
     }

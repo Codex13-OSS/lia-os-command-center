@@ -5,6 +5,7 @@ import {
   PROJECT_CODEX_MAX_PROMPT_CHARS,
   PROJECT_CODEX_WORKTREE_ROOT,
 } from "../dist/services/projectCodexExecutor.js";
+import { discardProjectCodexWorkspace } from "../dist/services/projectCodexWorkspace.js";
 
 const handoff = (overrides = {}) => ({
   projectId: "safe-project",
@@ -51,7 +52,7 @@ function harness({ codexResult, gitResults } = {}) {
   };
 }
 
-test("isolated Codex execution creates, executes, and cleans its worktree", async () => {
+test("isolated Codex execution creates, executes, and retains its worktree", async () => {
   const fake = harness();
   const result = await executeProjectCodexHandoff(handoff(), fake.dependencies);
   assert.deepEqual(result, {
@@ -60,14 +61,10 @@ test("isolated Codex execution creates, executes, and cleans its worktree", asyn
     status: "completed",
     summary: "Codex execution completed in an isolated worktree.",
   });
-  assert.equal(fake.gitCalls.length, 2);
+  assert.equal(fake.gitCalls.length, 1);
   assert.deepEqual(fake.gitCalls[0].args, [
     "-C", "/private/repositories/safe-project", "worktree", "add", "-b",
     "lia/executor/execution-123", `${PROJECT_CODEX_WORKTREE_ROOT}/execution-123`, "HEAD",
-  ]);
-  assert.deepEqual(fake.gitCalls[1].args, [
-    "-C", "/private/repositories/safe-project", "worktree", "remove", "--force",
-    `${PROJECT_CODEX_WORKTREE_ROOT}/execution-123`,
   ]);
 });
 
@@ -123,10 +120,13 @@ test("cleans after worktree creation failure and reports cleanup failure determi
   assert.equal((await executeProjectCodexHandoff(handoff(), creation.dependencies)).error, "worktree_create_failed");
   assert.equal(creation.gitCalls.length, 2);
 
-  const cleanup = harness({ gitResults: [
-    { success: true, stdout: "", stderr: "" },
-    { success: false, reason: "failed", stdout: "", stderr: "private" },
-  ] });
+  const cleanup = harness({
+    codexResult: { success: false, reason: "failed", stdout: "", stderr: "private" },
+    gitResults: [
+      { success: true, stdout: "", stderr: "" },
+      { success: false, reason: "failed", stdout: "", stderr: "private" },
+    ],
+  });
   assert.equal((await executeProjectCodexHandoff(handoff(), cleanup.dependencies)).error, "worktree_cleanup_failed");
 });
 
@@ -155,18 +155,77 @@ test("LÍA does not run tests or commits even when capabilities are approved", a
   await executeProjectCodexHandoff(handoff({
     approvedCapabilities: ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
   }), fake.dependencies);
-  assert.equal(fake.gitCalls.length, 2);
+  assert.equal(fake.gitCalls.length, 1);
   assert.equal(fake.codexCalls.length, 1);
   const programArgs = fake.gitCalls.flatMap((call) => call.args);
   assert.equal(programArgs.includes("commit"), false);
   assert.equal(programArgs.includes("test"), false);
 });
 
-test("safe result never exposes process output or internal fields", async () => {
-  const fake = harness({ codexResult: { success: false, reason: "failed", stdout: "SECRET", stderr: "SECRET" } });
+test("safe successful result never exposes process output or internal fields", async () => {
+  const fake = harness({ codexResult: { success: true, stdout: "SECRET", stderr: "SECRET" } });
   const result = await executeProjectCodexHandoff(handoff(), fake.dependencies);
   const serialized = JSON.stringify(result);
   for (const forbidden of ["SECRET", "repositoryRoot", "worktreePath", "branch", "prompt", "stderr", "/private/repositories"])
     assert.equal(serialized.includes(forbidden), false, forbidden);
 });
 
+test("discard uses exact fixed argv, shell false, and a path derived from executionId", async () => {
+  const calls = [];
+  const result = await discardProjectCodexWorkspace(
+    "/private/repositories/safe-project",
+    "execution-123",
+    { gitRunner: async (request) => {
+      calls.push(request);
+      return { success: true, stdout: "private", stderr: "private" };
+    } },
+  );
+  assert.deepEqual(result, { success: true, executionId: "execution-123", status: "discarded" });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, "git");
+  assert.equal(calls[0].shell, false);
+  assert.deepEqual(calls[0].args, [
+    "-C", "/private/repositories/safe-project", "worktree", "remove", "--force",
+    `${PROJECT_CODEX_WORKTREE_ROOT}/execution-123`,
+  ]);
+});
+
+test("discard rejects dangerous executionId before invoking its runner", async () => {
+  for (const executionId of ["../escape", "/tmp/escape", "nested/path", ""]) {
+    let called = false;
+    const result = await discardProjectCodexWorkspace("/private/repositories/safe-project", executionId, {
+      gitRunner: async () => {
+        called = true;
+        return { success: true, stdout: "", stderr: "" };
+      },
+    });
+    assert.deepEqual(result, { success: false, executionId, status: "failed", error: "invalid_generated_path" });
+    assert.equal(called, false);
+  }
+});
+
+test("discard failure is deterministic and does not expose internals", async () => {
+  for (const gitRunner of [
+    async () => ({ success: false, reason: "failed", stdout: "SECRET", stderr: "SECRET" }),
+    async () => { throw new Error("SECRET"); },
+  ]) {
+    const result = await discardProjectCodexWorkspace("/private/repositories/safe-project", "execution-123", { gitRunner });
+    assert.deepEqual(result, {
+      success: false,
+      executionId: "execution-123",
+      status: "failed",
+      error: "workspace_discard_failed",
+    });
+    assert.equal(JSON.stringify(result).includes("SECRET"), false);
+    assert.equal(JSON.stringify(result).includes("/private/repositories"), false);
+  }
+});
+
+test("simulated integration retains the worktree after fake git add and fake Codex success", async () => {
+  const fake = harness({ codexResult: { success: true, stdout: "done", stderr: "" } });
+  const result = await executeProjectCodexHandoff(handoff(), fake.dependencies);
+  assert.equal(result.success, true);
+  assert.equal(fake.gitCalls.length, 1);
+  assert.equal(fake.gitCalls[0].args.includes("add"), true);
+  assert.equal(fake.gitCalls.some((call) => call.args.includes("remove")), false);
+});
