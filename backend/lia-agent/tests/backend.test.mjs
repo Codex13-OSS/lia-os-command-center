@@ -9,6 +9,10 @@ import { createApp } from '../dist/app.js';
 import { loadConfig } from '../dist/config.js';
 import { readSafeAgendaContext } from '../dist/services/agendaContextReader.js';
 import { createAgendaSqliteReadSource } from '../dist/services/agendaSqliteReadSource.js';
+import {
+  AGENDA_SQLITE_SCHEMA_VERSION,
+  createAgendaSqliteSchemaV1Sql,
+} from '../dist/services/agendaSqliteSchema.js';
 
 async function listenWithApp(app) {
   const server = app.listen(0, '127.0.0.1');
@@ -929,6 +933,130 @@ test('SQLite agenda source rejects relative database paths', () => {
     () => createAgendaSqliteReadSource('./agenda.sqlite'),
     /invalid_agenda_sqlite_path/,
   );
+});
+
+test('Agenda SQLite Schema v1 initializes its singleton state', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-schema-'));
+  const database = new DatabaseSync(join(directory, 'agenda.sqlite'));
+  const initializedAt = '2026-08-02T12:34:56.000Z';
+
+  try {
+    assert.throws(
+      () => createAgendaSqliteSchemaV1Sql('2026-02-31T12:34:56.000Z'),
+      /invalid_agenda_initialized_at/,
+    );
+
+    database.exec(createAgendaSqliteSchemaV1Sql(initializedAt));
+
+    const state = database.prepare(`
+      SELECT singleton, schema_version, global_revision, timezone, updated_at
+      FROM agenda_state
+    `).get();
+
+    assert.deepEqual({ ...state }, {
+      singleton: 1,
+      schema_version: AGENDA_SQLITE_SCHEMA_VERSION,
+      global_revision: 0,
+      timezone: 'America/Mexico_City',
+      updated_at: initializedAt,
+    });
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Agenda SQLite Schema v1 accepts an event with source='local'", async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-schema-'));
+  const database = new DatabaseSync(join(directory, 'agenda.sqlite'));
+  const event = {
+    id: 'agenda-local-001',
+    startTime: '2026-08-03T15:00:00.000Z',
+    source: 'local',
+  };
+
+  try {
+    database.exec(createAgendaSqliteSchemaV1Sql('2026-08-02T00:00:00.000Z'));
+    database.prepare(`
+      INSERT INTO agenda_events (id, start_time, payload_json)
+      VALUES (?, ?, ?)
+    `).run(event.id, event.startTime, JSON.stringify(event));
+
+    assert.equal(
+      database.prepare('SELECT COUNT(*) AS count FROM agenda_events').get().count,
+      1,
+    );
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Agenda SQLite Schema v1 rejects an event with source='seed'", async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-schema-'));
+  const database = new DatabaseSync(join(directory, 'agenda.sqlite'));
+  const event = {
+    id: 'agenda-seed-001',
+    startTime: '2026-08-03T15:00:00.000Z',
+    source: 'seed',
+  };
+
+  try {
+    database.exec(createAgendaSqliteSchemaV1Sql('2026-08-02T00:00:00.000Z'));
+    const insert = database.prepare(`
+      INSERT INTO agenda_events (id, start_time, payload_json)
+      VALUES (?, ?, ?)
+    `);
+
+    assert.throws(() => insert.run(event.id, event.startTime, JSON.stringify(event)));
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Agenda SQLite Schema v1 rejects mismatched event metadata', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-schema-'));
+  const database = new DatabaseSync(join(directory, 'agenda.sqlite'));
+  const insertSql = `
+    INSERT INTO agenda_events (id, start_time, payload_json)
+    VALUES (?, ?, ?)
+  `;
+
+  try {
+    database.exec(createAgendaSqliteSchemaV1Sql('2026-08-02T00:00:00.000Z'));
+    const insert = database.prepare(insertSql);
+
+    assert.throws(() => insert.run(
+      'agenda-column-id',
+      '2026-08-03T15:00:00.000Z',
+      JSON.stringify({
+        id: 'agenda-payload-id',
+        startTime: '2026-08-03T15:00:00.000Z',
+        source: 'local',
+      }),
+    ));
+    assert.throws(() => insert.run(
+      'agenda-matching-id',
+      '2026-08-03T15:00:00.000Z',
+      JSON.stringify({
+        id: 'agenda-matching-id',
+        startTime: '2026-08-03T16:00:00.000Z',
+        source: 'local',
+      }),
+    ));
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('Hermes query executor can be injected without changing the public API contract', async () => {
