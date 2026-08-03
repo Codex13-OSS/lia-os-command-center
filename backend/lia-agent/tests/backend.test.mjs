@@ -14,6 +14,8 @@ import {
   AGENDA_SQLITE_SCHEMA_VERSION,
   createAgendaSqliteSchemaV1Sql,
 } from '../dist/services/agendaSqliteSchema.js';
+import { createProjectTaskSafetyPolicy } from '../dist/contracts/projectExecutor.js';
+import { validateProjectTaskRequest } from '../dist/contracts/projectExecutorValidation.js';
 
 function createPermissiveAgendaSqliteTables(database, {
   schemaVersion = AGENDA_SQLITE_SCHEMA_VERSION,
@@ -1421,4 +1423,93 @@ test('Hermes outbound prompt preserves the full user query and enforces a total 
     assert.ok(calls[0].includes(userQuery));
     assert.match(calls[0], /"truncated":true/);
   });
+});
+
+test('project task request validation normalizes a valid request and deduplicates capabilities', () => {
+  const result = validateProjectTaskRequest({
+    projectId: '  lia.backend_v1  ',
+    instruction: '  Implementa el contrato seguro  ',
+    priority: 'high',
+    requestedCapabilities: ['run_tests', 'repository_read', 'run_tests', 'local_commit'],
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.request, {
+    projectId: 'lia.backend_v1',
+    instruction: 'Implementa el contrato seguro',
+    priority: 'high',
+    requestedCapabilities: ['run_tests', 'repository_read', 'local_commit'],
+  });
+});
+
+test('project task request validation rejects dangerous project identifiers', () => {
+  for (const projectId of ['../repo', 'foo/bar']) {
+    const result = validateProjectTaskRequest({
+      projectId,
+      instruction: 'Inspecciona el proyecto',
+      priority: 'normal',
+      requestedCapabilities: ['repository_read'],
+    });
+
+    assert.equal(result.success, false);
+    assert.ok(result.errors.some((error) => error.path === 'projectId'));
+  }
+});
+
+test('project task request validation rejects a blocked capability', () => {
+  const result = validateProjectTaskRequest({
+    projectId: 'lia-agent',
+    instruction: 'Publica los cambios',
+    priority: 'critical',
+    requestedCapabilities: ['push'],
+  });
+
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.path === 'requestedCapabilities.0'));
+});
+
+test('project task request validation rejects unknown top-level fields', () => {
+  const result = validateProjectTaskRequest({
+    projectId: 'lia-agent',
+    instruction: 'Ejecuta una tarea',
+    priority: 'normal',
+    requestedCapabilities: ['isolated_worktree_write'],
+    repositoryPath: '/opt/algo',
+    command: 'rm -rf ...',
+  });
+
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.path === 'repositoryPath'));
+  assert.ok(result.errors.some((error) => error.path === 'command'));
+});
+
+test('project task safety policy is restrictive and returns independent arrays', () => {
+  const policy = createProjectTaskSafetyPolicy();
+
+  assert.equal(policy.orchestrator, 'hermes');
+  assert.equal(policy.executor, 'codex');
+  assert.equal(policy.workspaceIsolation, 'isolated_worktree_only');
+  assert.equal(policy.productionAccess, false);
+  assert.equal(policy.databaseWriteAccess, false);
+  assert.equal(policy.secretAccess, false);
+  assert.equal(policy.humanApprovalRequiredForBlockedActions, true);
+
+  policy.allowedCapabilities.push('repository_read');
+  policy.blockedCapabilities.pop();
+
+  const freshPolicy = createProjectTaskSafetyPolicy();
+  assert.deepEqual(freshPolicy.allowedCapabilities, [
+    'repository_read',
+    'isolated_worktree_write',
+    'run_tests',
+    'local_commit',
+  ]);
+  assert.deepEqual(freshPolicy.blockedCapabilities, [
+    'push',
+    'merge',
+    'deploy',
+    'production_write',
+    'database_write',
+    'secret_access',
+  ]);
 });
