@@ -21,6 +21,9 @@ import {
   resolveAuthorizedProject,
 } from '../dist/services/projectRegistry.js';
 import { planProjectTask } from '../dist/services/projectExecutionPlanner.js';
+import { buildProjectOrchestrationPrompt } from '../dist/services/projectOrchestrationPrompt.js';
+import { orchestrateProjectTask } from '../dist/services/projectOrchestrationService.js';
+import { validateProjectOrchestrationProposal } from '../dist/services/projectOrchestrationValidation.js';
 
 function createPermissiveAgendaSqliteTables(database, {
   schemaVersion = AGENDA_SQLITE_SCHEMA_VERSION,
@@ -1763,9 +1766,6 @@ test('project execution planner fails closed for registry errors and owns capabi
     'run_tests',
   ]);
 });
-import { buildProjectOrchestrationPrompt } from "../dist/services/projectOrchestrationPrompt.js";
-import { validateProjectOrchestrationProposal } from "../dist/services/projectOrchestrationValidation.js";
-
 const orchestrationPlan = (approvedCapabilities = ["repository_read", "run_tests"]) => ({
   projectId: "project-safe-1",
   projectDisplayName: "Proyecto Seguro",
@@ -1841,4 +1841,139 @@ test("project orchestration enforces structural limits", () => {
   assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: [] }), orchestrationPlan()).success, false);
   assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: Array.from({ length: 13 }, () => ({ ...step })) }), orchestrationPlan()).success, false);
   assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ summary: "   " }), orchestrationPlan()).success, false);
+});
+
+const orchestrationRegistry = () => createStaticProjectRegistry([{
+  projectId: 'lia-agent',
+  displayName: 'LÍA Agent',
+  repositoryRoot: '/private/repos/lia-agent',
+  enabled: true,
+}]);
+
+const orchestrationTask = (requestedCapabilities = ['repository_read', 'run_tests']) => ({
+  projectId: 'lia-agent',
+  instruction: 'Inspecciona y verifica el proyecto',
+  priority: 'normal',
+  requestedCapabilities,
+});
+
+test('project orchestration service completes a valid simulated flow without leaking internals', async () => {
+  const config = loadConfig({});
+  const calls = [];
+  const proposal = {
+    summary: 'Inspección y verificación seguras',
+    steps: [
+      {
+        title: 'Inspeccionar',
+        objective: 'Revisar el repositorio',
+        requiredCapabilities: ['repository_read'],
+      },
+      {
+        title: 'Verificar',
+        objective: 'Ejecutar las pruebas aprobadas',
+        requiredCapabilities: ['run_tests'],
+      },
+    ],
+    requiresHumanApproval: false,
+    blockedActions: [],
+  };
+  const executeQuery = async (receivedConfig, prompt) => {
+    calls.push({ config: receivedConfig, prompt });
+    return { ok: true, response: JSON.stringify(proposal) };
+  };
+
+  const result = await orchestrateProjectTask(
+    config,
+    orchestrationTask(),
+    orchestrationRegistry(),
+    executeQuery,
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.proposal, proposal);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].config, config);
+  assert.match(calls[0].prompt, /lia-agent/);
+  assert.match(calls[0].prompt, /Inspecciona y verifica el proyecto/);
+  assert.match(calls[0].prompt, /repository_read/);
+  assert.match(calls[0].prompt, /run_tests/);
+  assert.doesNotMatch(calls[0].prompt, /\/private\/repos\/lia-agent/);
+  assert.doesNotMatch(calls[0].prompt, /repositoryRoot/);
+  assert.equal(Object.hasOwn(result, 'plan'), false);
+  assert.equal(Object.hasOwn(result, 'repositoryRoot'), false);
+  assert.equal(Object.hasOwn(result, 'response'), false);
+});
+
+test('project orchestration service rejects invalid tasks without calling Hermes', async () => {
+  let calls = 0;
+  const executeQuery = async () => {
+    calls += 1;
+    return { ok: false, error: 'execution_failed' };
+  };
+
+  const result = await orchestrateProjectTask(
+    loadConfig({}),
+    { ...orchestrationTask(), command: 'npm test' },
+    orchestrationRegistry(),
+    executeQuery,
+  );
+
+  assert.deepEqual(result, { ok: false, error: 'invalid_task' });
+  assert.equal(calls, 0);
+});
+
+test('project orchestration service propagates executor errors exactly', async () => {
+  for (const error of [
+    'execution_disabled',
+    'timeout',
+    'execution_failed',
+    'empty_response',
+  ]) {
+    const result = await orchestrateProjectTask(
+      loadConfig({}),
+      orchestrationTask(),
+      orchestrationRegistry(),
+      async () => ({ ok: false, error }),
+    );
+
+    assert.deepEqual(result, { ok: false, error });
+  }
+});
+
+test('project orchestration service rejects non-pure Hermes JSON without repair', async () => {
+  for (const response of [
+    '```json\n{}\n```',
+    'texto antes {"summary":"x"}',
+  ]) {
+    const result = await orchestrateProjectTask(
+      loadConfig({}),
+      orchestrationTask(),
+      orchestrationRegistry(),
+      async () => ({ ok: true, response }),
+    );
+
+    assert.deepEqual(result, { ok: false, error: 'invalid_hermes_json' });
+  }
+});
+
+test('project orchestration service rejects a proposal using an unapproved capability', async () => {
+  const response = JSON.stringify({
+    summary: 'Intento fuera de permisos',
+    steps: [{
+      title: 'Probar',
+      objective: 'Ejecutar pruebas',
+      requiredCapabilities: ['run_tests'],
+    }],
+    requiresHumanApproval: false,
+    blockedActions: [],
+  });
+
+  const result = await orchestrateProjectTask(
+    loadConfig({}),
+    orchestrationTask(['repository_read']),
+    orchestrationRegistry(),
+    async () => ({ ok: true, response }),
+  );
+
+  assert.deepEqual(result, { ok: false, error: 'invalid_hermes_proposal' });
 });
