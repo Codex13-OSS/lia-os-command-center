@@ -29,7 +29,7 @@ export function createAgendaSqliteReadSource(
           payload_json: unknown;
         }>;
 
-        const events = rows.map(({ id, start_time, payload_json }) => {
+        const events = rows.flatMap(({ id, start_time, payload_json }) => {
           if (typeof payload_json !== 'string') {
             throw new Error('invalid_agenda_payload_json');
           }
@@ -40,13 +40,17 @@ export function createAgendaSqliteReadSource(
             throw new Error('invalid_agenda_payload_json');
           }
 
+          if ('source' in event && event.source === 'seed') {
+            return [];
+          }
+
           const agendaEvent = event as AgendaEvent;
 
           if (agendaEvent.id !== id || agendaEvent.startTime !== start_time) {
             throw new Error('agenda_sqlite_metadata_mismatch');
           }
 
-          return agendaEvent;
+          return [agendaEvent];
         });
 
         return {

@@ -666,6 +666,126 @@ test('SQLite agenda source returns valid events in deterministic read-only order
   }
 });
 
+test('SQLite agenda source excludes seed events while returning local events', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-sqlite-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+  const database = new DatabaseSync(databasePath);
+  const event = (id, title, startTime, source) => ({
+    id,
+    title,
+    startTime,
+    endTime: '2026-08-03T16:30:00.000Z',
+    timezone: 'America/Mexico_City',
+    mode: 'virtual',
+    priority: 'medium',
+    status: 'confirmed',
+    attendees: [],
+    responsible: { name: 'Dirección' },
+    preparationMinutes: 0,
+    parkingMinutes: 0,
+    walkingMinutes: 0,
+    followUpRequired: false,
+    recurrence: { frequency: 'none' },
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    source,
+  });
+
+  try {
+    database.exec(`
+      CREATE TABLE agenda_events (
+        id TEXT PRIMARY KEY,
+        start_time TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      )
+    `);
+    const insert = database.prepare(
+      'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
+    );
+    const seedEvent = event(
+      'event-seed',
+      'Evento de demostración',
+      '2026-08-03T15:00:00.000Z',
+      'seed',
+    );
+    const localEvent = event(
+      'event-local',
+      'Evento local',
+      '2026-08-03T16:00:00.000Z',
+      'local',
+    );
+    insert.run(seedEvent.id, seedEvent.startTime, JSON.stringify(seedEvent));
+    insert.run(localEvent.id, localEvent.startTime, JSON.stringify(localEvent));
+    database.close();
+
+    const snapshot = await readSafeAgendaContext(
+      createAgendaSqliteReadSource(databasePath),
+    );
+
+    assert.equal(snapshot.state, 'available');
+    assert.equal(snapshot.eventCount, 1);
+    assert.deepEqual(snapshot.events.map(({ id }) => id), ['event-local']);
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite agenda source leaves unknown sources for validation to reject', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-sqlite-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+  const database = new DatabaseSync(databasePath);
+  const event = {
+    id: 'event-unexpected-source',
+    title: 'Evento con fuente desconocida',
+    startTime: '2026-08-03T15:00:00.000Z',
+    endTime: '2026-08-03T15:30:00.000Z',
+    timezone: 'America/Mexico_City',
+    mode: 'virtual',
+    priority: 'medium',
+    status: 'confirmed',
+    attendees: [],
+    responsible: { name: 'Dirección' },
+    preparationMinutes: 0,
+    parkingMinutes: 0,
+    walkingMinutes: 0,
+    followUpRequired: false,
+    recurrence: { frequency: 'none' },
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    source: 'unexpected',
+  };
+
+  try {
+    database.exec(`
+      CREATE TABLE agenda_events (
+        id TEXT PRIMARY KEY,
+        start_time TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      )
+    `);
+    database.prepare(
+      'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
+    ).run(event.id, event.startTime, JSON.stringify(event));
+    database.close();
+
+    const snapshot = await readSafeAgendaContext(
+      createAgendaSqliteReadSource(databasePath),
+    );
+
+    assert.equal(snapshot.state, 'unavailable');
+    assert.equal(snapshot.eventCount, 0);
+    assert.deepEqual(snapshot.events, []);
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('SQLite agenda source corrupt JSON fails closed without events', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-sqlite-'));
   const databasePath = join(directory, 'agenda.sqlite');
