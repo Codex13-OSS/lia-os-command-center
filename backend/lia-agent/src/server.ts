@@ -4,6 +4,8 @@ import { createAgendaSqliteReadSource } from './services/agendaSqliteReadSource.
 import { createProjectRegistryFileSource } from './services/projectRegistryFileSource.js';
 
 const config = loadConfig();
+// Verification policy is intentionally not constructed here until the internal
+// project-task workflow has a dependency slot that does not expose a public route.
 const dependencies = {
   ...(config.agendaSqlitePath === ''
     ? {}

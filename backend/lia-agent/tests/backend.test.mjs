@@ -276,6 +276,27 @@ test('relative or NUL-containing project registry path configuration is rejected
   }
 });
 
+test('missing or blank project verification path configuration resolves to empty string', () => {
+  assert.equal(loadConfig({}).projectVerificationPath, '');
+  assert.equal(loadConfig({ LIA_PROJECT_VERIFICATION_PATH: '   ' }).projectVerificationPath, '');
+});
+
+test('absolute project verification path configuration is accepted after trimming', () => {
+  assert.equal(
+    loadConfig({ LIA_PROJECT_VERIFICATION_PATH: '  /etc/lia/verification.json  ' }).projectVerificationPath,
+    '/etc/lia/verification.json',
+  );
+});
+
+test('relative or NUL-containing project verification path configuration is rejected', () => {
+  for (const projectVerificationPath of ['./verification.json', '/etc/lia/verification\0.json']) {
+    assert.throws(
+      () => loadConfig({ LIA_PROJECT_VERIFICATION_PATH: projectVerificationPath }),
+      (error) => error instanceof Error && error.message === 'invalid_lia_project_verification_path',
+    );
+  }
+});
+
 
 test('GET /api/hermes/status is fail-closed when Hermes is not configured', async () => {
   await withServer(createApp(loadConfig({})), async (baseUrl) => {

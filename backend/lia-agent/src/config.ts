@@ -6,6 +6,7 @@ export type LiaAgentConfig = {
   corsOrigins: string[];
   agendaSqlitePath: string;
   projectRegistryPath: string;
+  projectVerificationPath: string;
   hermesRoot: string;
   hermesExecutionEnabled: boolean;
   hermesExecutable: string;
@@ -75,6 +76,20 @@ function parseProjectRegistryPath(rawPath: string | undefined): string {
 
   if (!isAbsolute(candidate) || candidate.includes('\0')) {
     throw new Error('invalid_lia_project_registry_path');
+  }
+
+  return candidate;
+}
+
+function parseProjectVerificationPath(rawPath: string | undefined): string {
+  const candidate = rawPath?.trim() ?? '';
+
+  if (candidate === '') {
+    return '';
+  }
+
+  if (!isAbsolute(candidate) || candidate.includes('\0')) {
+    throw new Error('invalid_lia_project_verification_path');
   }
 
   return candidate;
@@ -163,6 +178,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LiaAgentConfig
     corsOrigins: parseCorsOrigins(env.LIA_AGENT_CORS_ORIGINS),
     agendaSqlitePath: parseAgendaSqlitePath(env.LIA_AGENDA_SQLITE_PATH),
     projectRegistryPath: parseProjectRegistryPath(env.LIA_PROJECT_REGISTRY_PATH),
+    projectVerificationPath: parseProjectVerificationPath(env.LIA_PROJECT_VERIFICATION_PATH),
     hermesRoot: parseHermesRoot(env.LIA_HERMES_ROOT),
     hermesExecutionEnabled: parseBoolean(env.LIA_HERMES_EXECUTION_ENABLED),
     hermesExecutable: parseAbsolutePath(
