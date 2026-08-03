@@ -15,6 +15,35 @@ import {
   createAgendaSqliteSchemaV1Sql,
 } from '../dist/services/agendaSqliteSchema.js';
 
+function createPermissiveAgendaSqliteTables(database, {
+  schemaVersion = AGENDA_SQLITE_SCHEMA_VERSION,
+  timezone = 'America/Mexico_City',
+} = {}) {
+  database.exec(`
+    CREATE TABLE agenda_state (
+      singleton,
+      schema_version,
+      global_revision,
+      timezone,
+      updated_at
+    );
+    CREATE TABLE agenda_events (
+      id TEXT PRIMARY KEY,
+      start_time TEXT NOT NULL,
+      payload_json
+    )
+  `);
+  database.prepare(`
+    INSERT INTO agenda_state (
+      singleton,
+      schema_version,
+      global_revision,
+      timezone,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?)
+  `).run(1, schemaVersion, 0, timezone, '2026-08-02T00:00:00.000Z');
+}
+
 async function listenWithApp(app) {
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -636,13 +665,7 @@ test('SQLite agenda source returns valid events in deterministic read-only order
   });
 
   try {
-    database.exec(`
-      CREATE TABLE agenda_events (
-        id TEXT PRIMARY KEY,
-        start_time TEXT NOT NULL,
-        payload_json TEXT NOT NULL
-      )
-    `);
+    createPermissiveAgendaSqliteTables(database, { timezone: 'Etc/UTC' });
     const insert = database.prepare(
       'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
     );
@@ -659,6 +682,7 @@ test('SQLite agenda source returns valid events in deterministic read-only order
     );
 
     assert.equal(snapshot.state, 'available');
+    assert.equal(snapshot.timezone, 'Etc/UTC');
     assert.equal(snapshot.eventCount, 2);
     assert.deepEqual(snapshot.events.map(({ id }) => id), ['event-a', 'event-b']);
     assert.equal(snapshot.readOnly, true);
@@ -697,13 +721,7 @@ test('SQLite agenda source excludes seed events while returning local events', a
   });
 
   try {
-    database.exec(`
-      CREATE TABLE agenda_events (
-        id TEXT PRIMARY KEY,
-        start_time TEXT NOT NULL,
-        payload_json TEXT NOT NULL
-      )
-    `);
+    createPermissiveAgendaSqliteTables(database);
     const insert = database.prepare(
       'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
     );
@@ -764,13 +782,7 @@ test('SQLite agenda source leaves unknown sources for validation to reject', asy
   };
 
   try {
-    database.exec(`
-      CREATE TABLE agenda_events (
-        id TEXT PRIMARY KEY,
-        start_time TEXT NOT NULL,
-        payload_json TEXT NOT NULL
-      )
-    `);
+    createPermissiveAgendaSqliteTables(database);
     database.prepare(
       'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
     ).run(event.id, event.startTime, JSON.stringify(event));
@@ -797,15 +809,11 @@ test('SQLite agenda source corrupt JSON fails closed without events', async () =
   const database = new DatabaseSync(databasePath);
 
   try {
-    database.exec(`
-      CREATE TABLE agenda_events (
-        id TEXT PRIMARY KEY,
-        start_time TEXT NOT NULL,
-        payload_json TEXT NOT NULL
-      );
+    createPermissiveAgendaSqliteTables(database);
+    database.prepare(`
       INSERT INTO agenda_events (id, start_time, payload_json)
-      VALUES ('corrupt', '2026-08-03T15:00:00.000Z', '{not-json');
-    `);
+      VALUES ('corrupt', '2026-08-03T15:00:00.000Z', '{not-json')
+    `).run();
     database.close();
 
     const snapshot = await readSafeAgendaContext(
@@ -849,13 +857,7 @@ test('SQLite agenda source fails closed when row id differs from payload event i
   };
 
   try {
-    database.exec(`
-      CREATE TABLE agenda_events (
-        id TEXT PRIMARY KEY,
-        start_time TEXT NOT NULL,
-        payload_json TEXT NOT NULL
-      )
-    `);
+    createPermissiveAgendaSqliteTables(database);
     database.prepare(
       'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
     ).run('row-id', event.startTime, JSON.stringify(event));
@@ -902,16 +904,68 @@ test('SQLite agenda source fails closed when row start time differs from payload
   };
 
   try {
+    createPermissiveAgendaSqliteTables(database);
+    database.prepare(
+      'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
+    ).run(event.id, '2026-08-03T16:00:00.000Z', JSON.stringify(event));
+    database.close();
+
+    const snapshot = await readSafeAgendaContext(
+      createAgendaSqliteReadSource(databasePath),
+    );
+
+    assert.equal(snapshot.state, 'unavailable');
+    assert.equal(snapshot.eventCount, 0);
+    assert.deepEqual(snapshot.events, []);
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite agenda source fails closed when agenda_state is missing', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-sqlite-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+  const database = new DatabaseSync(databasePath);
+
+  try {
     database.exec(`
       CREATE TABLE agenda_events (
         id TEXT PRIMARY KEY,
         start_time TEXT NOT NULL,
-        payload_json TEXT NOT NULL
+        payload_json
       )
     `);
-    database.prepare(
-      'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
-    ).run(event.id, '2026-08-03T16:00:00.000Z', JSON.stringify(event));
+    database.prepare(`
+      INSERT INTO agenda_events (id, start_time, payload_json)
+      VALUES ('event-without-state', '2026-08-03T15:00:00.000Z', '{}')
+    `).run();
+    database.close();
+
+    const snapshot = await readSafeAgendaContext(
+      createAgendaSqliteReadSource(databasePath),
+    );
+
+    assert.equal(snapshot.state, 'unavailable');
+    assert.equal(snapshot.eventCount, 0);
+    assert.deepEqual(snapshot.events, []);
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite agenda source fails closed for an incompatible schema version', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-sqlite-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+  const database = new DatabaseSync(databasePath);
+
+  try {
+    createPermissiveAgendaSqliteTables(database, { schemaVersion: 2 });
     database.close();
 
     const snapshot = await readSafeAgendaContext(

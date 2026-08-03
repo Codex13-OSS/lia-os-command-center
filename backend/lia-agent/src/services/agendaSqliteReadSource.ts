@@ -2,8 +2,7 @@ import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AgendaEvent } from '../contracts/agenda.js';
 import type { AgendaReadSource } from './agendaReadSource.js';
-
-const DEFAULT_TIMEZONE = 'America/Mexico_City';
+import { AGENDA_SQLITE_SCHEMA_VERSION } from './agendaSqliteSchema.js';
 
 export function createAgendaSqliteReadSource(
   databasePath: string,
@@ -18,6 +17,44 @@ export function createAgendaSqliteReadSource(
 
       try {
         database.exec('PRAGMA query_only=ON');
+
+        let stateRows: Array<{
+          singleton: unknown;
+          schema_version: unknown;
+          global_revision: unknown;
+          timezone: unknown;
+          updated_at: unknown;
+        }>;
+
+        try {
+          stateRows = database.prepare(`
+            SELECT singleton, schema_version, global_revision, timezone, updated_at
+            FROM agenda_state
+          `).all() as typeof stateRows;
+        } catch {
+          throw new Error('invalid_agenda_sqlite_state');
+        }
+
+        if (stateRows.length !== 1) {
+          throw new Error('invalid_agenda_sqlite_state');
+        }
+
+        const [agendaState] = stateRows;
+
+        if (
+          agendaState === undefined ||
+          agendaState.singleton !== 1 ||
+          agendaState.schema_version !== AGENDA_SQLITE_SCHEMA_VERSION ||
+          typeof agendaState.global_revision !== 'number' ||
+          !Number.isInteger(agendaState.global_revision) ||
+          agendaState.global_revision < 0 ||
+          typeof agendaState.timezone !== 'string' ||
+          agendaState.timezone.trim() === '' ||
+          typeof agendaState.updated_at !== 'string' ||
+          agendaState.updated_at.trim() === ''
+        ) {
+          throw new Error('invalid_agenda_sqlite_state');
+        }
 
         const rows = database.prepare(`
           SELECT id, start_time, payload_json
@@ -55,7 +92,7 @@ export function createAgendaSqliteReadSource(
 
         return {
           state: 'available' as const,
-          timezone: DEFAULT_TIMEZONE,
+          timezone: agendaState.timezone,
           events,
         };
       } finally {
