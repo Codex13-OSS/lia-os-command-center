@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { PassThrough } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createApp } from '../dist/app.js';
@@ -23,6 +25,10 @@ import {
 import { planProjectTask } from '../dist/services/projectExecutionPlanner.js';
 import { buildProjectOrchestrationPrompt } from '../dist/services/projectOrchestrationPrompt.js';
 import { orchestrateProjectTask } from '../dist/services/projectOrchestrationService.js';
+import {
+  buildHermesReasoningInvocation,
+  createHermesReasoningOnlyExecutor,
+} from '../dist/services/hermesReasoningExecutor.js';
 import { validateProjectOrchestrationProposal } from '../dist/services/projectOrchestrationValidation.js';
 
 function createPermissiveAgendaSqliteTables(database, {
@@ -1781,6 +1787,119 @@ const orchestrationProposal = (overrides = {}) => ({
   requiresHumanApproval: false,
   blockedActions: [],
   ...overrides,
+});
+
+function createFakeHermesProcess() {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.signals = [];
+  child.kill = (signal) => {
+    child.signals.push(signal);
+    return true;
+  };
+  return child;
+}
+
+function reasoningConfig(overrides = {}) {
+  return {
+    ...loadConfig({
+      LIA_HERMES_EXECUTION_ENABLED: 'true',
+      LIA_HERMES_TIMEOUT_MS: '50',
+    }),
+    ...overrides,
+  };
+}
+
+test('project orchestration defaults to the reasoning-only executor, not chat Hermes', async () => {
+  const source = await readFile(
+    new URL('../src/services/projectOrchestrationService.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /executeQuery \?\? executeHermesReasoningOnly/);
+  assert.equal(source.includes('executeHermesQuery'), false);
+});
+
+test('reasoning executor invokes venv Python directly with an explicit zero-tool agent', () => {
+  const invocation = buildHermesReasoningInvocation(reasoningConfig(), 'plan safely');
+  const pythonSource = invocation.args.at(-1);
+
+  assert.equal(invocation.command, '/usr/sbin/runuser');
+  assert.equal(invocation.args.includes('hermes'), false);
+  assert.equal(invocation.args.includes('chat'), false);
+  assert.equal(invocation.args.includes('--yolo'), false);
+  assert.match(invocation.args.at(-3), /hermes-agent\/venv\/bin\/python$/);
+  assert.equal(invocation.args.at(-2), '-c');
+  assert.match(pythonSource, /enabled_toolsets=\[\]/);
+  assert.match(pythonSource, /disabled_toolsets=\[\]/);
+  assert.match(pythonSource, /skip_memory=True/);
+  assert.match(pythonSource, /skip_context_files=True/);
+  assert.match(pythonSource, /save_trajectories=False/);
+  assert.equal(invocation.args.some((arg) => arg.startsWith('HERMES_INTERACTIVE=')), false);
+  assert.equal(invocation.args.some((arg) => arg.startsWith('HERMES_YOLO_MODE=')), false);
+  assert.equal(invocation.args.some((arg) => arg.startsWith('HERMES_ACCEPT_HOOKS=')), false);
+});
+
+test('reasoning Python runner asserts both tool surfaces before model execution', () => {
+  const source = buildHermesReasoningInvocation(reasoningConfig(), 'plan').args.at(-1);
+  const assertionIndex = source.indexOf('if not isinstance(tools, list)');
+  const conversationIndex = source.indexOf('agent.run_conversation');
+
+  assert.notEqual(assertionIndex, -1);
+  assert.match(source, /valid_tool_names is None or bool\(valid_tool_names\)/);
+  assert.match(source, /LIA_HERMES_REASONING_TOOL_SURFACE_VIOLATION/);
+  assert.equal(assertionIndex < conversationIndex, true);
+});
+
+test('reasoning executor preserves success, failure, empty and tool-violation contracts', async () => {
+  const cases = [
+    {
+      arrange(child) {
+        child.stdout.end('\u001b[32mreasoned\u001b[0m');
+        queueMicrotask(() => child.emit('close', 0));
+      },
+      expected: { ok: true, response: 'reasoned' },
+    },
+    {
+      arrange(child) {
+        queueMicrotask(() => child.emit('error', new Error('private failure')));
+      },
+      expected: { ok: false, error: 'execution_failed' },
+    },
+    {
+      arrange(child) {
+        queueMicrotask(() => child.emit('close', 0));
+      },
+      expected: { ok: false, error: 'empty_response' },
+    },
+    {
+      arrange(child) {
+        child.stderr.end('LIA_HERMES_REASONING_TOOL_SURFACE_VIOLATION\nsecret');
+        queueMicrotask(() => child.emit('close', 78));
+      },
+      expected: { ok: false, error: 'execution_failed' },
+    },
+  ];
+
+  for (const { arrange, expected } of cases) {
+    const child = createFakeHermesProcess();
+    const executor = createHermesReasoningOnlyExecutor(() => {
+      queueMicrotask(() => arrange(child));
+      return child;
+    });
+    assert.deepEqual(await executor(reasoningConfig(), 'plan'), expected);
+  }
+});
+
+test('reasoning executor times out with SIGTERM and keeps the public contract closed', async () => {
+  const child = createFakeHermesProcess();
+  const executor = createHermesReasoningOnlyExecutor(() => child);
+  const result = await executor(reasoningConfig({ hermesTimeoutMs: 1 }), 'plan');
+
+  assert.deepEqual(result, { ok: false, error: 'timeout' });
+  assert.deepEqual(child.signals, ['SIGTERM']);
 });
 
 test("project orchestration builds a safe prompt without repository paths", () => {

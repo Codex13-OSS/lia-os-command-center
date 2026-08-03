@@ -1,10 +1,8 @@
 import type { LiaAgentConfig } from '../config.js';
 import type { ProjectOrchestrationExecutionResult } from '../contracts/projectOrchestrationExecution.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
-import {
-  executeHermesQuery,
-  type HermesQueryExecutor,
-} from './hermesExecutor.js';
+import type { HermesQueryExecutor } from './hermesExecutor.js';
+import { executeHermesReasoningOnly } from './hermesReasoningExecutor.js';
 import { planProjectTask } from './projectExecutionPlanner.js';
 import { buildProjectOrchestrationPrompt } from './projectOrchestrationPrompt.js';
 import { validateProjectOrchestrationProposal } from './projectOrchestrationValidation.js';
@@ -33,7 +31,7 @@ export async function orchestrateProjectTask(
     throw error;
   }
 
-  const result = await (executeQuery ?? executeHermesQuery)(config, prompt);
+  const result = await (executeQuery ?? executeHermesReasoningOnly)(config, prompt);
   if (!result.ok) {
     return result;
   }
