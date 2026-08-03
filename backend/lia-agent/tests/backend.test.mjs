@@ -2374,3 +2374,154 @@ test('GET project orchestration returns 405 with Allow POST', async () => {
     assert.equal((await response.json()).error, 'method_not_allowed');
   });
 });
+
+const postProjectTaskExecution = (baseUrl, body) => fetch(
+  `${baseUrl}/api/projects/tasks/execute`,
+  {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  },
+);
+
+test('POST project task execution returns the exact safe success contract', async () => {
+  const calls = [];
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: orchestrationRegistry(),
+    projectTaskExecutionExecutor: async (config, task, registry) => {
+      calls.push({ config, task, registry });
+      return {
+        ok: true,
+        status: 'completed',
+        executionId: 'execution-safe-001',
+        summary: 'Tarea completada de forma aislada.',
+        repositoryRoot: '/private/repos/lia-agent',
+        stdout: 'secret output',
+        handoff: { prompt: 'internal prompt' },
+      };
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await postProjectTaskExecution(baseUrl, orchestrationTask());
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      ok: true,
+      integration: 'project_execution',
+      mode: 'isolated_codex_execution',
+      status: 'completed',
+      executionId: 'execution-safe-001',
+      summary: 'Tarea completada de forma aislada.',
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].task, orchestrationTask());
+    assert.doesNotMatch(JSON.stringify(body), /repositoryRoot|stdout|handoff|prompt|private/);
+  });
+});
+
+test('POST project task execution fails closed without a registry and does not call the fake', async () => {
+  let calls = 0;
+  const app = createApp(loadConfig({}), {
+    projectTaskExecutionExecutor: async () => {
+      calls += 1;
+      return { ok: false, status: 'failed', error: 'execution_failed' };
+    },
+  });
+  await withServer(app, async (baseUrl) => {
+    const response = await postProjectTaskExecution(baseUrl, orchestrationTask());
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { ok: false, error: 'registry_unavailable' });
+  });
+  assert.equal(calls, 0);
+});
+
+test('POST project task execution rejects dangerous request fields before execution', async () => {
+  const dangerousFields = [
+    'repositoryRoot', 'branch', 'worktreePath', 'command', 'shell', 'prompt',
+    'secrets', 'credentials', 'config',
+  ];
+  let calls = 0;
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: orchestrationRegistry(),
+    projectTaskExecutionExecutor: async () => {
+      calls += 1;
+      return { ok: false, status: 'failed', error: 'execution_failed' };
+    },
+  });
+  await withServer(app, async (baseUrl) => {
+    for (const field of dangerousFields) {
+      const response = await postProjectTaskExecution(baseUrl, {
+        ...orchestrationTask(),
+        [field]: 'not allowed',
+      });
+      assert.equal(response.status, 400, field);
+      assert.deepEqual(await response.json(), { ok: false, error: 'invalid_task' });
+    }
+  });
+  assert.equal(calls, 0);
+});
+
+test('POST project task execution rejects an invalid public task before execution', async () => {
+  let calls = 0;
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: orchestrationRegistry(),
+    projectTaskExecutionExecutor: async () => {
+      calls += 1;
+      return { ok: false, status: 'failed', error: 'execution_failed' };
+    },
+  });
+  await withServer(app, async (baseUrl) => {
+    const response = await postProjectTaskExecution(baseUrl, {
+      ...orchestrationTask(),
+      instruction: '',
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { ok: false, error: 'invalid_task' });
+  });
+  assert.equal(calls, 0);
+});
+
+test('POST project task execution maps safe deterministic errors', async () => {
+  const scenarios = [
+    ['invalid_task', 400],
+    ['project_not_found', 404],
+    ['project_disabled', 403],
+    ['human_approval_required', 409],
+    ['timeout', 504],
+    ['codex_execution_failed', 502],
+    ['missing_repository_read', 403],
+    ['missing_isolated_worktree_write', 403],
+  ];
+  for (const [error, status] of scenarios) {
+    let calls = 0;
+    const app = createApp(loadConfig({}), {
+      projectRegistrySource: orchestrationRegistry(),
+      projectTaskExecutionExecutor: async () => {
+        calls += 1;
+        return {
+          ok: false,
+          status: 'failed',
+          error,
+          repositoryRoot: '/private/repos/lia-agent',
+          stderr: 'internal failure',
+        };
+      },
+    });
+    await withServer(app, async (baseUrl) => {
+      const response = await postProjectTaskExecution(baseUrl, orchestrationTask());
+      assert.equal(response.status, status, error);
+      assert.deepEqual(await response.json(), { ok: false, error });
+    });
+    assert.equal(calls, 1, error);
+  }
+});
+
+test('GET project task execution returns 405 with Allow POST', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/projects/tasks/execute`);
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get('allow'), 'POST');
+    assert.equal((await response.json()).error, 'method_not_allowed');
+  });
+});

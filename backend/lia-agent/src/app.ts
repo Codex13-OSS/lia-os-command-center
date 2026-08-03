@@ -11,6 +11,10 @@ import { createHealthRouter } from './routes/health.js';
 import { createHermesRouter } from './routes/hermes.js';
 import { createHermesQueryRouter } from './routes/hermesQuery.js';
 import { createProjectOrchestrationRouter } from './routes/projectOrchestration.js';
+import {
+  createProjectTaskExecutionRouter,
+  type ProjectTaskExecutionExecutor,
+} from './routes/projectTaskExecution.js';
 import { createStatusRouter } from './routes/status.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
 import type { HermesQueryExecutor } from './services/hermesExecutor.js';
@@ -20,6 +24,7 @@ export type LiaAgentDependencies = {
   hermesQueryExecutor?: HermesQueryExecutor;
   projectRegistrySource?: ProjectRegistrySource;
   projectOrchestrationExecutor?: HermesQueryExecutor;
+  projectTaskExecutionExecutor?: ProjectTaskExecutionExecutor;
 };
 
 export function createApp(
@@ -57,6 +62,10 @@ export function createApp(
   app.use(createProjectOrchestrationRouter(config, {
     projectRegistrySource: dependencies.projectRegistrySource,
     executeQuery: dependencies.projectOrchestrationExecutor,
+  }));
+  app.use(createProjectTaskExecutionRouter(config, {
+    projectRegistrySource: dependencies.projectRegistrySource,
+    executeTask: dependencies.projectTaskExecutionExecutor,
   }));
   app.use(notFound);
   app.use(errorHandler);
