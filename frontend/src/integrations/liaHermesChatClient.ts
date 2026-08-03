@@ -1,4 +1,4 @@
-export const LIA_HERMES_CHAT_PATH = '/api/lia-agent/query';
+export const LIA_HERMES_CHAT_PATH = '/lia/api/lia-agent/query';
 
 const LIA_HERMES_CHAT_TIMEOUT_MS = 125_000;
 const LIA_HERMES_MAX_QUERY_CHARACTERS = 8_000;

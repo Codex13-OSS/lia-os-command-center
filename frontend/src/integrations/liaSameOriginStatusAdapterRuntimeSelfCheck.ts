@@ -57,7 +57,7 @@ export function runLiaSameOriginStatusAdapterRuntimeSelfCheck(): LiaSameOriginSt
   const checks = [
     createCheck(
       'relative-same-origin-path',
-      LIA_SAME_ORIGIN_STATUS_ADAPTER_PATH === '/api/lia-agent/health',
+      LIA_SAME_ORIGIN_STATUS_ADAPTER_PATH === '/lia/api/lia-agent/health',
       'Client uses the same-origin adapter path.',
     ),
     createCheck('no-blocked-terms', !containsBlockedTerms(source), 'Client source contains no blocked hosts, schemes, or browser APIs.'),

@@ -1,4 +1,4 @@
-export const LIA_PROJECT_TASK_WORKFLOW_PATH = '/api/lia-agent/projects/tasks/workflow';
+export const LIA_PROJECT_TASK_WORKFLOW_PATH = '/lia/api/lia-agent/projects/tasks/workflow';
 
 const WORKFLOW_TIMEOUT_MS = 20 * 60 * 1_000;
 const MAX_INSTRUCTION_CHARACTERS = 8_000;
