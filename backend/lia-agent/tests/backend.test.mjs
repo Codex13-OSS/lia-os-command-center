@@ -1763,3 +1763,82 @@ test('project execution planner fails closed for registry errors and owns capabi
     'run_tests',
   ]);
 });
+import { buildProjectOrchestrationPrompt } from "../dist/services/projectOrchestrationPrompt.js";
+import { validateProjectOrchestrationProposal } from "../dist/services/projectOrchestrationValidation.js";
+
+const orchestrationPlan = (approvedCapabilities = ["repository_read", "run_tests"]) => ({
+  projectId: "project-safe-1",
+  projectDisplayName: "Proyecto Seguro",
+  repositoryRoot: "/internal/private/repository-root",
+  instruction: "Analiza la tarea sin ejecutar nada.",
+  priority: "high",
+  approvedCapabilities,
+});
+
+const orchestrationProposal = (overrides = {}) => ({
+  summary: "Propuesta segura",
+  steps: [{ title: "Inspeccionar", objective: "Entender la tarea", requiredCapabilities: ["repository_read"] }],
+  requiresHumanApproval: false,
+  blockedActions: [],
+  ...overrides,
+});
+
+test("project orchestration builds a safe prompt without repository paths", () => {
+  const prompt = buildProjectOrchestrationPrompt(orchestrationPlan());
+  assert.match(prompt, /project-safe-1/);
+  assert.match(prompt, /Proyecto Seguro/);
+  assert.match(prompt, /Analiza la tarea sin ejecutar nada\./);
+  assert.match(prompt, /high/);
+  assert.match(prompt, /repository_read/);
+  assert.match(prompt, /run_tests/);
+  assert.match(prompt, /DATA ONLY/);
+  assert.match(prompt, /LÍA es la autoridad/);
+  assert.match(prompt, /NO debes ejecutar herramientas, comandos, Git, Codex ni cambios/);
+  assert.doesNotMatch(prompt, /repositoryRoot/);
+  assert.doesNotMatch(prompt, /\/internal\/private\/repository-root/);
+});
+
+test("project orchestration accepts and normalizes a valid proposal", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    summary: "  Propuesta segura  ",
+    steps: [
+      { title: "  Inspeccionar  ", objective: "  Entender la tarea  ", requiredCapabilities: ["repository_read", "repository_read"] },
+      { title: "  Verificar  ", objective: "  Ejecutar las pruebas autorizadas  ", requiredCapabilities: ["run_tests"] },
+    ],
+  }), orchestrationPlan());
+  assert.equal(result.success, true);
+  assert.equal(result.proposal.summary, "Propuesta segura");
+  assert.deepEqual(result.proposal.steps[0].requiredCapabilities, ["repository_read"]);
+  assert.equal(result.proposal.steps[1].title, "Verificar");
+});
+
+test("project orchestration rejects unknown fields", () => {
+  const topLevel = validateProjectOrchestrationProposal({ ...orchestrationProposal(), command: "do something" }, orchestrationPlan());
+  const stepLevel = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [{ title: "Paso", objective: "Objetivo", requiredCapabilities: [], branch: "main", repositoryRoot: "/private" }],
+  }), orchestrationPlan());
+  assert.equal(topLevel.success, false);
+  assert.equal(stepLevel.success, false);
+});
+
+test("project orchestration rejects capabilities not approved by LÍA", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [{ title: "Probar", objective: "Ejecutar pruebas", requiredCapabilities: ["run_tests"] }],
+  }), orchestrationPlan(["repository_read"]));
+  assert.equal(result.success, false);
+});
+
+test("project orchestration validates and deduplicates blocked actions", () => {
+  const valid = validateProjectOrchestrationProposal(orchestrationProposal({ blockedActions: ["deploy", "deploy"], requiresHumanApproval: true }), orchestrationPlan());
+  const invalid = validateProjectOrchestrationProposal(orchestrationProposal({ blockedActions: ["deploy", "deploy"], requiresHumanApproval: false }), orchestrationPlan());
+  assert.equal(valid.success, true);
+  assert.deepEqual(valid.proposal.blockedActions, ["deploy"]);
+  assert.equal(invalid.success, false);
+});
+
+test("project orchestration enforces structural limits", () => {
+  const step = { title: "Paso", objective: "Objetivo", requiredCapabilities: [] };
+  assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: [] }), orchestrationPlan()).success, false);
+  assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: Array.from({ length: 13 }, () => ({ ...step })) }), orchestrationPlan()).success, false);
+  assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ summary: "   " }), orchestrationPlan()).success, false);
+});
