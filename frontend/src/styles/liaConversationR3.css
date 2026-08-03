@@ -1,0 +1,73 @@
+.lia-dash-r3-search input {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  color: #dceefb;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+}
+.lia-dash-r3-search input::placeholder { color: #8da4b7; opacity: 1; }
+.lia-dash-r3-search button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #72add8;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.lia-dash-r3-search button:disabled { cursor: default; opacity: .48; }
+
+.lia-conversation-r3-panel {
+  position: absolute;
+  z-index: 20;
+  top: 62px;
+  right: 314px;
+  width: min(410px, calc(100vw - var(--lia-dash-r3-sidebar-width) - 338px));
+  height: min(560px, calc(100dvh - 86px));
+  padding: 14px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(131, 198, 240, .24);
+  border-radius: 20px;
+  background: radial-gradient(circle at 82% 0, rgba(50, 139, 201, .18), transparent 40%), rgba(5, 20, 34, .91);
+  box-shadow: 0 28px 70px rgba(0, 4, 12, .58), inset 0 1px rgba(225, 244, 255, .12);
+  backdrop-filter: blur(24px) saturate(145%);
+}
+.lia-conversation-r3-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 2px 2px 11px; border-bottom: 1px solid rgba(126, 177, 213, .14); }
+.lia-conversation-r3-panel-header > div { display: flex; align-items: center; gap: 8px; }
+.lia-conversation-r3-panel-header strong { color: #eff9ff; font-size: 14px; letter-spacing: .08em; }
+.lia-conversation-r3-panel-header small { color: #7e9bb0; font-size: 10px; letter-spacing: .04em; }
+.lia-conversation-r3-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #52d5a0; box-shadow: 0 0 12px rgba(82, 213, 160, .7); }
+.lia-conversation-r3-panel-header button { width: 30px; height: 30px; color: #94afc2; border: 1px solid rgba(148, 190, 219, .13); border-radius: 9px; background: rgba(19, 51, 75, .44); cursor: pointer; }
+.lia-conversation-r3-panel-header button:hover { color: #f1f9ff; background: rgba(35, 83, 117, .55); }
+.lia-conversation-r3-history { min-height: 0; padding: 3px 3px 8px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(80, 150, 198, .45) transparent; }
+.lia-conversation-r3-message { max-width: 88%; }
+.lia-conversation-r3-message.is-user { align-self: flex-end; }
+.lia-conversation-r3-message span { display: block; margin: 0 7px 4px; color: #6f9fc0; font-size: 9px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+.lia-conversation-r3-message.is-user span { text-align: right; }
+.lia-conversation-r3-message p { margin: 0; padding: 10px 12px; color: #d8e8f3; border: 1px solid rgba(126, 180, 216, .13); border-radius: 13px 13px 13px 4px; background: rgba(14, 42, 64, .62); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.lia-conversation-r3-message.is-user p { color: #eff8fe; border-color: rgba(83, 166, 224, .24); border-radius: 13px 13px 4px 13px; background: linear-gradient(145deg, rgba(34, 116, 174, .74), rgba(19, 76, 118, .72)); }
+.lia-conversation-r3-processing { padding: 1px 7px; color: #82bce2; font-size: 11px; letter-spacing: .03em; }
+.lia-conversation-r3-composer { height: 46px; padding: 0 6px 0 13px; display: flex; align-items: center; gap: 8px; border: 1px solid rgba(128, 190, 232, .2); border-radius: 13px; background: rgba(8, 27, 44, .76); box-shadow: inset 0 1px rgba(236, 248, 255, .06); }
+.lia-conversation-r3-composer:focus-within { border-color: rgba(91, 181, 240, .46); }
+.lia-conversation-r3-composer input { min-width: 0; width: 100%; color: #e8f5fd; border: 0; outline: 0; background: transparent; font: inherit; font-size: 12px; }
+.lia-conversation-r3-composer input::placeholder { color: #718da2; }
+.lia-conversation-r3-composer button { width: 32px; height: 32px; flex: 0 0 auto; color: #eff9ff; border: 1px solid rgba(130, 202, 248, .2); border-radius: 10px; background: linear-gradient(145deg, #267fbd, #155784); cursor: pointer; }
+.lia-conversation-r3-composer button:disabled { opacity: .4; cursor: default; }
+
+@media (max-width: 1320px) { .lia-conversation-r3-panel { right: 284px; } }
+@media (max-width: 1120px) { .lia-conversation-r3-panel { position: fixed; right: 18px; width: min(410px, calc(100vw - var(--lia-dash-r3-sidebar-width) - 36px)); } }
+@media (max-width: 900px) {
+  .lia-dash-r3-search input { display: none; }
+  .lia-dash-r3-search button { width: 42px; height: 42px; }
+  .lia-conversation-r3-panel { right: 14px; width: min(390px, calc(100vw - var(--lia-dash-r3-sidebar-width) - 28px)); }
+}
+@media (max-width: 720px) { .lia-conversation-r3-panel { left: 82px; right: 10px; width: auto; height: min(520px, calc(100dvh - 84px)); } }

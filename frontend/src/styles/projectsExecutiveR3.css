@@ -1,0 +1,44 @@
+.lia-projects-r3-shell .lia-dash-r3-main { overflow-y: auto; }
+.lia-projects-r3-title { padding: 8px 3px 16px; }
+.lia-projects-r3-title span, .lia-projects-r3-project-head span, .lia-projects-r3-rail span { color: #6faed8; font-size: 10px; font-weight: 750; letter-spacing: .11em; }
+.lia-projects-r3-title h1 { margin: 4px 0 2px; color: #edf7fd; font-size: 25px; }
+.lia-projects-r3-title p, .lia-projects-r3-project-head p { margin: 0; color: #8fa5b6; font-size: 12px; }
+.lia-projects-r3-project-card { padding: 22px; border: 1px solid rgba(140,190,223,.20); border-radius: 18px; background: var(--r3-instrument); box-shadow: 0 24px 52px rgba(0,3,9,.38), inset 0 1px rgba(224,242,254,.08); }
+.lia-projects-r3-project-head { display: flex; align-items: center; gap: 14px; padding-bottom: 20px; border-bottom: 1px solid rgba(93,145,184,.14); }
+.lia-projects-r3-project-head > div:nth-child(2) { min-width: 0; }
+.lia-projects-r3-project-head h2 { margin: 3px 0 4px; color: #edf6fc; font-size: 19px; }
+.lia-projects-r3-project-mark { width: 48px; height: 48px; display: grid; place-items: center; flex: 0 0 auto; color: #cceaff; border: 1px solid rgba(120,190,237,.28); border-radius: 14px; background: rgba(24,91,139,.28); font-size: 12px; font-weight: 800; }
+.lia-projects-r3-project-head > i { margin-left: auto; padding: 6px 10px; color: #9ee0bd; border-radius: 999px; background: rgba(40,126,89,.22); font-size: 10px; font-style: normal; }
+.lia-projects-r3-form { margin-top: 20px; }
+.lia-projects-r3-form > label { display: block; margin-bottom: 8px; color: #dcebf5; font-size: 13px; font-weight: 700; }
+.lia-projects-r3-form textarea, .lia-projects-r3-form select { color: #e5f0f7; border: 1px solid rgba(111,170,211,.22); border-radius: 12px; outline: none; background: rgba(5,18,31,.62); }
+.lia-projects-r3-form textarea { width: 100%; padding: 14px; resize: vertical; min-height: 125px; font: inherit; line-height: 1.5; }
+.lia-projects-r3-form textarea:focus, .lia-projects-r3-form select:focus { border-color: #55adf2; box-shadow: 0 0 0 3px rgba(85,173,242,.10); }
+.lia-projects-r3-form textarea::placeholder { color: #6f8799; }
+.lia-projects-r3-form-actions { margin-top: 12px; display: flex; align-items: end; justify-content: space-between; gap: 14px; }
+.lia-projects-r3-form-actions label { display: grid; gap: 6px; color: #91a8ba; font-size: 11px; }
+.lia-projects-r3-form select { min-width: 150px; height: 40px; padding: 0 10px; }
+.lia-projects-r3-form-actions button { min-width: 164px; height: 42px; padding: 0 18px; color: #f1f9ff; border: 1px solid rgba(131,204,251,.34); border-radius: 11px; background: linear-gradient(135deg, #217ebd, #155b91); box-shadow: 0 10px 24px rgba(14,90,145,.28); cursor: pointer; }
+.lia-projects-r3-form-actions button:disabled { opacity: .48; cursor: default; box-shadow: none; }
+.lia-projects-r3-stages { margin: 22px 0 0; padding: 16px 0 0; display: grid; grid-template-columns: repeat(4,1fr); list-style: none; border-top: 1px solid rgba(93,145,184,.12); }
+.lia-projects-r3-stages li { position: relative; display: flex; align-items: center; gap: 7px; color: #738b9e; font-size: 10.5px; }
+.lia-projects-r3-stages li::after { content: ''; position: absolute; top: 6px; left: 13px; right: 8px; height: 1px; background: rgba(94,151,194,.20); }
+.lia-projects-r3-stages li:last-child::after { content: none; }
+.lia-projects-r3-stages i { position: relative; z-index: 1; width: 12px; height: 12px; flex: 0 0 auto; border: 2px solid #49677e; border-radius: 50%; background: #091a29; }
+.lia-projects-r3-stages.is-running li:not(:last-child) { color: #b8d8ec; }
+.lia-projects-r3-stages.is-running li:not(:last-child) i { border-color: #55adf2; box-shadow: 0 0 10px rgba(85,173,242,.34); }
+.lia-projects-r3-stages.is-complete li { color: #a6d9be; }
+.lia-projects-r3-stages.is-complete i { border-color: #55ca8d; background: #297c58; }
+.lia-projects-r3-error { margin-top: 18px; padding: 12px 14px; color: #f1c2bf; border: 1px solid rgba(224,105,101,.24); border-radius: 11px; background: rgba(112,38,39,.22); font-size: 12px; }
+.lia-projects-r3-receipt { margin-top: 18px; padding: 17px; border: 1px solid rgba(91,201,142,.22); border-radius: 13px; background: rgba(23,83,61,.18); }
+.lia-projects-r3-receipt h3 { margin: 0 0 12px; color: #ccebd9; font-size: 13px; }
+.lia-projects-r3-receipt dl { margin: 0; display: grid; gap: 9px; }
+.lia-projects-r3-receipt dl div { display: grid; grid-template-columns: 140px minmax(0,1fr); gap: 10px; }
+.lia-projects-r3-receipt dt { color: #8fada0; font-size: 11px; }
+.lia-projects-r3-receipt dd { margin: 0; overflow-wrap: anywhere; color: #e1f0e8; font-size: 11.5px; }
+.lia-projects-r3-rail { padding: 18px; gap: 12px; }
+.lia-projects-r3-rail section { padding: 15px; border-radius: 13px; background: rgba(8,25,41,.58); box-shadow: inset 0 1px rgba(255,255,255,.04); }
+.lia-projects-r3-rail strong, .lia-projects-r3-rail small { display: block; }
+.lia-projects-r3-rail strong { margin-top: 7px; color: #e1eef7; font-size: 13px; }
+.lia-projects-r3-rail small { margin-top: 5px; color: #849bad; font-size: 10.5px; line-height: 1.45; }
+@media (max-width: 720px) { .lia-projects-r3-project-card { padding: 16px; }.lia-projects-r3-form-actions { align-items: stretch; flex-direction: column; }.lia-projects-r3-form select, .lia-projects-r3-form-actions button { width: 100%; }.lia-projects-r3-stages { grid-template-columns: 1fr; gap: 10px; }.lia-projects-r3-stages li::after { content: none; }.lia-projects-r3-receipt dl div { grid-template-columns: 1fr; gap: 3px; } }

@@ -24,9 +24,11 @@ if ! git merge-base --is-ancestor "$REQUIRED_BASE" HEAD; then
   exit 43
 fi
 
-if grep -RniE "Jarvis|JARVIS|jarvis|Javis|Ja vis" frontend/src >/tmp/lia-jarvis-check.txt 2>/dev/null; then
-  echo "ABORT: detecté referencias prohibidas a Jarvis:"
-  cat /tmp/lia-jarvis-check.txt
+LEGACY_NAME_PATTERN="$(printf '\x4a\x61\x72\x76\x69\x73|\x4a\x41\x52\x56\x49\x53|\x6a\x61\x72\x76\x69\x73|\x4a\x61\x76\x69\x73|\x4a\x61\x20\x76\x69\x73')"
+LEGACY_NAME_CHECK="/tmp/lia-legacy-name-check.txt"
+if grep -RniE "$LEGACY_NAME_PATTERN" frontend/src >"$LEGACY_NAME_CHECK" 2>/dev/null; then
+  echo "ABORT: detecté referencias al nombre legado prohibido"
+  cat "$LEGACY_NAME_CHECK"
   exit 44
 fi
 
