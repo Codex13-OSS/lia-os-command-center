@@ -16,6 +16,10 @@ import {
 } from '../dist/services/agendaSqliteSchema.js';
 import { createProjectTaskSafetyPolicy } from '../dist/contracts/projectExecutor.js';
 import { validateProjectTaskRequest } from '../dist/contracts/projectExecutorValidation.js';
+import {
+  createStaticProjectRegistry,
+  resolveAuthorizedProject,
+} from '../dist/services/projectRegistry.js';
 
 function createPermissiveAgendaSqliteTables(database, {
   schemaVersion = AGENDA_SQLITE_SCHEMA_VERSION,
@@ -1512,4 +1516,123 @@ test('project task safety policy is restrictive and returns independent arrays',
     'database_write',
     'secret_access',
   ]);
+});
+
+test('static project registry normalizes and resolves an enabled project', async () => {
+  const source = createStaticProjectRegistry([
+    {
+      projectId: '  lia-agent  ',
+      displayName: '  LÍA Agent  ',
+      repositoryRoot: '  /srv/projects/lia-agent  ',
+      enabled: true,
+    },
+    {
+      projectId: 'lia-web',
+      displayName: 'LÍA Web',
+      repositoryRoot: '/srv/projects/lia-web',
+      enabled: false,
+    },
+  ]);
+
+  assert.deepEqual(await resolveAuthorizedProject('  lia-agent  ', source), {
+    ok: true,
+    target: {
+      projectId: 'lia-agent',
+      displayName: 'LÍA Agent',
+      repositoryRoot: '/srv/projects/lia-agent',
+    },
+  });
+});
+
+test('project registry reports an unknown project without exposing entries', async () => {
+  const source = createStaticProjectRegistry([{
+    projectId: 'lia-agent',
+    displayName: 'LÍA Agent',
+    repositoryRoot: '/srv/projects/lia-agent',
+    enabled: true,
+  }]);
+
+  assert.deepEqual(await resolveAuthorizedProject('unknown', source), {
+    ok: false,
+    error: 'project_not_found',
+  });
+});
+
+test('project registry rejects a disabled project', async () => {
+  const source = createStaticProjectRegistry([{
+    projectId: 'lia-agent',
+    displayName: 'LÍA Agent',
+    repositoryRoot: '/srv/projects/lia-agent',
+    enabled: false,
+  }]);
+
+  assert.deepEqual(await resolveAuthorizedProject('lia-agent', source), {
+    ok: false,
+    error: 'project_disabled',
+  });
+});
+
+test('project registry fails closed for unsafe repository roots', async () => {
+  for (const repositoryRoot of ['relative/project', '/']) {
+    const source = createStaticProjectRegistry([{
+      projectId: 'lia-agent',
+      displayName: 'LÍA Agent',
+      repositoryRoot,
+      enabled: true,
+    }]);
+
+    assert.deepEqual(await resolveAuthorizedProject('lia-agent', source), {
+      ok: false,
+      error: 'registry_unavailable',
+    });
+  }
+});
+
+test('duplicate project IDs fail closed and static registry owns its snapshot', async () => {
+  const original = [{
+    projectId: '  lia-agent  ',
+    displayName: '  LÍA Agent  ',
+    repositoryRoot: '  /srv/projects/lia-agent  ',
+    enabled: true,
+  }];
+  const stableSource = createStaticProjectRegistry(original);
+
+  original[0].projectId = 'changed';
+  original[0].displayName = 'Changed';
+  original[0].repositoryRoot = '/changed';
+  original[0].enabled = false;
+  original.push({
+    projectId: 'added',
+    displayName: 'Added',
+    repositoryRoot: '/added',
+    enabled: true,
+  });
+
+  assert.deepEqual(await resolveAuthorizedProject('lia-agent', stableSource), {
+    ok: true,
+    target: {
+      projectId: 'lia-agent',
+      displayName: 'LÍA Agent',
+      repositoryRoot: '/srv/projects/lia-agent',
+    },
+  });
+
+  const duplicateSource = createStaticProjectRegistry([
+    {
+      projectId: ' lia-agent ',
+      displayName: 'First',
+      repositoryRoot: '/first',
+      enabled: true,
+    },
+    {
+      projectId: 'lia-agent',
+      displayName: 'Second',
+      repositoryRoot: '/second',
+      enabled: true,
+    },
+  ]);
+  assert.deepEqual(await resolveAuthorizedProject('lia-agent', duplicateSource), {
+    ok: false,
+    error: 'registry_unavailable',
+  });
 });
