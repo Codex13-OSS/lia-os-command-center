@@ -3,9 +3,12 @@ import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createApp } from '../dist/app.js';
 import { loadConfig } from '../dist/config.js';
+import { readSafeAgendaContext } from '../dist/services/agendaContextReader.js';
+import { createAgendaSqliteReadSource } from '../dist/services/agendaSqliteReadSource.js';
 
 async function listenWithApp(app) {
   const server = app.listen(0, '127.0.0.1');
@@ -579,6 +582,106 @@ test('Agenda normalizes safe recurrence fields from a valid source', async () =>
       ['2026-08-10', '2026-08-17'],
     );
   });
+});
+
+test('SQLite agenda source returns valid events in deterministic read-only order', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-sqlite-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+  const database = new DatabaseSync(databasePath);
+  const event = (id, title, startTime) => ({
+    id,
+    title,
+    startTime,
+    endTime: '2026-08-03T16:30:00.000Z',
+    timezone: 'America/Mexico_City',
+    mode: 'virtual',
+    priority: 'medium',
+    status: 'confirmed',
+    attendees: [],
+    responsible: { name: 'Dirección' },
+    preparationMinutes: 0,
+    parkingMinutes: 0,
+    walkingMinutes: 0,
+    followUpRequired: false,
+    recurrence: { frequency: 'none' },
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    source: 'local',
+  });
+
+  try {
+    database.exec(`
+      CREATE TABLE agenda_events (
+        id TEXT PRIMARY KEY,
+        start_time TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      )
+    `);
+    const insert = database.prepare(
+      'INSERT INTO agenda_events (id, start_time, payload_json) VALUES (?, ?, ?)',
+    );
+    insert.run('event-b', '2026-08-03T15:00:00.000Z', JSON.stringify(
+      event('event-b', 'Segundo por ID', '2026-08-03T15:00:00.000Z'),
+    ));
+    insert.run('event-a', '2026-08-03T15:00:00.000Z', JSON.stringify(
+      event('event-a', 'Primero por ID', '2026-08-03T15:00:00.000Z'),
+    ));
+    database.close();
+
+    const snapshot = await readSafeAgendaContext(
+      createAgendaSqliteReadSource(databasePath),
+    );
+
+    assert.equal(snapshot.state, 'available');
+    assert.equal(snapshot.eventCount, 2);
+    assert.deepEqual(snapshot.events.map(({ id }) => id), ['event-a', 'event-b']);
+    assert.equal(snapshot.readOnly, true);
+    assert.equal(snapshot.sourceOfTruth, 'lia');
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite agenda source corrupt JSON fails closed without events', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-sqlite-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+  const database = new DatabaseSync(databasePath);
+
+  try {
+    database.exec(`
+      CREATE TABLE agenda_events (
+        id TEXT PRIMARY KEY,
+        start_time TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+      INSERT INTO agenda_events (id, start_time, payload_json)
+      VALUES ('corrupt', '2026-08-03T15:00:00.000Z', '{not-json');
+    `);
+    database.close();
+
+    const snapshot = await readSafeAgendaContext(
+      createAgendaSqliteReadSource(databasePath),
+    );
+
+    assert.equal(snapshot.state, 'unavailable');
+    assert.equal(snapshot.eventCount, 0);
+    assert.deepEqual(snapshot.events, []);
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite agenda source rejects relative database paths', () => {
+  assert.throws(
+    () => createAgendaSqliteReadSource('./agenda.sqlite'),
+    /invalid_agenda_sqlite_path/,
+  );
 });
 
 test('Hermes query executor can be injected without changing the public API contract', async () => {
