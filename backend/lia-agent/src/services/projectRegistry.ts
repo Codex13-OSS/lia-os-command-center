@@ -60,7 +60,7 @@ function normalizeEntry(value: unknown): ProjectRegistryEntry | undefined {
   };
 }
 
-function normalizeRegistry(value: unknown): ProjectRegistryEntry[] | undefined {
+export function normalizeProjectRegistry(value: unknown): ProjectRegistryEntry[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -88,7 +88,7 @@ function copyEntries(entries: readonly ProjectRegistryEntry[]): ProjectRegistryE
 export function createStaticProjectRegistry(
   entries: readonly ProjectRegistryEntry[],
 ): ProjectRegistrySource {
-  const snapshot = normalizeRegistry(entries);
+  const snapshot = normalizeProjectRegistry(entries);
 
   return {
     async read() {
@@ -112,7 +112,7 @@ export async function resolveAuthorizedProject(
 
   let entries: ProjectRegistryEntry[] | undefined;
   try {
-    entries = normalizeRegistry(await source.read());
+    entries = normalizeProjectRegistry(await source.read());
   } catch {
     return { ok: false, error: 'registry_unavailable' };
   }

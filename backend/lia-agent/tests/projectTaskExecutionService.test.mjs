@@ -3,7 +3,7 @@ import test from "node:test";
 import { executeProjectTask } from "../dist/services/projectTaskExecutionService.js";
 
 const config = {
-  host: "127.0.0.1", port: 3014, corsOrigins: [], agendaSqlitePath: "", hermesRoot: "",
+  host: "127.0.0.1", port: 3014, corsOrigins: [], agendaSqlitePath: "", projectRegistryPath: "", hermesRoot: "",
   hermesExecutionEnabled: true, hermesExecutable: "/bin/hermes", hermesHome: "/hermes",
   hermesUser: "hermes", hermesUserHome: "/home/hermes", hermesPath: "/bin",
   hermesProvider: "fake", hermesModel: "fake", hermesTimeoutMs: 100,

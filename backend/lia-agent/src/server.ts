@@ -1,11 +1,17 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createAgendaSqliteReadSource } from './services/agendaSqliteReadSource.js';
+import { createProjectRegistryFileSource } from './services/projectRegistryFileSource.js';
 
 const config = loadConfig();
-const dependencies = config.agendaSqlitePath === ''
-  ? {}
-  : { agendaReadSource: createAgendaSqliteReadSource(config.agendaSqlitePath) };
+const dependencies = {
+  ...(config.agendaSqlitePath === ''
+    ? {}
+    : { agendaReadSource: createAgendaSqliteReadSource(config.agendaSqlitePath) }),
+  ...(config.projectRegistryPath === ''
+    ? {}
+    : { projectRegistrySource: createProjectRegistryFileSource(config.projectRegistryPath) }),
+};
 const app = createApp(config, dependencies);
 const server = app.listen(config.port, config.host, () => {
   if (config.logLevel !== 'silent') {

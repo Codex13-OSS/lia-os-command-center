@@ -22,6 +22,7 @@ import {
   createStaticProjectRegistry,
   resolveAuthorizedProject,
 } from '../dist/services/projectRegistry.js';
+import { createProjectRegistryFileSource } from '../dist/services/projectRegistryFileSource.js';
 import { planProjectTask } from '../dist/services/projectExecutionPlanner.js';
 import { buildProjectOrchestrationPrompt } from '../dist/services/projectOrchestrationPrompt.js';
 import { orchestrateProjectTask } from '../dist/services/projectOrchestrationService.js';
@@ -250,6 +251,27 @@ test('relative or NUL-containing Agenda SQLite path configuration is rejected', 
     assert.throws(
       () => loadConfig({ LIA_AGENDA_SQLITE_PATH: agendaSqlitePath }),
       (error) => error instanceof Error && error.message === 'invalid_lia_agenda_sqlite_path',
+    );
+  }
+});
+
+test('missing or blank project registry path configuration resolves to empty string', () => {
+  assert.equal(loadConfig({}).projectRegistryPath, '');
+  assert.equal(loadConfig({ LIA_PROJECT_REGISTRY_PATH: '   ' }).projectRegistryPath, '');
+});
+
+test('absolute project registry path configuration is accepted after trimming', () => {
+  assert.equal(
+    loadConfig({ LIA_PROJECT_REGISTRY_PATH: '  /etc/lia/projects.json  ' }).projectRegistryPath,
+    '/etc/lia/projects.json',
+  );
+});
+
+test('relative or NUL-containing project registry path configuration is rejected', () => {
+  for (const projectRegistryPath of ['./projects.json', '/etc/lia/projects\0.json']) {
+    assert.throws(
+      () => loadConfig({ LIA_PROJECT_REGISTRY_PATH: projectRegistryPath }),
+      (error) => error instanceof Error && error.message === 'invalid_lia_project_registry_path',
     );
   }
 });
@@ -1646,6 +1668,153 @@ test('duplicate project IDs fail closed and static registry owns its snapshot', 
     ok: false,
     error: 'registry_unavailable',
   });
+});
+
+test('file project registry reads and resolves a valid version 1 registry', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-registry-'));
+  const registryPath = join(directory, 'projects.json');
+  try {
+    await writeFile(registryPath, JSON.stringify({
+      version: 1,
+      projects: [{
+        projectId: 'test-project',
+        displayName: 'Test Project',
+        repositoryRoot: '/srv/test-project',
+        enabled: true,
+      }],
+    }));
+
+    const source = createProjectRegistryFileSource(registryPath);
+    assert.deepEqual(await resolveAuthorizedProject('test-project', source), {
+      ok: true,
+      target: {
+        projectId: 'test-project',
+        displayName: 'Test Project',
+        repositoryRoot: '/srv/test-project',
+      },
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('file project registry rejects unknown fields, invalid versions, and corrupt JSON', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-registry-'));
+  const registryPath = join(directory, 'projects.json');
+  const source = createProjectRegistryFileSource(registryPath);
+  const invalidContents = [
+    JSON.stringify({ version: 1, projects: [], secret: 'forbidden' }),
+    JSON.stringify({ version: 2, projects: [] }),
+    '{"version":1,"projects":[',
+  ];
+
+  try {
+    for (const contents of invalidContents) {
+      await writeFile(registryPath, contents);
+      await assert.rejects(source.read());
+      assert.deepEqual(await resolveAuthorizedProject('test-project', source), {
+        ok: false,
+        error: 'registry_unavailable',
+      });
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('file project registry rejects files larger than 64 KiB before parsing', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-registry-'));
+  const registryPath = join(directory, 'projects.json');
+  try {
+    await writeFile(registryPath, Buffer.alloc((64 * 1024) + 1, 0x20));
+    const source = createProjectRegistryFileSource(registryPath);
+    await assert.rejects(source.read());
+    assert.deepEqual(await resolveAuthorizedProject('test-project', source), {
+      ok: false,
+      error: 'registry_unavailable',
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('file project registry rejects duplicate projects and unsafe repository roots', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-registry-'));
+  const registryPath = join(directory, 'projects.json');
+  const source = createProjectRegistryFileSource(registryPath);
+  const project = {
+    projectId: 'test-project',
+    displayName: 'Test Project',
+    repositoryRoot: '/srv/test-project',
+    enabled: true,
+  };
+
+  try {
+    const invalidProjects = [
+      [project, { ...project }],
+      [{ ...project, repositoryRoot: 'relative/project' }],
+      [{ ...project, repositoryRoot: '/' }],
+      [{ ...project, repositoryRoot: '/srv/project\0escape' }],
+      [{ ...project, token: 'forbidden' }],
+    ];
+    for (const projects of invalidProjects) {
+      await writeFile(registryPath, JSON.stringify({ version: 1, projects }));
+      assert.deepEqual(await resolveAuthorizedProject('test-project', source), {
+        ok: false,
+        error: 'registry_unavailable',
+      });
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('file project registry fails closed when the file does not exist', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-registry-'));
+  try {
+    const source = createProjectRegistryFileSource(join(directory, 'missing.json'));
+    await assert.rejects(source.read());
+    assert.deepEqual(await resolveAuthorizedProject('test-project', source), {
+      ok: false,
+      error: 'registry_unavailable',
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('file project registry returns independent copies', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-registry-'));
+  const registryPath = join(directory, 'projects.json');
+  try {
+    await writeFile(registryPath, JSON.stringify({
+      version: 1,
+      projects: [{
+        projectId: 'test-project',
+        displayName: 'Test Project',
+        repositoryRoot: '/srv/test-project',
+        enabled: true,
+      }],
+    }));
+    const source = createProjectRegistryFileSource(registryPath);
+    const first = await source.read();
+    first[0].displayName = 'Mutated';
+    first.push({
+      projectId: 'injected',
+      displayName: 'Injected',
+      repositoryRoot: '/injected',
+      enabled: true,
+    });
+
+    assert.deepEqual(await source.read(), [{
+      projectId: 'test-project',
+      displayName: 'Test Project',
+      repositoryRoot: '/srv/test-project',
+      enabled: true,
+    }]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('project execution planner creates a safe internal plan from the authorized project', async () => {
