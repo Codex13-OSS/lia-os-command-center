@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -8,6 +8,7 @@ import test from 'node:test';
 import { createApp } from '../dist/app.js';
 import { loadConfig } from '../dist/config.js';
 import { readSafeAgendaContext } from '../dist/services/agendaContextReader.js';
+import { initializeAgendaSqliteDatabaseV1 } from '../dist/services/agendaSqliteBootstrap.js';
 import { createAgendaSqliteReadSource } from '../dist/services/agendaSqliteReadSource.js';
 import {
   AGENDA_SQLITE_SCHEMA_VERSION,
@@ -933,6 +934,88 @@ test('SQLite agenda source rejects relative database paths', () => {
     () => createAgendaSqliteReadSource('./agenda.sqlite'),
     /invalid_agenda_sqlite_path/,
   );
+});
+
+test('Agenda SQLite bootstrap creates a valid new database', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-bootstrap-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+  const initializedAt = '2026-08-02T12:34:56.000Z';
+  let database;
+
+  try {
+    initializeAgendaSqliteDatabaseV1(databasePath, initializedAt);
+
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const state = database.prepare(`
+      SELECT singleton, schema_version, global_revision, timezone, updated_at
+      FROM agenda_state
+    `).get();
+    const eventCount = database.prepare(
+      'SELECT COUNT(*) AS count FROM agenda_events',
+    ).get().count;
+
+    assert.deepEqual({ ...state }, {
+      singleton: 1,
+      schema_version: 1,
+      global_revision: 0,
+      timezone: 'America/Mexico_City',
+      updated_at: initializedAt,
+    });
+    assert.equal(eventCount, 0);
+    database.close();
+    database = undefined;
+
+    const snapshot = await readSafeAgendaContext(
+      createAgendaSqliteReadSource(databasePath),
+    );
+    assert.equal(snapshot.state, 'available');
+    assert.equal(snapshot.eventCount, 0);
+    assert.equal((await stat(databasePath)).mode & 0o777, 0o600);
+  } finally {
+    if (database?.isOpen) {
+      database.close();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Agenda SQLite bootstrap preserves an existing database path', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-bootstrap-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+  const sentinel = Buffer.from('existing-agenda-sentinel\n');
+
+  try {
+    await writeFile(databasePath, sentinel);
+
+    assert.throws(
+      () => initializeAgendaSqliteDatabaseV1(
+        databasePath,
+        '2026-08-02T12:34:56.000Z',
+      ),
+      (error) => error instanceof Error && error.message === 'agenda_sqlite_already_exists',
+    );
+    assert.deepEqual(await readFile(databasePath), sentinel);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Agenda SQLite bootstrap removes its file after invalid initialization', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-agenda-bootstrap-'));
+  const databasePath = join(directory, 'agenda.sqlite');
+
+  try {
+    assert.throws(
+      () => initializeAgendaSqliteDatabaseV1(
+        databasePath,
+        '2026-02-31T12:34:56.000Z',
+      ),
+      (error) => error instanceof Error && error.message === 'invalid_agenda_initialized_at',
+    );
+    await assert.rejects(stat(databasePath), { code: 'ENOENT' });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('Agenda SQLite Schema v1 initializes its singleton state', async () => {
