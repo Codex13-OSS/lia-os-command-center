@@ -4,6 +4,7 @@ export type LiaAgentConfig = {
   host: string;
   port: number;
   corsOrigins: string[];
+  agendaSqlitePath: string;
   hermesRoot: string;
   hermesExecutionEnabled: boolean;
   hermesExecutable: string;
@@ -48,6 +49,20 @@ function parseCorsOrigins(rawOrigins: string | undefined): string[] {
     .split(',')
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
+}
+
+function parseAgendaSqlitePath(rawPath: string | undefined): string {
+  const candidate = rawPath?.trim() ?? '';
+
+  if (candidate === '') {
+    return '';
+  }
+
+  if (!isAbsolute(candidate) || candidate.includes('\0')) {
+    throw new Error('invalid_lia_agenda_sqlite_path');
+  }
+
+  return candidate;
 }
 
 function parseHermesRoot(rawRoot: string | undefined): string {
@@ -131,6 +146,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LiaAgentConfig
     host,
     port: parsePort(env.LIA_AGENT_PORT),
     corsOrigins: parseCorsOrigins(env.LIA_AGENT_CORS_ORIGINS),
+    agendaSqlitePath: parseAgendaSqlitePath(env.LIA_AGENDA_SQLITE_PATH),
     hermesRoot: parseHermesRoot(env.LIA_HERMES_ROOT),
     hermesExecutionEnabled: parseBoolean(env.LIA_HERMES_EXECUTION_ENABLED),
     hermesExecutable: parseAbsolutePath(

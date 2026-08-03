@@ -1,8 +1,12 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
+import { createAgendaSqliteReadSource } from './services/agendaSqliteReadSource.js';
 
 const config = loadConfig();
-const app = createApp(config);
+const dependencies = config.agendaSqlitePath === ''
+  ? {}
+  : { agendaReadSource: createAgendaSqliteReadSource(config.agendaSqlitePath) };
+const app = createApp(config, dependencies);
 const server = app.listen(config.port, config.host, () => {
   if (config.logLevel !== 'silent') {
     console.log(`LIA agent TypeScript backend listening on http://${config.host}:${config.port}`);

@@ -182,6 +182,27 @@ test('non-loopback host configuration is rejected', () => {
   assert.throws(() => loadConfig({ LIA_AGENT_HOST: '0.0.0.0' }), /invalid_lia_agent_host/);
 });
 
+test('missing or blank Agenda SQLite path configuration resolves to empty string', () => {
+  assert.equal(loadConfig({}).agendaSqlitePath, '');
+  assert.equal(loadConfig({ LIA_AGENDA_SQLITE_PATH: '   ' }).agendaSqlitePath, '');
+});
+
+test('absolute Agenda SQLite path configuration is accepted after trimming', () => {
+  assert.equal(
+    loadConfig({ LIA_AGENDA_SQLITE_PATH: '  /var/lib/lia/agenda.sqlite  ' }).agendaSqlitePath,
+    '/var/lib/lia/agenda.sqlite',
+  );
+});
+
+test('relative or NUL-containing Agenda SQLite path configuration is rejected', () => {
+  for (const agendaSqlitePath of ['./agenda.sqlite', '/var/lib/lia/agenda\0.sqlite']) {
+    assert.throws(
+      () => loadConfig({ LIA_AGENDA_SQLITE_PATH: agendaSqlitePath }),
+      (error) => error instanceof Error && error.message === 'invalid_lia_agenda_sqlite_path',
+    );
+  }
+});
+
 
 test('GET /api/hermes/status is fail-closed when Hermes is not configured', async () => {
   await withServer(createApp(loadConfig({})), async (baseUrl) => {
