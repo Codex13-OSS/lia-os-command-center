@@ -2,6 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import type { Express } from 'express';
 import type { LiaAgentConfig } from './config.js';
+import type { ProjectRegistrySource } from './contracts/projectRegistry.js';
 import { loadConfig } from './config.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
@@ -9,6 +10,7 @@ import { createAgendaRouter } from './routes/agenda.js';
 import { createHealthRouter } from './routes/health.js';
 import { createHermesRouter } from './routes/hermes.js';
 import { createHermesQueryRouter } from './routes/hermesQuery.js';
+import { createProjectOrchestrationRouter } from './routes/projectOrchestration.js';
 import { createStatusRouter } from './routes/status.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
 import type { HermesQueryExecutor } from './services/hermesExecutor.js';
@@ -16,6 +18,8 @@ import type { HermesQueryExecutor } from './services/hermesExecutor.js';
 export type LiaAgentDependencies = {
   agendaReadSource?: AgendaReadSource;
   hermesQueryExecutor?: HermesQueryExecutor;
+  projectRegistrySource?: ProjectRegistrySource;
+  projectOrchestrationExecutor?: HermesQueryExecutor;
 };
 
 export function createApp(
@@ -49,6 +53,10 @@ export function createApp(
   app.use(createHermesQueryRouter(config, {
     executeQuery: dependencies.hermesQueryExecutor,
     agendaReadSource: dependencies.agendaReadSource,
+  }));
+  app.use(createProjectOrchestrationRouter(config, {
+    projectRegistrySource: dependencies.projectRegistrySource,
+    executeQuery: dependencies.projectOrchestrationExecutor,
   }));
   app.use(notFound);
   app.use(errorHandler);

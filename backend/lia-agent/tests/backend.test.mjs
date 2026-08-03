@@ -2096,3 +2096,175 @@ test('project orchestration service rejects a proposal using an unapproved capab
 
   assert.deepEqual(result, { ok: false, error: 'invalid_hermes_proposal' });
 });
+
+const postProjectOrchestration = (baseUrl, body) => fetch(
+  `${baseUrl}/api/projects/tasks/orchestrate`,
+  {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  },
+);
+
+test('POST project orchestration returns only a validated reasoning proposal', async () => {
+  const calls = [];
+  const proposal = orchestrationProposal();
+  const fakeExecutor = async (config, prompt) => {
+    calls.push({ config, prompt });
+    return { ok: true, response: JSON.stringify(proposal) };
+  };
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: orchestrationRegistry(),
+    projectOrchestrationExecutor: fakeExecutor,
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await postProjectOrchestration(baseUrl, orchestrationTask());
+    const body = await response.json();
+    const serialized = JSON.stringify(body);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      ok: true,
+      integration: 'project_orchestration',
+      mode: 'reasoning_only',
+      proposal,
+    });
+    assert.equal(calls.length, 1);
+    assert.doesNotMatch(calls[0].prompt, /\/private\/repos\/lia-agent/);
+    assert.doesNotMatch(calls[0].prompt, /repositoryRoot/);
+    assert.doesNotMatch(serialized, /\/private\/repos\/lia-agent/);
+    assert.doesNotMatch(serialized, /repositoryRoot/);
+  });
+});
+
+test('POST project orchestration fails closed without an internal registry', async () => {
+  let calls = 0;
+  await withServer(createApp(loadConfig({}), {
+    projectOrchestrationExecutor: async () => {
+      calls += 1;
+      return { ok: false, error: 'execution_failed' };
+    },
+  }), async (baseUrl) => {
+    const response = await postProjectOrchestration(baseUrl, orchestrationTask());
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { ok: false, error: 'registry_unavailable' });
+  });
+  assert.equal(calls, 0);
+});
+
+test('POST project orchestration rejects invalid and dangerous fields before Hermes', async () => {
+  const dangerousFields = [
+    'repositoryRoot', 'command', 'shell', 'branch', 'worktreePath',
+    'secrets', 'credentials', 'deploymentData', 'databaseWriteInstructions',
+    'unknown',
+  ];
+  let calls = 0;
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: orchestrationRegistry(),
+    projectOrchestrationExecutor: async () => {
+      calls += 1;
+      return { ok: false, error: 'execution_failed' };
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    for (const field of dangerousFields) {
+      const response = await postProjectOrchestration(baseUrl, {
+        ...orchestrationTask(),
+        [field]: 'not allowed',
+      });
+      assert.equal(response.status, 400, field);
+      assert.deepEqual(await response.json(), { ok: false, error: 'invalid_task' });
+    }
+  });
+  assert.equal(calls, 0);
+});
+
+test('POST project orchestration maps registry authorization errors safely', async () => {
+  for (const scenario of [
+    { enabled: true, projectId: 'missing', status: 404, error: 'project_not_found' },
+    { enabled: false, projectId: 'lia-agent', status: 403, error: 'project_disabled' },
+  ]) {
+    let calls = 0;
+    const registry = createStaticProjectRegistry([{
+      projectId: 'lia-agent',
+      displayName: 'LÍA Agent',
+      repositoryRoot: '/private/repos/lia-agent',
+      enabled: scenario.enabled,
+    }]);
+    const app = createApp(loadConfig({}), {
+      projectRegistrySource: registry,
+      projectOrchestrationExecutor: async () => {
+        calls += 1;
+        return { ok: false, error: 'execution_failed' };
+      },
+    });
+
+    await withServer(app, async (baseUrl) => {
+      const response = await postProjectOrchestration(baseUrl, {
+        ...orchestrationTask(),
+        projectId: scenario.projectId,
+      });
+      assert.equal(response.status, scenario.status);
+      assert.deepEqual(await response.json(), { ok: false, error: scenario.error });
+    });
+    assert.equal(calls, 0);
+  }
+});
+
+test('POST project orchestration maps Hermes failures and invalid output safely', async () => {
+  const scenarios = [
+    { result: { ok: false, error: 'execution_disabled' }, status: 503, error: 'execution_disabled' },
+    { result: { ok: false, error: 'timeout' }, status: 504, error: 'timeout' },
+    { result: { ok: true, response: 'not json' }, status: 502, error: 'invalid_hermes_json' },
+    { result: { ok: true, response: '{}' }, status: 502, error: 'invalid_hermes_proposal' },
+  ];
+
+  for (const scenario of scenarios) {
+    let calls = 0;
+    const app = createApp(loadConfig({}), {
+      projectRegistrySource: orchestrationRegistry(),
+      projectOrchestrationExecutor: async () => {
+        calls += 1;
+        return scenario.result;
+      },
+    });
+    await withServer(app, async (baseUrl) => {
+      const response = await postProjectOrchestration(baseUrl, orchestrationTask());
+      assert.equal(response.status, scenario.status);
+      assert.deepEqual(await response.json(), { ok: false, error: scenario.error });
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+test('POST project orchestration maps an oversized escaped prompt to 413', async () => {
+  let calls = 0;
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: orchestrationRegistry(),
+    projectOrchestrationExecutor: async () => {
+      calls += 1;
+      return { ok: false, error: 'execution_failed' };
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await postProjectOrchestration(baseUrl, {
+      ...orchestrationTask(),
+      instruction: 'x\n'.repeat(4_000),
+    });
+    assert.equal(response.status, 413);
+    assert.deepEqual(await response.json(), { ok: false, error: 'prompt_too_large' });
+  });
+  assert.equal(calls, 0);
+});
+
+test('GET project orchestration returns 405 with Allow POST', async () => {
+  await withServer(createApp(loadConfig({})), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/projects/tasks/orchestrate`);
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get('allow'), 'POST');
+    assert.equal((await response.json()).error, 'method_not_allowed');
+  });
+});
