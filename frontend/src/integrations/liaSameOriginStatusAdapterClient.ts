@@ -4,7 +4,7 @@ import {
   type LiaSameOriginStatusAdapterViewModel,
 } from './liaSameOriginStatusAdapterContract';
 
-export const LIA_SAME_ORIGIN_STATUS_ADAPTER_PATH = '/lia/api/lia-agent/health';
+export const LIA_SAME_ORIGIN_STATUS_ADAPTER_PATH = '/api/lia-agent/health';
 export const LIA_SAME_ORIGIN_STATUS_ADAPTER_TIMEOUT_MS = 1200;
 
 function isRecord(input: unknown): input is Record<string, unknown> {
