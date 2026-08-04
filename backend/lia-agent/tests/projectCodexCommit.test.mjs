@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import test from "node:test";
 import { commitVerifiedProjectCodexWorkspace } from "../dist/services/projectCodexCommit.js";
 import { PROJECT_CODEX_WORKTREE_ROOT } from "../dist/services/projectCodexWorkspace.js";
@@ -14,6 +16,24 @@ const verified = {
   summary: "verified",
 };
 const hash = "a".repeat(40);
+const executeFile = promisify(execFile);
+
+async function git(cwd, ...args) {
+  return executeFile("git", ["-C", cwd, ...args], { encoding: "utf8" });
+}
+
+async function createCommittedWorkspace(id) {
+  const worktree = `${PROJECT_CODEX_WORKTREE_ROOT}/${id}`;
+  await rm(worktree, { recursive: true, force: true });
+  await mkdir(worktree, { recursive: true });
+  await git(worktree, "init");
+  await git(worktree, "config", "user.name", "LIA Test");
+  await git(worktree, "config", "user.email", "lia-test@example.invalid");
+  await writeFile(`${worktree}/source.txt`, "before\n");
+  await git(worktree, "add", "--", "source.txt");
+  await git(worktree, "commit", "-m", "initial");
+  return worktree;
+}
 
 function harness(results = []) {
   const calls = [];
@@ -59,18 +79,22 @@ test("dangerous execution ids are rejected before running a process", async () =
   }
 });
 
-test("empty status returns nothing_to_commit after exactly one call", async () => {
-  const fake = harness([{ success: true, stdout: "", stderr: "PRIVATE" }]);
+test("empty status returns nothing_to_commit after status and staged-index inspection", async () => {
+  const fake = harness([
+    { success: true, stdout: "", stderr: "PRIVATE" },
+    { success: true, stdout: "", stderr: "PRIVATE" },
+  ]);
   const result = await commitVerifiedProjectCodexWorkspace("/private/repo", executionId, ["local_commit"], verified, fake.dependencies);
   assert.equal(result.success, false);
   assert.equal(result.error, "nothing_to_commit");
-  assert.equal(fake.calls.length, 1);
+  assert.equal(fake.calls.length, 2);
 });
 
 test("success uses the exact fixed argv in the exclusively derived worktree", async () => {
   const fake = harness([
-    { success: true, stdout: " M secret-name.txt\n", stderr: "" },
+    { success: true, stdout: " M secret-name.txt\0", stderr: "" },
     { success: true, stdout: "PRIVATE ADD", stderr: "" },
+    { success: true, stdout: "secret-name.txt\0", stderr: "" },
     { success: true, stdout: "PRIVATE COMMIT", stderr: "" },
     { success: true, stdout: `${hash}\n`, stderr: "PRIVATE REVISION" },
   ]);
@@ -84,8 +108,9 @@ test("success uses the exact fixed argv in the exclusively derived worktree", as
   });
   const worktree = `${PROJECT_CODEX_WORKTREE_ROOT}/${executionId}`;
   assert.deepEqual(fake.calls.map((call) => call.args), [
-    ["-C", worktree, "status", "--porcelain"],
-    ["-C", worktree, "add", "-A"],
+    ["-C", worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    ["-C", worktree, "add", "-A", "--", "secret-name.txt"],
+    ["-C", worktree, "diff", "--cached", "--name-only", "-z"],
     ["-C", worktree, "commit", "-m", `lia: complete isolated task ${executionId}`],
     ["-C", worktree, "rev-parse", "HEAD"],
   ]);
@@ -99,16 +124,128 @@ test("success uses the exact fixed argv in the exclusively derived worktree", as
   }
 });
 
+test("root, nested, and hydration-like node_modules entries are excluded while nested source stages", async () => {
+  const fake = harness([
+    { success: true, stdout: [
+      "?? node_modules", "?? backend/lia-agent/node_modules", "?? frontend/node_modules",
+      "?? packages/app/node_modules/generated.js", " M packages/app/src/view.ts", "",
+    ].join("\0"), stderr: "" },
+    { success: true, stdout: "", stderr: "" },
+    { success: true, stdout: "packages/app/src/view.ts\0", stderr: "" },
+    { success: true, stdout: "", stderr: "" },
+    { success: true, stdout: `${hash}\n`, stderr: "" },
+  ]);
+
+  const result = await commitVerifiedProjectCodexWorkspace("/unused", executionId, ["local_commit"], verified, fake.dependencies);
+  assert.equal(result.success, true);
+  const addCalls = fake.calls.filter((call) => call.args[2] === "add");
+  assert.deepEqual(addCalls.map((call) => call.args.slice(5)), [["packages/app/src/view.ts"]]);
+  assert.equal(fake.calls.some((call) => call.args.some((arg) => arg.split("/").includes("node_modules"))), false);
+});
+
+test("only excluded hydration artifacts returns nothing_to_commit", async () => {
+  const fake = harness([
+    { success: true, stdout: "?? node_modules\0?? backend/lia-agent/node_modules\0", stderr: "" },
+    { success: true, stdout: "", stderr: "" },
+  ]);
+  const result = await commitVerifiedProjectCodexWorkspace("/unused", executionId, ["local_commit"], verified, fake.dependencies);
+  assert.equal(result.success, false);
+  assert.equal(result.error, "nothing_to_commit");
+  assert.equal(fake.calls.length, 2);
+  assert.deepEqual(fake.calls[1].args.slice(2), ["diff", "--cached", "--name-only", "-z"]);
+});
+
+test("staged-index defense rejects a dependency artifact before commit", async () => {
+  const fake = harness([
+    { success: true, stdout: " M src/safe.ts\0", stderr: "" },
+    { success: true, stdout: "", stderr: "" },
+    { success: true, stdout: "src/safe.ts\0vendor/node_modules\0", stderr: "" },
+  ]);
+  const result = await commitVerifiedProjectCodexWorkspace("/unused", executionId, ["local_commit"], verified, fake.dependencies);
+  assert.equal(result.success, false);
+  assert.equal(result.error, "git_stage_failed");
+  assert.equal(fake.calls.length, 3);
+  assert.equal(fake.calls.some((call) => call.args[2] === "commit"), false);
+});
+
+test("rename touching node_modules is excluded as one change", async () => {
+  const fake = harness([
+    { success: true, stdout: "R  src/safe.ts\0src/node_modules/safe.ts\0", stderr: "" },
+    { success: true, stdout: "", stderr: "" },
+  ]);
+  const result = await commitVerifiedProjectCodexWorkspace("/unused", executionId, ["local_commit"], verified, fake.dependencies);
+  assert.equal(result.success, false);
+  assert.equal(result.error, "nothing_to_commit");
+  assert.equal(fake.calls.length, 2);
+});
+
+test("real hydration symlinks are excluded and only the legitimate edit is committed", async (context) => {
+  const id = "commit-artifact-symlink-test";
+  const worktree = await createCommittedWorkspace(id);
+  context.after(() => rm(worktree, { recursive: true, force: true }));
+  const target = "/tmp/lia-commit-artifact-dependencies";
+  await mkdir(target, { recursive: true });
+  context.after(() => rm(target, { recursive: true, force: true }));
+  await mkdir(`${worktree}/backend/lia-agent`, { recursive: true });
+  await mkdir(`${worktree}/frontend`, { recursive: true });
+  await symlink(target, `${worktree}/node_modules`, "dir");
+  await symlink(target, `${worktree}/backend/lia-agent/node_modules`, "dir");
+  await symlink(target, `${worktree}/frontend/node_modules`, "dir");
+  await writeFile(`${worktree}/source.txt`, "after\n");
+
+  const result = await commitVerifiedProjectCodexWorkspace("/unused", id, ["local_commit"], { ...verified, executionId: id });
+  assert.equal(result.success, true);
+  const shown = await git(worktree, "show", "--format=", "--name-only", "-z", result.commit);
+  const names = shown.stdout.split("\0").filter(Boolean);
+  assert.deepEqual(names, ["source.txt"]);
+  assert.equal(names.some((name) => name.split("/").includes("node_modules")), false);
+});
+
+test("real workspace containing only a hydration symlink returns nothing_to_commit", async (context) => {
+  const id = "commit-artifact-only-test";
+  const worktree = await createCommittedWorkspace(id);
+  context.after(() => rm(worktree, { recursive: true, force: true }));
+  const target = "/tmp/lia-commit-artifact-only-dependencies";
+  await mkdir(target, { recursive: true });
+  context.after(() => rm(target, { recursive: true, force: true }));
+  await symlink(target, `${worktree}/node_modules`, "dir");
+  const before = (await git(worktree, "rev-parse", "HEAD")).stdout.trim();
+
+  const result = await commitVerifiedProjectCodexWorkspace("/unused", id, ["local_commit"], { ...verified, executionId: id });
+  assert.equal(result.success, false);
+  assert.equal(result.error, "nothing_to_commit");
+  assert.equal((await git(worktree, "rev-parse", "HEAD")).stdout.trim(), before);
+});
+
+test("real root and nested node_modules files and directories are excluded", async (context) => {
+  const id = "commit-artifact-file-test";
+  const worktree = await createCommittedWorkspace(id);
+  context.after(() => rm(worktree, { recursive: true, force: true }));
+  await mkdir(`${worktree}/nested`, { recursive: true });
+  await mkdir(`${worktree}/deep/node_modules`, { recursive: true });
+  await writeFile(`${worktree}/node_modules`, "root artifact\n");
+  await writeFile(`${worktree}/nested/node_modules`, "nested artifact\n");
+  await writeFile(`${worktree}/deep/node_modules/artifact.js`, "artifact\n");
+  await writeFile(`${worktree}/source.txt`, "after\n");
+
+  const result = await commitVerifiedProjectCodexWorkspace("/unused", id, ["local_commit"], { ...verified, executionId: id });
+  assert.equal(result.success, true);
+  const shown = await git(worktree, "show", "--format=", "--name-only", "-z", result.commit);
+  assert.deepEqual(shown.stdout.split("\0").filter(Boolean), ["source.txt"]);
+});
+
 for (const [name, position, error] of [
   ["status", 0, "git_status_failed"],
   ["add", 1, "git_stage_failed"],
-  ["commit", 2, "git_commit_failed"],
-  ["rev-parse", 3, "git_revision_failed"],
+  ["index", 2, "git_stage_failed"],
+  ["commit", 3, "git_commit_failed"],
+  ["rev-parse", 4, "git_revision_failed"],
 ]) {
   test(`${name} failure is mapped safely and stops the sequence`, async () => {
     const results = [
-      { success: true, stdout: " M private.txt\n", stderr: "" },
+      { success: true, stdout: " M private.txt\0", stderr: "" },
       { success: true, stdout: "", stderr: "" },
+      { success: true, stdout: "private.txt\0", stderr: "" },
       { success: true, stdout: "", stderr: "" },
       { success: true, stdout: hash, stderr: "" },
     ];
@@ -123,8 +260,9 @@ for (const [name, position, error] of [
 
 test("invalid revision text is rejected", async () => {
   const fake = harness([
-    { success: true, stdout: "?? private.txt\n", stderr: "" },
+    { success: true, stdout: "?? private.txt\0", stderr: "" },
     { success: true, stdout: "", stderr: "" },
+    { success: true, stdout: "private.txt\0", stderr: "" },
     { success: true, stdout: "", stderr: "" },
     { success: true, stdout: "not-a-hash\n", stderr: "" },
   ]);
@@ -135,7 +273,7 @@ test("invalid revision text is rejected", async () => {
 
 test("safe results expose no process, workspace, or filename details and retain the workspace", async () => {
   const fake = harness([
-    { success: true, stdout: "?? secret-name.txt\n", stderr: "SECRET" },
+    { success: true, stdout: "?? secret-name.txt\0", stderr: "SECRET" },
     { success: false, reason: "failed", stdout: "PRIVATE", stderr: "SECRET" },
   ]);
   const result = await commitVerifiedProjectCodexWorkspace("/private/repo", executionId, ["local_commit"], verified, fake.dependencies);

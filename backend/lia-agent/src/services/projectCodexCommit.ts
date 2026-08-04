@@ -94,6 +94,42 @@ function failed(executionId: string, error: ProjectCodexCommitError): ProjectCod
   return { success: false, executionId, status: "commit_failed", error, summary: summaries[error] };
 }
 
+function isNodeModulesArtifact(path: string): boolean {
+  return path.split("/").some((component) => component === "node_modules");
+}
+
+interface WorkspaceChange {
+  paths: string[];
+}
+
+function parsePorcelainV1Z(output: string): WorkspaceChange[] | undefined {
+  if (output.length === 0) return [];
+  const records = output.split("\0");
+  if (records.pop() !== "") return undefined;
+  const changes: WorkspaceChange[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record.length < 4 || record[2] !== " ") return undefined;
+    const paths = [record.slice(3)];
+    if (record[0] === "R" || record[0] === "C" || record[1] === "R" || record[1] === "C") {
+      const originalPath = records[index + 1];
+      if (originalPath === undefined) return undefined;
+      paths[paths.length] = originalPath;
+      index += 1;
+    }
+    if (paths.some((path) => path.length === 0)) return undefined;
+    changes[changes.length] = { paths };
+  }
+  return changes;
+}
+
+function parseNulSeparatedPaths(output: string): string[] | undefined {
+  if (output.length === 0) return [];
+  const paths = output.split("\0");
+  if (paths.pop() !== "" || paths.some((path) => path.length === 0)) return undefined;
+  return paths;
+}
+
 export async function commitVerifiedProjectCodexWorkspace(
   repositoryRoot: string,
   executionId: string,
@@ -119,15 +155,27 @@ export async function commitVerifiedProjectCodexWorkspace(
     maxOutputBytes: MAX_OUTPUT_BYTES,
   });
 
-  let stage: "status" | "add" | "commit" | "revision" = "status";
+  let stage: "status" | "add" | "index" | "commit" | "revision" = "status";
   try {
-    const status = await run(["-C", workspace.worktreePath, "status", "--porcelain"]);
+    const status = await run(["-C", workspace.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"]);
     if (!status.success) return failed(executionId, "git_status_failed");
-    if (status.stdout.length === 0) return failed(executionId, "nothing_to_commit");
+    const changes = parsePorcelainV1Z(status.stdout);
+    if (changes === undefined) return failed(executionId, "git_status_failed");
 
     stage = "add";
-    const staged = await run(["-C", workspace.worktreePath, "add", "-A"]);
-    if (!staged.success) return failed(executionId, "git_stage_failed");
+    for (const change of changes) {
+      if (change.paths.some(isNodeModulesArtifact)) continue;
+      const staged = await run(["-C", workspace.worktreePath, "add", "-A", "--", ...change.paths]);
+      if (!staged.success) return failed(executionId, "git_stage_failed");
+    }
+
+    stage = "index";
+    const index = await run(["-C", workspace.worktreePath, "diff", "--cached", "--name-only", "-z"]);
+    if (!index.success) return failed(executionId, "git_stage_failed");
+    const stagedPaths = parseNulSeparatedPaths(index.stdout);
+    if (stagedPaths === undefined) return failed(executionId, "git_stage_failed");
+    if (stagedPaths.some(isNodeModulesArtifact)) return failed(executionId, "git_stage_failed");
+    if (stagedPaths.length === 0) return failed(executionId, "nothing_to_commit");
 
     stage = "commit";
     const committed = await run([
@@ -153,6 +201,8 @@ export async function commitVerifiedProjectCodexWorkspace(
       ? "git_status_failed"
       : stage === "add"
         ? "git_stage_failed"
+        : stage === "index"
+          ? "git_stage_failed"
         : stage === "commit"
           ? "git_commit_failed"
           : "git_revision_failed");
