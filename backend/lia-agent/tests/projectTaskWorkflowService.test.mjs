@@ -43,7 +43,7 @@ const proposal = (overrides = {}) => ({
 });
 
 function harness(overrides = {}) {
-  const calls = { hermes: [], codex: [], verification: [], commit: [] };
+  const calls = { hermes: [], codex: [], verification: [], commit: [], proposalAttempts: [] };
   return {
     calls,
     dependencies: {
@@ -51,7 +51,7 @@ function harness(overrides = {}) {
         calls.hermes.push(args);
         if (overrides.hermesThrow) throw new Error("PRIVATE");
         const data = JSON.parse(args[1].split("<PROJECT_TASK_DATA>\n")[1].split("\n</PROJECT_TASK_DATA>")[0]);
-        return overrides.hermes ?? { ok: true, response: JSON.stringify(proposal({
+        return (overrides.hermesSequence?.shift() ?? overrides.hermes) ?? { ok: true, response: JSON.stringify(proposal({
           steps: [{ title: "Implement", objective: "Change only approved files", requiredCapabilities: data.approvedCapabilities }],
         })) };
       },
@@ -79,6 +79,7 @@ function harness(overrides = {}) {
           commit: "0123456789abcdef0123456789abcdef01234567", summary: "Committed locally.",
         };
       },
+      onHermesProposalAttempt: (outcome) => calls.proposalAttempts.push(outcome),
     },
   };
 }
@@ -163,18 +164,57 @@ test("two transient Hermes failures terminalize with the safe second error", asy
   assert.equal(result.error, "execution_failed");
 });
 
-test("invalid Hermes JSON, invalid proposals and approval requirements are never retried", async () => {
-  const cases = [
-    [harness({ hermes: { ok: true, response: "not-json" } }), "invalid_hermes_json"],
-    [harness({ hermes: { ok: true, response: "{}" } }), "invalid_hermes_proposal"],
-    [harness({ hermes: { ok: true, response: JSON.stringify(proposal({ requiresHumanApproval: true, blockedActions: ["deploy"] })) } }), "human_approval_required"],
-  ];
-  for (const [fake, expected] of cases) {
-    const result = await run(request(), fake);
-    assert.equal(fake.calls.hermes.length, 1);
-    assert.equal(fake.calls.codex.length, 0);
-    assert.equal(result.error, expected);
-  }
+test("valid first Hermes proposal makes exactly one call", async () => {
+  const fake = harness();
+  const result = await run(request(), fake);
+  assert.equal(result.ok, true);
+  assert.equal(fake.calls.hermes.length, 1);
+  assert.deepEqual(fake.calls.proposalAttempts, []);
+});
+
+test("invalid first JSON is repaired once and continues to Codex", async () => {
+  const fake = harness({ hermesSequence: [
+    { ok: true, response: "not-json" },
+    { ok: true, response: JSON.stringify(proposal()) },
+  ] });
+  const result = await run(request(), fake);
+  assert.equal(result.ok, true);
+  assert.equal(fake.calls.hermes.length, 2);
+  assert.equal(fake.calls.codex.length, 1);
+  assert.deepEqual(fake.calls.proposalAttempts, ["initial_invalid_json", "repair_succeeded"]);
+});
+
+test("recoverably invalid first proposal is repaired once and continues to Codex", async () => {
+  const fake = harness({ hermesSequence: [
+    { ok: true, response: JSON.stringify({ ...proposal(), explanation: "extra" }) },
+    { ok: true, response: JSON.stringify(proposal()) },
+  ] });
+  const result = await run(request(), fake);
+  assert.equal(result.ok, true);
+  assert.equal(fake.calls.codex.length, 1);
+  assert.deepEqual(fake.calls.proposalAttempts, ["initial_invalid_structure", "repair_succeeded"]);
+});
+
+test("two invalid JSON responses fail closed after one repair", async () => {
+  const fake = harness({ hermesSequence: [
+    { ok: true, response: "not-json" }, { ok: true, response: "still-not-json" },
+  ] });
+  const result = await run(request(), fake);
+  assert.equal(result.error, "invalid_hermes_json");
+  assert.equal(fake.calls.hermes.length, 2);
+  assert.equal(fake.calls.codex.length, 0);
+  assert.deepEqual(fake.calls.proposalAttempts, ["initial_invalid_json", "repair_invalid_json"]);
+});
+
+test("two structurally invalid proposals fail closed after one repair", async () => {
+  const fake = harness({ hermesSequence: [
+    { ok: true, response: "{}" }, { ok: true, response: JSON.stringify({ summary: "still invalid" }) },
+  ] });
+  const result = await run(request(), fake);
+  assert.equal(result.error, "invalid_hermes_proposal");
+  assert.equal(fake.calls.hermes.length, 2);
+  assert.equal(fake.calls.codex.length, 0);
+  assert.deepEqual(fake.calls.proposalAttempts, ["initial_invalid_structure", "repair_invalid_structure"]);
 });
 
 test("capability escalation is rejected before Codex", async () => {
@@ -184,6 +224,7 @@ test("capability escalation is rejected before Codex", async () => {
   const result = await run(request(), fake);
   assert.equal(result.stage, "hermes");
   assert.equal(result.error, "invalid_hermes_proposal");
+  assert.equal(fake.calls.hermes.length, 1);
   assert.equal(fake.calls.codex.length, 0);
 });
 
@@ -194,7 +235,32 @@ test("human approval blocks Codex", async () => {
   const result = await run(request(), fake);
   assert.equal(result.stage, "approval");
   assert.equal(result.error, "human_approval_required");
+  assert.equal(fake.calls.hermes.length, 1);
   assert.equal(fake.calls.codex.length, 0);
+});
+
+test("blocked actions never retry or reach Codex", async () => {
+  const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
+    requiresHumanApproval: true, blockedActions: ["deploy"],
+  })) } });
+  const result = await run(request(), fake);
+  assert.equal(result.error, "human_approval_required");
+  assert.equal(fake.calls.hermes.length, 1);
+  assert.equal(fake.calls.codex.length, 0);
+});
+
+test("repair prompt preserves the same task data and never expands approved capabilities", async () => {
+  const fake = harness({ hermesSequence: [
+    { ok: true, response: "not-json" }, { ok: true, response: JSON.stringify(proposal({
+      steps: [{ title: "Read", objective: "Inspect", requiredCapabilities: ["repository_read"] }],
+    })) },
+  ] });
+  await run(request(["repository_read"]), fake);
+  const taskData = (prompt) => JSON.parse(prompt.split("<PROJECT_TASK_DATA>\n")[1].split("\n</PROJECT_TASK_DATA>")[0]);
+  assert.deepEqual(taskData(fake.calls.hermes[1][1]), taskData(fake.calls.hermes[0][1]));
+  assert.deepEqual(taskData(fake.calls.hermes[1][1]).approvedCapabilities, ["repository_read"]);
+  assert.doesNotMatch(fake.calls.hermes[1][1], /isolated_worktree_write|run_tests|local_commit/);
+  assert.equal(fake.calls.codex[0][0].effectiveCapabilities.includes("repository_read"), true);
 });
 
 test("Codex safe failure is preserved", async () => {

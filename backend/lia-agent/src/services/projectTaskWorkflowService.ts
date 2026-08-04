@@ -16,7 +16,10 @@ import {
   type ProjectCodexVerificationResult,
 } from './projectCodexVerification.js';
 import { planProjectTask } from './projectExecutionPlanner.js';
-import { buildProjectOrchestrationPrompt } from './projectOrchestrationPrompt.js';
+import {
+  buildProjectOrchestrationPrompt,
+  buildProjectOrchestrationRepairPrompt,
+} from './projectOrchestrationPrompt.js';
 import { validateProjectOrchestrationProposal } from './projectOrchestrationValidation.js';
 
 type CodexExecutor = (handoff: ProjectCodexHandoff) => Promise<ProjectCodexExecutionResult>;
@@ -40,11 +43,41 @@ export interface ProjectTaskWorkflowDependencies {
   executeCommit?: CommitExecutor;
   /** Internal observability only. Receives no workflow internals. */
   onStage?: (stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => void | Promise<void>;
+  /** Internal, bounded diagnostics. Never includes prompts, responses, paths or process output. */
+  onHermesProposalAttempt?: (outcome:
+    | 'initial_invalid_json'
+    | 'initial_invalid_structure'
+    | 'repair_succeeded'
+    | 'repair_invalid_json'
+    | 'repair_invalid_structure'
+  ) => void | Promise<void>;
 }
 
 const observe = async (dependencies: ProjectTaskWorkflowDependencies, stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => {
   try { await dependencies.onStage?.(stage); } catch { /* State publication must not alter execution. */ }
 };
+
+const observeHermesProposal = async (
+  dependencies: ProjectTaskWorkflowDependencies,
+  outcome: Parameters<NonNullable<ProjectTaskWorkflowDependencies['onHermesProposalAttempt']>>[0],
+) => {
+  try { await dependencies.onHermesProposalAttempt?.(outcome); } catch { /* Diagnostics must not alter execution. */ }
+};
+
+function containsNonRetryableHermesAuthorityRequest(value: unknown, approvedCapabilities: readonly string[]): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proposal = value as Record<string, unknown>;
+  if (proposal.requiresHumanApproval === true) return true;
+  if (Array.isArray(proposal.blockedActions) && proposal.blockedActions.length > 0) return true;
+  if (!Array.isArray(proposal.steps)) return false;
+  return proposal.steps.some((step) => {
+    if (typeof step !== 'object' || step === null || Array.isArray(step)) return false;
+    const capabilities = (step as Record<string, unknown>).requiredCapabilities;
+    return Array.isArray(capabilities) && capabilities.some(
+      (capability) => typeof capability === 'string' && !approvedCapabilities.includes(capability),
+    );
+  });
+}
 
 const failed = (
   stage: Extract<ProjectTaskWorkflowResult, { ok: false }>['stage'],
@@ -99,14 +132,47 @@ export async function executeProjectTaskWorkflow(
   }
 
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(hermesResult.response);
-  } catch {
-    return failed('hermes', 'invalid_hermes_json', 'Hermes returned invalid JSON.', identifiers);
+  let initialError: 'invalid_hermes_json' | 'invalid_hermes_proposal' | undefined;
+  try { parsed = JSON.parse(hermesResult.response); }
+  catch { initialError = 'invalid_hermes_json'; }
+
+  let validation = initialError === undefined
+    ? validateProjectOrchestrationProposal(parsed, plan)
+    : undefined;
+  if (validation !== undefined && !validation.success) {
+    if (containsNonRetryableHermesAuthorityRequest(parsed, plan.approvedCapabilities)) {
+      return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+    }
+    initialError = 'invalid_hermes_proposal';
   }
 
-  const validation = validateProjectOrchestrationProposal(parsed, plan);
-  if (!validation.success) {
+  if (initialError !== undefined) {
+    await observeHermesProposal(dependencies, initialError === 'invalid_hermes_json'
+      ? 'initial_invalid_json'
+      : 'initial_invalid_structure');
+    let repairPrompt: string;
+    try { repairPrompt = buildProjectOrchestrationRepairPrompt(plan); }
+    catch { return failed('hermes', 'prompt_too_large', 'Hermes reasoning could not be prepared.', identifiers); }
+    let repairedResult: HermesExecutionResult;
+    try { repairedResult = await executeHermes(config, repairPrompt); }
+    catch { repairedResult = { ok: false, error: 'execution_failed' }; }
+    if (!repairedResult.ok) {
+      return failed('hermes', repairedResult.error, 'Hermes reasoning did not complete.', identifiers);
+    }
+    try { parsed = JSON.parse(repairedResult.response); }
+    catch {
+      await observeHermesProposal(dependencies, 'repair_invalid_json');
+      return failed('hermes', 'invalid_hermes_json', 'Hermes returned invalid JSON.', identifiers);
+    }
+    validation = validateProjectOrchestrationProposal(parsed, plan);
+    if (!validation.success) {
+      await observeHermesProposal(dependencies, 'repair_invalid_structure');
+      return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+    }
+    await observeHermesProposal(dependencies, 'repair_succeeded');
+  }
+
+  if (validation === undefined || !validation.success) {
     return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
   }
   if (validation.proposal.requiresHumanApproval || validation.proposal.blockedActions.length > 0) {
