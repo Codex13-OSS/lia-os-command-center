@@ -22,7 +22,15 @@ test('frontend persists before submit, reuses UUID, polls server stages and does
   assert.match(client, /const existing = loadPersistedProjectTask\(storage\); if \(existing\) return existing/);
   assert.match(client, /body\.status as LiaProjectTaskStage/);
   assert.match(component, /loadPersistedProjectTask\(\)/);
-  assert.match(component, /Recuperando estado/);
+  assert.match(component, /LÍA · Hermes · Codex conectados/);
+  assert.match(component, /Recuperando ejecución…/);
+  assert.match(component, /LÍA está lista para recibir una tarea\./);
+  assert.match(component, /WORKFLOW_LABELS = \['Hermes', 'Codex', 'Verificación', 'Resultado'\]/);
+  assert.match(component, /stage === 'accepted' \|\| stage === 'planning'/);
+  assert.match(component, /aria-current=\{step\.state === 'active' \? 'step' : undefined\}/);
+  assert.match(component, /<h3>Tarea completada<\/h3>/);
+  assert.match(component, /receipt\.verification\.checksPassed/);
+  assert.match(component, /receipt\.commit/);
   assert.match(component, /El servicio pudo haberse reiniciado/);
   assert.match(component, /setReceipt\(result\.receipt\)/);
   assert.doesNotMatch(component, /requestLiaProjectTaskWorkflow/);

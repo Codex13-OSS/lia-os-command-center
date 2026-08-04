@@ -20,6 +20,31 @@ type Props = {
 
 const PROJECT_ID = 'lia-hermes';
 
+type WorkflowStepState = 'pending' | 'active' | 'completed' | 'failed';
+type WorkflowStep = { label: string; state: WorkflowStepState; stateLabel: string };
+
+const WORKFLOW_LABELS = ['Hermes', 'Codex', 'Verificación', 'Resultado'] as const;
+
+function getWorkflowSteps(stage: LiaProjectTaskStage | 'recovering' | null): WorkflowStep[] {
+  if (stage === 'failed') return WORKFLOW_LABELS.map((label) => ({ label, state: 'failed', stateLabel: 'Sin confirmar' }));
+  if (stage === 'recovering' || stage === null) return WORKFLOW_LABELS.map((label) => ({ label, state: 'pending', stateLabel: 'Pendiente' }));
+
+  const activeIndex = stage === 'accepted' || stage === 'planning' || stage === 'hermes' ? 0
+    : stage === 'codex' ? 1
+      : stage === 'verification' ? 2
+        : 3;
+  const activeLabel = stage === 'accepted' || stage === 'planning' ? 'Preparando'
+    : stage === 'commit' ? 'Guardando'
+      : stage === 'completed' ? 'Completado'
+        : 'En curso';
+
+  return WORKFLOW_LABELS.map((label, index) => {
+    if (stage === 'completed' || index < activeIndex) return { label, state: 'completed', stateLabel: 'Completado' };
+    if (index === activeIndex) return { label, state: 'active', stateLabel: activeLabel };
+    return { label, state: 'pending', stateLabel: 'Pendiente' };
+  });
+}
+
 export function ProjectsShellR3(props: Props) {
   const [instruction, setInstruction] = useState('');
   const [priority, setPriority] = useState<LiaProjectTaskPriority>('normal');
@@ -28,6 +53,7 @@ export function ProjectsShellR3(props: Props) {
   const [receipt, setReceipt] = useState<LiaProjectTaskReceipt | null>(null);
   const [stage, setStage] = useState<LiaProjectTaskStage | 'recovering' | null>(null);
   const submittingRef = useRef(false);
+  const workflowSteps = getWorkflowSteps(stage);
 
   const poll = async (task: PersistedProjectTask) => {
     setPending(true);
@@ -87,7 +113,11 @@ export function ProjectsShellR3(props: Props) {
   return (
     <ExecutiveShellR3 {...props} activeSection="projects" mainAriaLabel="Proyectos" mainClassName="lia-projects-r3-shell" rail={rail}>
       <header className="lia-projects-r3-title">
-        <div><span>PROYECTOS</span><h1>Proyectos</h1><p>Ejecución real y aislada con LÍA</p></div>
+        <div>
+          <span>PROYECTOS</span><h1>Proyectos</h1>
+          <div className="lia-projects-r3-connected-badge">LÍA · Hermes · Codex conectados</div>
+          <p>Ejecución real y aislada con LÍA</p>
+        </div>
       </header>
 
       <section className="lia-projects-r3-project-card">
@@ -118,14 +148,25 @@ export function ProjectsShellR3(props: Props) {
           </div>
         </form>
 
-        <ol className={`lia-projects-r3-stages${pending ? ' is-running' : ''}${receipt ? ' is-complete' : ''}`} aria-label="Flujo de ejecución" aria-live="polite">
-          <li><i />{stage === 'recovering' ? 'Recuperando estado…' : stage ? `Estado: ${stage}` : 'Esperando ejecución'}</li>
-        </ol>
+        <section className="lia-projects-r3-workflow" aria-labelledby="lia-projects-workflow-title" aria-live="polite">
+          <div className="lia-projects-r3-workflow-head">
+            <h3 id="lia-projects-workflow-title">Flujo de ejecución</h3>
+            <p>{stage === 'recovering' ? 'Recuperando ejecución…' : stage === null ? 'LÍA está lista para recibir una tarea.' : stage === 'failed' ? 'La ejecución no pudo completarse.' : stage === 'completed' ? 'Ejecución completada.' : 'Seguimiento de la tarea en curso.'}</p>
+          </div>
+          <ol className="lia-projects-r3-stages">
+            {workflowSteps.map((step) => (
+              <li key={step.label} className={`is-${step.state}`} aria-current={step.state === 'active' ? 'step' : undefined} aria-label={`${step.label}: ${step.stateLabel}`}>
+                <i aria-hidden="true" />
+                <span>{step.label}<small>{step.stateLabel}</small></span>
+              </li>
+            ))}
+          </ol>
+        </section>
 
         {error && <div className="lia-projects-r3-error" role="alert">{error}</div>}
         {receipt && (
           <article className="lia-projects-r3-receipt" aria-label="Resultado de la ejecución">
-            <h3>Resultado verificado</h3>
+            <h3>Tarea completada</h3>
             <dl>
               <div><dt>Status</dt><dd>{receipt.status}</dd></div>
               <div><dt>Execution ID</dt><dd>{receipt.executionId}</dd></div>

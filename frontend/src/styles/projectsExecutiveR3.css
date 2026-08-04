@@ -3,6 +3,7 @@
 .lia-projects-r3-title span, .lia-projects-r3-project-head span, .lia-projects-r3-rail span { color: #6faed8; font-size: 10px; font-weight: 750; letter-spacing: .11em; }
 .lia-projects-r3-title h1 { margin: 4px 0 2px; color: #edf7fd; font-size: 25px; }
 .lia-projects-r3-title p, .lia-projects-r3-project-head p { margin: 0; color: #8fa5b6; font-size: 12px; }
+.lia-projects-r3-title .lia-projects-r3-connected-badge { width: fit-content; margin: 8px 0 7px; padding: 5px 10px; color: #c9e9fb; border: 1px solid rgba(111,190,235,.28); border-radius: 999px; background: linear-gradient(135deg, rgba(31,91,132,.42), rgba(10,38,61,.64)); box-shadow: inset 0 1px rgba(235,248,255,.08), 0 6px 18px rgba(0,8,18,.18); font-size: 10.5px; font-weight: 650; letter-spacing: .025em; }
 .lia-projects-r3-project-card { padding: 22px; border: 1px solid rgba(140,190,223,.20); border-radius: 18px; background: var(--r3-instrument); box-shadow: 0 24px 52px rgba(0,3,9,.38), inset 0 1px rgba(224,242,254,.08); }
 .lia-projects-r3-project-head { display: flex; align-items: center; gap: 14px; padding-bottom: 20px; border-bottom: 1px solid rgba(93,145,184,.14); }
 .lia-projects-r3-project-head > div:nth-child(2) { min-width: 0; }
@@ -20,15 +21,22 @@
 .lia-projects-r3-form select { min-width: 150px; height: 40px; padding: 0 10px; }
 .lia-projects-r3-form-actions button { min-width: 164px; height: 42px; padding: 0 18px; color: #f1f9ff; border: 1px solid rgba(131,204,251,.34); border-radius: 11px; background: linear-gradient(135deg, #217ebd, #155b91); box-shadow: 0 10px 24px rgba(14,90,145,.28); cursor: pointer; }
 .lia-projects-r3-form-actions button:disabled { opacity: .48; cursor: default; box-shadow: none; }
-.lia-projects-r3-stages { margin: 22px 0 0; padding: 16px 0 0; display: grid; grid-template-columns: repeat(4,1fr); list-style: none; border-top: 1px solid rgba(93,145,184,.12); }
-.lia-projects-r3-stages li { position: relative; display: flex; align-items: center; gap: 7px; color: #738b9e; font-size: 10.5px; }
+.lia-projects-r3-workflow { margin-top: 22px; padding: 17px; border: 1px solid rgba(111,170,211,.18); border-radius: 14px; background: linear-gradient(145deg, rgba(7,25,41,.76), rgba(8,32,52,.48)); box-shadow: inset 0 1px rgba(224,242,254,.05); }
+.lia-projects-r3-workflow-head h3 { margin: 0; color: #dcecf6; font-size: 12.5px; }
+.lia-projects-r3-workflow-head p { margin: 5px 0 0; color: #8fa7b8; font-size: 11px; }
+.lia-projects-r3-stages { margin: 16px 0 0; padding: 15px 0 0; display: grid; grid-template-columns: repeat(4,1fr); list-style: none; border-top: 1px solid rgba(93,145,184,.12); }
+.lia-projects-r3-stages li { position: relative; display: flex; align-items: flex-start; gap: 8px; color: #738b9e; font-size: 10.5px; }
 .lia-projects-r3-stages li::after { content: ''; position: absolute; top: 6px; left: 13px; right: 8px; height: 1px; background: rgba(94,151,194,.20); }
 .lia-projects-r3-stages li:last-child::after { content: none; }
 .lia-projects-r3-stages i { position: relative; z-index: 1; width: 12px; height: 12px; flex: 0 0 auto; border: 2px solid #49677e; border-radius: 50%; background: #091a29; }
-.lia-projects-r3-stages.is-running li:not(:last-child) { color: #b8d8ec; }
-.lia-projects-r3-stages.is-running li:not(:last-child) i { border-color: #55adf2; box-shadow: 0 0 10px rgba(85,173,242,.34); }
-.lia-projects-r3-stages.is-complete li { color: #a6d9be; }
-.lia-projects-r3-stages.is-complete i { border-color: #55ca8d; background: #297c58; }
+.lia-projects-r3-stages span { display: grid; gap: 3px; font-weight: 700; }
+.lia-projects-r3-stages small { color: inherit; font-size: 9.5px; font-weight: 500; }
+.lia-projects-r3-stages li.is-active { color: #c5e7fb; }
+.lia-projects-r3-stages li.is-active i { border-color: #55adf2; box-shadow: 0 0 10px rgba(85,173,242,.34); }
+.lia-projects-r3-stages li.is-completed { color: #a6d9be; }
+.lia-projects-r3-stages li.is-completed i { border-color: #55ca8d; background: #297c58; }
+.lia-projects-r3-stages li.is-failed { color: #d8aaa8; }
+.lia-projects-r3-stages li.is-failed i { border-color: #b46d6a; background: rgba(112,38,39,.35); }
 .lia-projects-r3-error { margin-top: 18px; padding: 12px 14px; color: #f1c2bf; border: 1px solid rgba(224,105,101,.24); border-radius: 11px; background: rgba(112,38,39,.22); font-size: 12px; }
 .lia-projects-r3-receipt { margin-top: 18px; padding: 17px; border: 1px solid rgba(91,201,142,.22); border-radius: 13px; background: rgba(23,83,61,.18); }
 .lia-projects-r3-receipt h3 { margin: 0 0 12px; color: #ccebd9; font-size: 13px; }
