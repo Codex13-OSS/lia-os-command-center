@@ -4,7 +4,6 @@ import {
   type LiaProjectTaskPriority,
 } from '../../integrations/liaProjectTaskWorkflowClient';
 import { clearPersistedProjectTask, getProjectTaskStatus, loadPersistedProjectTask, persistProjectTaskStatus, prepareProjectTask, submitProjectTask, type LiaProjectTaskReceipt, type LiaProjectTaskStage, type PersistedProjectTask } from '../../integrations/liaProjectTaskClient';
-import { shouldPauseAfterTemporaryFailure } from '../../integrations/liaProjectTaskPolling';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import '../../styles/projectsExecutiveR3.css';
 
@@ -22,7 +21,6 @@ type Props = {
 const PROJECT_ID = 'lia-hermes';
 const POLL_INTERVAL_MS = 1500;
 const TEMPORARY_RETRY_MS = 2500;
-const MAX_POLL_DURATION_MS = 10 * 60 * 1000;
 
 type WorkflowStepState = 'pending' | 'active' | 'completed' | 'failed';
 type WorkflowStep = { label: string; state: WorkflowStepState; stateLabel: string };
@@ -79,8 +77,6 @@ export function ProjectsShellR3(props: Props) {
 
   const poll = async (task: PersistedProjectTask) => {
     const run = ++pollRunRef.current;
-    const startedAt = Date.now();
-    let consecutiveTemporaryFailures = 0;
     cancelSleep();
     if (mountedRef.current) setPending(true);
 
@@ -96,16 +92,9 @@ export function ProjectsShellR3(props: Props) {
     });
 
     while (isCurrent()) {
-      if (Date.now() - startedAt >= MAX_POLL_DURATION_MS) {
-        setPending(false);
-        submittingRef.current = false;
-        setError('El seguimiento se pausó por tiempo límite. La ejecución puede seguir en curso; recarga la página para reanudarlo.');
-        return;
-      }
       const result = await getProjectTaskStatus(task.taskId);
       if (!isCurrent()) return;
       if (result.kind === 'active') {
-        consecutiveTemporaryFailures = 0;
         setStage(result.status);
         setError(null);
         persistProjectTaskStatus(task, result.status);
@@ -113,13 +102,8 @@ export function ProjectsShellR3(props: Props) {
         continue;
       }
       if (result.kind === 'temporary') {
-        consecutiveTemporaryFailures += 1;
-        if (shouldPauseAfterTemporaryFailure(consecutiveTemporaryFailures)) {
-          setPending(false);
-          submittingRef.current = false;
-          setError('El seguimiento se pausó tras varios fallos temporales. La ejecución puede seguir en curso; recarga la página para reanudarlo.');
-          return;
-        }
+        // Keep the last authoritative stage and retry until the task becomes
+        // terminal or this cancelable polling run is superseded/unmounted.
         await wait(TEMPORARY_RETRY_MS);
         continue;
       }

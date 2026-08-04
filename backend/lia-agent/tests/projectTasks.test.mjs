@@ -39,6 +39,43 @@ test('terminalizes thrown failures and validates invalid and unknown IDs', async
   });
 });
 
+test('serves current status promptly while a deliberately slow workflow is still running', async () => {
+  const gate = deferred();
+  const enteredCodex = deferred();
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: registry,
+    projectTasksWorkflowExecutor: async (_request, observe) => {
+      observe('planning');
+      observe('hermes');
+      observe('codex');
+      enteredCodex.resolve();
+      await gate.promise;
+      return success;
+    },
+  });
+
+  await server(app, async (base) => {
+    assert.equal((await post(base, request())).status, 202);
+    await enteredCodex.promise;
+
+    const startedAt = performance.now();
+    const response = await fetch(`${base}/api/projects/tasks/${ID}`);
+    const elapsedMs = performance.now() - startedAt;
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      integration: 'project_task',
+      taskId: ID,
+      status: 'codex',
+      terminal: false,
+    });
+    assert.ok(elapsedMs < 250, `status took ${elapsedMs.toFixed(1)}ms while workflow was active`);
+
+    gate.resolve();
+  });
+});
+
 test('store capacity never evicts active tasks and terminal TTL uses injected clock', () => {
   let now = 0; const store = new InMemoryProjectTaskStore({ maxRecords: 1, maxActive: 1, terminalTtlMs: 10, now: () => now });
   const intent = request(); delete intent.taskId;

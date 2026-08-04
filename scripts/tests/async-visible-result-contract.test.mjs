@@ -8,9 +8,11 @@ const componentPath = new URL('../../frontend/src/components/projects-r3/Project
 const taskRoutePath = new URL('../../backend/lia-agent/src/routes/projectTasks.ts', import.meta.url);
 
 test('runtime exposes only exact async submit/status routes with short deadlines and sanitization', async () => {
-  const source = await readFile(runtimePath, 'utf8');
+  const [source, client] = await Promise.all([readFile(runtimePath, 'utf8'), readFile(clientPath, 'utf8')]);
   assert.match(source, /PROJECT_SUBMIT_TIMEOUT_MS = 8_000/);
-  assert.match(source, /PROJECT_STATUS_TIMEOUT_MS = 4_000/);
+  assert.match(source, /PROJECT_STATUS_TIMEOUT_MS = 3_000/);
+  assert.match(client, /getProjectTaskStatus[\s\S]*?\}, 4_000\)/);
+  assert.doesNotMatch(source, /spawnSync/);
   assert.match(source, /requestUrl\.pathname === SAME_ORIGIN_PROJECT_TASKS_PATH/);
   assert.match(source, /\^\\\/api\\\/lia-agent\\\/projects\\\/tasks\\\/\(\[\^\/\]\+\)\$/);
   assert.match(source, /sanitizeTaskPayload/);
@@ -29,9 +31,9 @@ test('frontend creates new persisted tasks, recovers reloads, retries idempotent
   assert.match(client, /export function clearPersistedProjectTask\(taskId: string/);
   assert.match(client, /persisted\?\.taskId === taskId/);
   assert.match(client, /body\.status as LiaProjectTaskStage/);
-  assert.match(component, /useEffect\(\(\) => \{ const saved = loadPersistedProjectTask\(\)/);
+  assert.match(component, /useEffect\(\(\) => \{[\s\S]*?const saved = loadPersistedProjectTask\(\)/);
   assert.match(component, /result\.kind === 'unknown'\) \{ clearPersistedProjectTask\(task\.taskId\)/);
-  assert.match(component, /if \(submitted === 'ambiguous'\) await submitProjectTask\(task\)/);
+  assert.match(component, /if \(submitted === 'ambiguous'\) \{[\s\S]*?await submitProjectTask\(task\)/);
   assert.match(component, /No fue posible preparar o enviar la tarea\./);
   assert.doesNotMatch(component, /No fue posible iniciar la recuperación de la tarea\./);
   assert.match(component, /LÍA · Hermes · Codex conectados/);
@@ -47,6 +49,10 @@ test('frontend creates new persisted tasks, recovers reloads, retries idempotent
   assert.match(component, /receipt\.commit/);
   assert.match(component, /El servicio pudo haberse reiniciado/);
   assert.match(component, /setReceipt\(result\.receipt\)/);
+  assert.match(component, /result\.kind === 'temporary'[\s\S]*?await wait\(TEMPORARY_RETRY_MS\)/);
+  assert.doesNotMatch(component, /shouldPauseAfterTemporaryFailure/);
+  assert.doesNotMatch(component, /MAX_POLL_DURATION_MS/);
+  assert.doesNotMatch(component, /El seguimiento se pausó/);
   assert.doesNotMatch(component, /requestLiaProjectTaskWorkflow/);
   assert.doesNotMatch(client, /tasks\/workflow/);
 });

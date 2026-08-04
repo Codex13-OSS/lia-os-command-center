@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import net from 'node:net';
@@ -30,7 +30,10 @@ const MAX_RESPONSE_BYTES = 96 * 1024;
 const QUERY_TIMEOUT_MS = 125_000;
 const PROJECT_WORKFLOW_TIMEOUT_MS = 20 * 60 * 1_000;
 const PROJECT_SUBMIT_TIMEOUT_MS = 8_000;
-const PROJECT_STATUS_TIMEOUT_MS = 4_000;
+// Leave enough time for this proxy to return its controlled error before the
+// browser's status deadline. Equal deadlines make the browser abort the useful
+// proxy response under transient backend delay.
+const PROJECT_STATUS_TIMEOUT_MS = 3_000;
 const PROJECT_TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROJECT_TASK_STAGES = new Set(['accepted', 'planning', 'hermes', 'codex', 'verification', 'commit', 'completed', 'failed']);
 const ALLOWED_HERMES_ERRORS = new Set(['invalid_query', 'execution_disabled', 'timeout', 'execution_failed', 'empty_response', 'internal_error']);

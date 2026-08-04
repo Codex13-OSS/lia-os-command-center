@@ -43,6 +43,8 @@ export async function submitProjectTask(task: PersistedProjectTask): Promise<'ac
 }
 export async function getProjectTaskStatus(taskId: string): Promise<LiaProjectTaskStatus> {
   try {
+    // Must exceed the same-origin proxy's 3s upstream deadline so a controlled
+    // temporary response reaches the poller instead of racing this abort.
     const response = await fetchShort(`${LIA_PROJECT_TASKS_PATH}/${taskId}`, { method: 'GET', cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } }, 4_000);
     const body: unknown = await response.json().catch(() => null);
     if (response.status === 404 && isRecord(body) && body.error === 'task_not_found') return { kind: 'unknown', taskId };
