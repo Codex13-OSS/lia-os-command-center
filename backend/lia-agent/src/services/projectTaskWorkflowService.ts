@@ -26,14 +26,11 @@ type CommitExecutor = typeof commitVerifiedProjectCodexWorkspace;
 const MAX_RESULT_TEXT_CHARS = 6_000;
 
 function buildCommittedResultText(
-  codexResultText: string,
   verification: { checksPassed: number; totalChecks: number },
   commit: string,
 ): string {
   const finalResult = `Final verified result: ${verification.checksPassed}/${verification.totalChecks} checks passed and local commit ${commit} was created and validated.`;
-  const intermediateLabel = 'Earlier Codex report (captured before verification and commit; it is not the authoritative final outcome):';
-  const prefix = `${finalResult}\n\n${intermediateLabel}\n`;
-  return `${prefix}${codexResultText.slice(0, Math.max(0, MAX_RESULT_TEXT_CHARS - prefix.length))}`;
+  return finalResult.slice(0, MAX_RESULT_TEXT_CHARS);
 }
 
 export interface ProjectTaskWorkflowDependencies {
@@ -239,7 +236,7 @@ export async function executeProjectTaskWorkflow(
     ...executionIdentifiers,
     status: 'committed',
     executionSummary: codexResult.summary,
-    resultText: buildCommittedResultText(codexResult.resultText, verification, commitResult.commit),
+    resultText: buildCommittedResultText(verification, commitResult.commit),
     verification,
     commit: commitResult.commit,
   };

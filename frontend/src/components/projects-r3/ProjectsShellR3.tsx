@@ -4,6 +4,7 @@ import {
   type LiaProjectTaskPriority,
 } from '../../integrations/liaProjectTaskWorkflowClient';
 import { clearPersistedProjectTask, getProjectTaskStatus, loadPersistedProjectTask, persistProjectTaskStatus, prepareProjectTask, submitProjectTask, type LiaProjectTaskReceipt, type LiaProjectTaskStage, type PersistedProjectTask } from '../../integrations/liaProjectTaskClient';
+import { shouldPauseAfterTemporaryFailure } from '../../integrations/liaProjectTaskPolling';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import '../../styles/projectsExecutiveR3.css';
 
@@ -21,7 +22,6 @@ type Props = {
 const PROJECT_ID = 'lia-hermes';
 const POLL_INTERVAL_MS = 1500;
 const TEMPORARY_RETRY_MS = 2500;
-const MAX_CONSECUTIVE_TEMPORARY_FAILURES = 8;
 const MAX_POLL_DURATION_MS = 10 * 60 * 1000;
 
 type WorkflowStepState = 'pending' | 'active' | 'completed' | 'failed';
@@ -114,8 +114,7 @@ export function ProjectsShellR3(props: Props) {
       }
       if (result.kind === 'temporary') {
         consecutiveTemporaryFailures += 1;
-        setError('El estado no está disponible temporalmente. La ejecución puede seguir en curso.');
-        if (consecutiveTemporaryFailures >= MAX_CONSECUTIVE_TEMPORARY_FAILURES) {
+        if (shouldPauseAfterTemporaryFailure(consecutiveTemporaryFailures)) {
           setPending(false);
           submittingRef.current = false;
           setError('El seguimiento se pausó tras varios fallos temporales. La ejecución puede seguir en curso; recarga la página para reanudarlo.');

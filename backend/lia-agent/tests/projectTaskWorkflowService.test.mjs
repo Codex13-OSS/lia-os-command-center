@@ -239,7 +239,7 @@ test("complete simulated LÍA -> Hermes -> Codex -> verification -> local commit
   assert.deepEqual(result, {
     ok: true, projectId: "approved-project", executionId: "execution-123", status: "committed",
     executionSummary: "Codex completed safely.",
-    resultText: "Final verified result: 2/2 checks passed and local commit 0123456789abcdef0123456789abcdef01234567 was created and validated.\n\nEarlier Codex report (captured before verification and commit; it is not the authoritative final outcome):\nUseful completion result.",
+    resultText: "Final verified result: 2/2 checks passed and local commit 0123456789abcdef0123456789abcdef01234567 was created and validated.",
     verification: { status: "verified", checksPassed: 2, totalChecks: 2 },
     commit: "0123456789abcdef0123456789abcdef01234567",
   });
@@ -251,7 +251,7 @@ test("complete simulated LÍA -> Hermes -> Codex -> verification -> local commit
   assert.equal(fake.calls.codex[0][0].repositoryRoot, "/registry/approved-project");
 });
 
-test("committed receipt makes validated evidence authoritative over a conflicting earlier Codex report", async () => {
+test("committed receipt excludes a conflicting earlier Codex report from visible resultText", async () => {
   const fake = harness({ codex: {
     success: true, executionId: "execution-123", status: "completed", summary: "Codex completed safely.",
     resultText: "The commit could not be created because Git could not write index.lock.",
@@ -262,9 +262,10 @@ test("committed receipt makes validated evidence authoritative over a conflictin
   assert.equal(result.status, "committed");
   assert.equal(result.commit, "0123456789abcdef0123456789abcdef01234567");
   assert.deepEqual(result.verification, { status: "verified", checksPassed: 2, totalChecks: 2 });
-  assert.match(result.resultText, /^Final verified result: 2\/2 checks passed and local commit 0123456789abcdef0123456789abcdef01234567 was created and validated\./);
-  assert.match(result.resultText, /Earlier Codex report \(captured before verification and commit; it is not the authoritative final outcome\):/);
-  assert.match(result.resultText, /index\.lock/);
+  assert.equal(result.resultText, "Final verified result: 2/2 checks passed and local commit 0123456789abcdef0123456789abcdef01234567 was created and validated.");
+  assert.equal(result.resultText.includes("index.lock"), false);
+  assert.equal(result.resultText.includes("could not be created"), false);
+  assert.equal(result.resultText.length <= 6000, true);
 });
 
 test("commit failure is safe and retains the execution", async () => {
