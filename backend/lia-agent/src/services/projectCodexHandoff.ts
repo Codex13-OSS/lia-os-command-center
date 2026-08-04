@@ -144,6 +144,8 @@ export function buildProjectCodexHandoff(
 
   const plan = planValidation.plan;
   const proposal: ProjectOrchestrationProposal = proposalValidation.proposal;
+  const effectiveCapabilities = proposal.steps.flatMap((step) => step.requiredCapabilities)
+    .filter((capability, index, all) => all.indexOf(capability) === index);
   return {
     success: true,
     handoff: {
@@ -153,6 +155,7 @@ export function buildProjectCodexHandoff(
       instruction: plan.instruction,
       priority: plan.priority,
       approvedCapabilities: [...plan.approvedCapabilities],
+      effectiveCapabilities,
       proposal: {
         summary: proposal.summary,
         steps: proposal.steps.map((step) => ({

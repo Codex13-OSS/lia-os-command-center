@@ -139,7 +139,10 @@ export function createProjectTaskWorkflowRouter(
       typeof result.projectId !== 'string'
       || typeof result.executionId !== 'string'
       || typeof result.executionSummary !== 'string'
-      || !['ready_for_review', 'verified', 'committed'].includes(result.status)
+      || typeof result.resultText !== 'string'
+      || result.resultText.length < 1
+      || result.resultText.length > 6000
+      || !['analyzed', 'ready_for_review', 'verified', 'committed'].includes(result.status)
     ) {
       response.status(500).json({
         ok: false,
@@ -158,9 +161,10 @@ export function createProjectTaskWorkflowRouter(
       executionId: result.executionId,
       status: result.status,
       executionSummary: result.executionSummary,
+      resultText: result.resultText,
     };
 
-    if (result.status === 'ready_for_review') {
+    if (result.status === 'ready_for_review' || result.status === 'analyzed') {
       response.status(200).json(receipt);
       return;
     }

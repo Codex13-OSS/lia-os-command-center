@@ -18,9 +18,10 @@ export type ProjectTasksDependencies = { store: ProjectTaskStore; registry?: Pro
 const fingerprint = (request: { projectId: string; instruction: string; priority: string; requestedCapabilities: string[] }) => createHash('sha256').update(JSON.stringify({ projectId: request.projectId, instruction: request.instruction, priority: request.priority, requestedCapabilities: [...request.requestedCapabilities].sort() })).digest('hex');
 const safeReceipt = (result: Extract<ProjectTaskWorkflowResult, { ok: true }>): SafeTaskReceipt | undefined => {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(result.executionId)) return undefined;
+  if (typeof result.resultText !== 'string' || result.resultText.length < 1 || result.resultText.length > 6000) return undefined;
   if ((result.status === 'verified' || result.status === 'committed') && (!result.verification || !Number.isSafeInteger(result.verification.checksPassed) || !Number.isSafeInteger(result.verification.totalChecks) || result.verification.checksPassed < 0 || result.verification.totalChecks < result.verification.checksPassed)) return undefined;
   if (result.status === 'committed' && (!result.commit || !/^[0-9a-fA-F]{40,64}$/.test(result.commit))) return undefined;
-  return ({ executionId: result.executionId, status: result.status,
+  return ({ executionId: result.executionId, status: result.status, resultText: result.resultText,
   ...(result.verification ? { verification: { status: 'verified', checksPassed: result.verification.checksPassed, totalChecks: result.verification.totalChecks } } : {}),
   ...(result.commit ? { commit: result.commit } : {}),
   });

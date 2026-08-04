@@ -5,6 +5,7 @@ import test from 'node:test';
 const runtimePath = new URL('../lia-production-same-origin-runtime-server.mjs', import.meta.url);
 const clientPath = new URL('../../frontend/src/integrations/liaProjectTaskClient.ts', import.meta.url);
 const componentPath = new URL('../../frontend/src/components/projects-r3/ProjectsShellR3.tsx', import.meta.url);
+const taskRoutePath = new URL('../../backend/lia-agent/src/routes/projectTasks.ts', import.meta.url);
 
 test('runtime exposes only exact async submit/status routes with short deadlines and sanitization', async () => {
   const source = await readFile(runtimePath, 'utf8');
@@ -39,11 +40,24 @@ test('frontend creates new persisted tasks, recovers reloads, retries idempotent
   assert.match(component, /WORKFLOW_LABELS = \['Hermes', 'Codex', 'Verificación', 'Resultado'\]/);
   assert.match(component, /stage === 'accepted' \|\| stage === 'planning'/);
   assert.match(component, /aria-current=\{step\.state === 'active' \? 'step' : undefined\}/);
-  assert.match(component, /<h3>Tarea completada<\/h3>/);
+  assert.match(component, /Análisis completado/);
+  assert.match(component, /receipt\.resultText/);
+  assert.match(component, /No requerida/);
   assert.match(component, /receipt\.verification\.checksPassed/);
   assert.match(component, /receipt\.commit/);
   assert.match(component, /El servicio pudo haberse reiniciado/);
   assert.match(component, /setReceipt\(result\.receipt\)/);
   assert.doesNotMatch(component, /requestLiaProjectTaskWorkflow/);
   assert.doesNotMatch(client, /tasks\/workflow/);
+});
+
+test('async terminal receipt preserves only bounded analyzed result text', async () => {
+  const [client, route] = await Promise.all([readFile(clientPath, 'utf8'), readFile(taskRoutePath, 'utf8')]);
+  assert.match(client, /'analyzed'/);
+  assert.match(client, /receipt\.resultText\.length <= 6000/);
+  assert.match(route, /result\.resultText\.length > 6000/);
+  assert.match(route, /resultText: result\.resultText/);
+  for (const forbidden of ['repositoryRoot: result', 'stderr: result', 'commands: result', 'env: result', 'prompt: result']) {
+    assert.doesNotMatch(route, new RegExp(forbidden));
+  }
 });

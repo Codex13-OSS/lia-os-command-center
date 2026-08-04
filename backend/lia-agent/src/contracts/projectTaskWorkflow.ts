@@ -36,8 +36,9 @@ export type ProjectTaskWorkflowResult =
       ok: true;
       projectId: string;
       executionId: string;
-      status: 'ready_for_review' | 'verified' | 'committed';
+      status: 'analyzed' | 'ready_for_review' | 'verified' | 'committed';
       executionSummary: string;
+      resultText: string;
       verification?: {
         status: 'verified';
         checksPassed: number;

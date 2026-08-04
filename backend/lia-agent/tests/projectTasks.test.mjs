@@ -8,7 +8,7 @@ import { InMemoryProjectTaskStore } from '../dist/services/inMemoryProjectTaskSt
 const ID = '550e8400-e29b-41d4-a716-446655440000';
 const request = (overrides = {}) => ({ taskId: ID, projectId: 'safe', instruction: 'Implement safely.', priority: 'normal', requestedCapabilities: ['repository_read', 'isolated_worktree_write', 'run_tests', 'local_commit'], ...overrides });
 const registry = { read: async () => [{ projectId: 'safe', displayName: 'Safe', repositoryRoot: '/safe/repo', enabled: true }] };
-const success = { ok: true, projectId: 'safe', executionId: 'exec-safe', status: 'committed', executionSummary: 'hidden', verification: { status: 'verified', checksPassed: 2, totalChecks: 3 }, commit: 'a'.repeat(40) };
+const success = { ok: true, projectId: 'safe', executionId: 'exec-safe', status: 'committed', executionSummary: 'hidden', resultText: 'Cambio completado.', verification: { status: 'verified', checksPassed: 2, totalChecks: 3 }, commit: 'a'.repeat(40) };
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 async function server(app, fn) { const s = app.listen(0, '127.0.0.1'); await once(s, 'listening'); try { await fn(`http://127.0.0.1:${s.address().port}`); } finally { await new Promise((r) => s.close(r)); } }
 const post = (base, body) => fetch(`${base}/api/projects/tasks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -24,7 +24,7 @@ test('acknowledges before detached workflow, retries once, publishes stages and 
     gate.resolve(); await new Promise(setImmediate);
     const status = await fetch(`${base}/api/projects/tasks/${ID}`); const body = await status.json();
     assert.deepEqual(stages, ['planning', 'hermes', 'codex', 'verification', 'commit']);
-    assert.deepEqual(body, { ok: true, integration: 'project_task', taskId: ID, status: 'completed', terminal: true, receipt: { executionId: 'exec-safe', status: 'committed', verification: { status: 'verified', checksPassed: 2, totalChecks: 3 }, commit: 'a'.repeat(40) } });
+    assert.deepEqual(body, { ok: true, integration: 'project_task', taskId: ID, status: 'completed', terminal: true, receipt: { executionId: 'exec-safe', status: 'committed', resultText: 'Cambio completado.', verification: { status: 'verified', checksPassed: 2, totalChecks: 3 }, commit: 'a'.repeat(40) } });
     assert.equal(JSON.stringify(body).includes('/safe/repo'), false); assert.equal(JSON.stringify(body).includes('hidden'), false);
   });
 });
@@ -44,6 +44,6 @@ test('store capacity never evicts active tasks and terminal TTL uses injected cl
   const intent = request(); delete intent.taskId;
   assert.equal(store.createOrGet(ID, 'one', intent).kind, 'created');
   assert.equal(store.createOrGet('550e8400-e29b-41d4-a716-446655440001', 'two', intent).kind, 'capacity'); assert.ok(store.get(ID));
-  store.complete(ID, { executionId: 'x', status: 'ready_for_review' }); now = 10; assert.equal(store.get(ID), undefined);
+  store.complete(ID, { executionId: 'x', status: 'ready_for_review', resultText: 'Done.' }); now = 10; assert.equal(store.get(ID), undefined);
   assert.equal(store.createOrGet('550e8400-e29b-41d4-a716-446655440001', 'two', intent).kind, 'created');
 });

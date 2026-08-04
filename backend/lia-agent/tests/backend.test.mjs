@@ -2176,6 +2176,7 @@ test("internal Codex handoff is derived from validated plan and proposal", () =>
     instruction: "Analiza la tarea sin ejecutar nada.",
     priority: "high",
     approvedCapabilities: ["repository_read", "run_tests"],
+    effectiveCapabilities: ["repository_read"],
     proposal: {
       summary: "Propuesta segura",
       steps: [{

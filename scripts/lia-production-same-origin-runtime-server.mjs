@@ -597,7 +597,10 @@ function sanitizeProjectWorkflowPayload(payload) {
     && payload?.projectId === 'lia-hermes'
     && typeof payload?.executionId === 'string'
     && /^[A-Za-z0-9_-]{1,128}$/.test(payload.executionId)
-    && ['ready_for_review', 'verified', 'committed'].includes(payload?.status)
+    && ['analyzed', 'ready_for_review', 'verified', 'committed'].includes(payload?.status)
+    && typeof payload?.resultText === 'string'
+    && payload.resultText.length > 0
+    && payload.resultText.length <= 6000
   ) {
     const receipt = {
       ok: true,
@@ -606,13 +609,14 @@ function sanitizeProjectWorkflowPayload(payload) {
       projectId: 'lia-hermes',
       executionId: payload.executionId,
       status: payload.status,
+      resultText: payload.resultText,
       executionSummary: payload.status === 'committed'
         ? 'La tarea terminó, fue verificada y quedó guardada en un commit local.'
         : payload.status === 'verified'
           ? 'La tarea terminó y superó las verificaciones configuradas.'
           : 'La tarea terminó y está lista para revisión.',
     };
-    if (payload.status !== 'ready_for_review') {
+    if (payload.status !== 'ready_for_review' && payload.status !== 'analyzed') {
       const verification = payload.verification;
       if (
         verification?.status !== 'verified'
@@ -708,13 +712,15 @@ function sanitizeTaskPayload(payload) {
     return { ...base, error: { code: payload.error.code, message: payload.error.message, ...(typeof payload.error.projectId === 'string' ? { projectId: payload.error.projectId } : {}), ...(typeof payload.error.executionId === 'string' ? { executionId: payload.error.executionId } : {}) } };
   }
   const r = payload.receipt;
-  if (payload.status !== 'completed' || typeof r?.executionId !== 'string' || !['ready_for_review', 'verified', 'committed'].includes(r.status)) return null;
-  const receipt = { executionId: r.executionId, status: r.status };
+  if (payload.status !== 'completed' || typeof r?.executionId !== 'string' || !['analyzed', 'ready_for_review', 'verified', 'committed'].includes(r.status) || typeof r.resultText !== 'string' || r.resultText.length < 1 || r.resultText.length > 6000) return null;
+  const receipt = { executionId: r.executionId, status: r.status, resultText: r.resultText };
   if (r.verification !== undefined) {
     if (r.verification.status !== 'verified' || !Number.isSafeInteger(r.verification.checksPassed) || !Number.isSafeInteger(r.verification.totalChecks) || r.verification.checksPassed < 0 || r.verification.totalChecks < r.verification.checksPassed) return null;
     receipt.verification = { status: 'verified', checksPassed: r.verification.checksPassed, totalChecks: r.verification.totalChecks };
   }
   if (r.commit !== undefined) { if (!/^[0-9a-fA-F]{40,64}$/.test(r.commit)) return null; receipt.commit = r.commit; }
+  if ((r.status === 'verified' || r.status === 'committed') !== (r.verification !== undefined)) return null;
+  if ((r.status === 'committed') !== (r.commit !== undefined)) return null;
   return { ...base, receipt };
 }
 

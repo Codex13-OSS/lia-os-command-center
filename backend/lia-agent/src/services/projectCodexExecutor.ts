@@ -17,6 +17,7 @@ import {
 export { PROJECT_CODEX_WORKTREE_ROOT } from "./projectCodexWorkspace.js";
 export const PROJECT_CODEX_MAX_PROMPT_CHARS = 16_000;
 export const PROJECT_CODEX_MAX_OUTPUT_BYTES = 64 * 1024;
+export const PROJECT_CODEX_MAX_RESULT_CHARS = 6_000;
 export const PROJECT_CODEX_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface ProjectCodexProcessRequest {
@@ -107,17 +108,30 @@ export const runProjectCodexProcess: ProjectCodexProcessRunner = (request) =>
   });
 
 function buildPrompt(handoff: ProjectCodexHandoff): string {
-  const capabilities = handoff.approvedCapabilities.join(", ");
+  const capabilities = handoff.effectiveCapabilities.join(", ");
   const steps = handoff.proposal.steps.map((step, index) =>
     `${index + 1}. ${step.title}\nObjective: ${step.objective}\nRequired capabilities: ${step.requiredCapabilities.join(", ")}`,
   ).join("\n\n");
   return [
     `Project: ${handoff.projectDisplayName} (${handoff.projectId})`,
-    `Approved capabilities: ${capabilities}`,
+    `Effective capabilities: ${capabilities}`,
     `Instruction:\n${handoff.instruction}`,
     `Approved proposal summary:\n${handoff.proposal.summary}`,
     `Approved proposal steps:\n${steps}`,
   ].join("\n\n");
+}
+
+/** Convert Codex's final stdout into bounded display text without process transcripts. */
+export function sanitizeProjectCodexResult(value: string): string {
+  const normalized = value.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:stderr:|stdout:|env(?:ironment)?:|command:|cmd:|\$\s|>\s*(?:git|npm|node|codex)\b)/i.test(line))
+    .join("\n")
+    .replace(/(^|[\s(])\/(?:[^\s)]+\/)*[^\s),.;]*/g, "$1[ruta omitida]")
+    .trim().replace(/\n{3,}/g, "\n\n");
+  return normalized.slice(0, PROJECT_CODEX_MAX_RESULT_CHARS)
+    || "Análisis completado sin observaciones adicionales.";
 }
 
 function failed(
@@ -137,11 +151,11 @@ export async function executeProjectCodexHandoff(
   } catch {
     return failed("unavailable", "invalid_generated_path");
   }
-  if (!handoff.approvedCapabilities.includes("repository_read")) {
+  if (!handoff.effectiveCapabilities.includes("repository_read")) {
     return failed(executionId, "missing_repository_read");
   }
-  if (!handoff.approvedCapabilities.includes("isolated_worktree_write")) {
-    return failed(executionId, "missing_isolated_worktree_write");
+  if (handoff.effectiveCapabilities.some((capability) => !handoff.approvedCapabilities.includes(capability))) {
+    return failed(executionId, "missing_repository_read");
   }
 
   const prompt = buildPrompt(handoff);
@@ -157,6 +171,29 @@ export async function executeProjectCodexHandoff(
   const codexRunner = dependencies.codexRunner ?? runProjectCodexProcess;
   const timeoutMs = dependencies.timeoutMs ?? PROJECT_CODEX_TIMEOUT_MS;
   const processOptions = { shell: false as const, timeoutMs, maxOutputBytes: PROJECT_CODEX_MAX_OUTPUT_BYTES };
+  const mayWrite = handoff.effectiveCapabilities.includes("isolated_worktree_write");
+  if (!mayWrite) {
+    try {
+      const executed = await codexRunner({
+        file: "codex",
+        args: [
+          "-a", "never", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+          "-s", "read-only", "-C", handoff.repositoryRoot, prompt,
+        ],
+        ...processOptions,
+      });
+      return executed.success
+        ? {
+            success: true, executionId, status: "completed",
+            summary: "Codex analysis completed.",
+            resultText: sanitizeProjectCodexResult(executed.stdout),
+            outcome: "analysis_completed",
+          }
+        : failed(executionId, executed.reason === "timeout" ? "timeout" : "codex_execution_failed");
+    } catch {
+      return failed(executionId, "codex_execution_failed");
+    }
+  }
   let result: ProjectCodexExecutionResult | undefined;
   let worktreeAttempted = false;
 
@@ -191,7 +228,12 @@ export async function executeProjectCodexHandoff(
         ...processOptions,
       });
       result = executed.success
-        ? { success: true, executionId, status: "completed", summary: "Codex execution completed in an isolated worktree." }
+        ? {
+            success: true, executionId, status: "completed",
+            summary: "Codex execution completed in an isolated worktree.",
+            resultText: sanitizeProjectCodexResult(executed.stdout),
+            outcome: "modification_completed",
+          }
         : failed(executionId, executed.reason === "timeout" ? "timeout" : "codex_execution_failed");
     }
   } catch {

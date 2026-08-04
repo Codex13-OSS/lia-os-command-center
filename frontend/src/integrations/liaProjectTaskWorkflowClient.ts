@@ -6,8 +6,9 @@ const MAX_INSTRUCTION_CHARACTERS = 8_000;
 export type LiaProjectTaskPriority = 'low' | 'normal' | 'high' | 'critical';
 
 export type LiaProjectTaskWorkflowReceipt = {
-  status: 'ready_for_review' | 'verified' | 'committed';
+  status: 'analyzed' | 'ready_for_review' | 'verified' | 'committed';
   executionId: string;
+  resultText: string;
   executionSummary: string;
   verification?: {
     status: 'verified';
@@ -66,8 +67,9 @@ function mapWorkflowError(error: unknown, stage?: unknown): string {
 
 function parseReceipt(body: unknown): LiaProjectTaskWorkflowReceipt | null {
   if (!isRecord(body) || body.ok !== true || body.integration !== 'project_workflow') return null;
-  if (!['ready_for_review', 'verified', 'committed'].includes(String(body.status))) return null;
+  if (!['analyzed', 'ready_for_review', 'verified', 'committed'].includes(String(body.status))) return null;
   if (typeof body.executionId !== 'string' || body.executionId.length === 0) return null;
+  if (typeof body.resultText !== 'string' || body.resultText.length < 1 || body.resultText.length > 6000) return null;
   if (typeof body.executionSummary !== 'string' || body.executionSummary.trim().length === 0) return null;
 
   let verification: LiaProjectTaskWorkflowReceipt['verification'];
@@ -93,6 +95,7 @@ function parseReceipt(body: unknown): LiaProjectTaskWorkflowReceipt | null {
   return {
     status,
     executionId: body.executionId,
+    resultText: body.resultText,
     executionSummary: body.executionSummary.trim(),
     ...(verification ? { verification } : {}),
     ...(typeof body.commit === 'string' ? { commit: body.commit } : {}),

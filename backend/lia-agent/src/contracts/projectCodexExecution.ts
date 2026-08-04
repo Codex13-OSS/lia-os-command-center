@@ -15,6 +15,8 @@ export type ProjectCodexExecutionResult =
       executionId: string;
       status: "completed";
       summary: string;
+      resultText: string;
+      outcome: "analysis_completed" | "modification_completed";
     }
   | {
       success: false;
@@ -23,4 +25,3 @@ export type ProjectCodexExecutionResult =
       error: ProjectCodexExecutionError;
       summary: string;
     };
-

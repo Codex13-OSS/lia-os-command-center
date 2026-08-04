@@ -36,6 +36,7 @@ const successBase = {
   projectId: 'project-safe-1',
   executionId: 'execution-safe-1',
   executionSummary: 'Ejecución aislada completa.',
+  resultText: 'Cambio completado.',
 };
 
 test('workflow route returns exact ready_for_review, verified and committed receipts', async () => {

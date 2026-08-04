@@ -58,18 +58,6 @@ export async function executeProjectTaskWorkflow(
 
   const { plan } = planning;
   const identifiers = { projectId: plan.projectId };
-  if (
-    plan.approvedCapabilities.includes('local_commit')
-    && !plan.approvedCapabilities.includes('run_tests')
-  ) {
-    return failed(
-      'planning',
-      'local_commit_requires_run_tests',
-      'Local commit requires successful verification.',
-      identifiers,
-    );
-  }
-
   let prompt: string;
   try {
     prompt = buildProjectOrchestrationPrompt(plan);
@@ -114,6 +102,10 @@ export async function executeProjectTaskWorkflow(
   if (!handoffResult.success) {
     return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
   }
+  const effectiveCapabilities = handoffResult.handoff.effectiveCapabilities;
+  if (effectiveCapabilities.includes('local_commit') && !effectiveCapabilities.includes('run_tests')) {
+    return failed('hermes', 'invalid_hermes_proposal', 'Local commit requires successful verification.', identifiers);
+  }
 
   let codexResult: ProjectCodexExecutionResult;
   await observe(dependencies, 'codex');
@@ -130,12 +122,22 @@ export async function executeProjectTaskWorkflow(
   }
 
   const executionIdentifiers = { ...identifiers, executionId: codexResult.executionId };
-  if (!plan.approvedCapabilities.includes('run_tests')) {
+  if (!effectiveCapabilities.includes('isolated_worktree_write')) {
+    return {
+      ok: true,
+      ...executionIdentifiers,
+      status: 'analyzed',
+      executionSummary: codexResult.summary,
+      resultText: codexResult.resultText,
+    };
+  }
+  if (!effectiveCapabilities.includes('run_tests')) {
     return {
       ok: true,
       ...executionIdentifiers,
       status: 'ready_for_review',
       executionSummary: codexResult.summary,
+      resultText: codexResult.resultText,
     };
   }
   if (verificationRegistry === undefined) {
@@ -181,12 +183,13 @@ export async function executeProjectTaskWorkflow(
     checksPassed: verificationResult.checksPassed,
     totalChecks: verificationResult.totalChecks,
   };
-  if (!plan.approvedCapabilities.includes('local_commit')) {
+  if (!effectiveCapabilities.includes('local_commit')) {
     return {
       ok: true,
       ...executionIdentifiers,
       status: 'verified',
       executionSummary: codexResult.summary,
+      resultText: codexResult.resultText,
       verification,
     };
   }
@@ -197,7 +200,7 @@ export async function executeProjectTaskWorkflow(
     commitResult = await (dependencies.executeCommit ?? commitVerifiedProjectCodexWorkspace)(
       plan.repositoryRoot,
       codexResult.executionId,
-      plan.approvedCapabilities,
+      effectiveCapabilities,
       verificationResult,
     );
   } catch {
@@ -223,6 +226,7 @@ export async function executeProjectTaskWorkflow(
     ...executionIdentifiers,
     status: 'committed',
     executionSummary: codexResult.summary,
+    resultText: codexResult.resultText,
     verification,
     commit: commitResult.commit,
   };

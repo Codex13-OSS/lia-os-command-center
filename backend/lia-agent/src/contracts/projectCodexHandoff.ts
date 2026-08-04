@@ -12,6 +12,8 @@ export interface ProjectCodexHandoff {
   instruction: string;
   priority: ProjectTaskPriority;
   approvedCapabilities: ProjectTaskRequestedCapability[];
+  /** Validated union of proposal requirements; execution authority is limited to this subset. */
+  effectiveCapabilities: ProjectTaskRequestedCapability[];
   proposal: {
     summary: string;
     steps: ProjectOrchestrationStep[];

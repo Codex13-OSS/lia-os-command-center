@@ -4,7 +4,8 @@ export const PROJECT_TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9
 export type ProjectTaskStage = 'accepted' | 'planning' | 'hermes' | 'codex' | 'verification' | 'commit' | 'completed' | 'failed';
 export type SafeTaskReceipt = {
   executionId: string;
-  status: 'ready_for_review' | 'verified' | 'committed';
+  status: 'analyzed' | 'ready_for_review' | 'verified' | 'committed';
+  resultText: string;
   verification?: { status: 'verified'; checksPassed: number; totalChecks: number };
   commit?: string;
 };

@@ -50,13 +50,17 @@ function harness(overrides = {}) {
       executeHermes: async (...args) => {
         calls.hermes.push(args);
         if (overrides.hermesThrow) throw new Error("PRIVATE");
-        return overrides.hermes ?? { ok: true, response: JSON.stringify(proposal()) };
+        const data = JSON.parse(args[1].split("<PROJECT_TASK_DATA>\n")[1].split("\n</PROJECT_TASK_DATA>")[0]);
+        return overrides.hermes ?? { ok: true, response: JSON.stringify(proposal({
+          steps: [{ title: "Implement", objective: "Change only approved files", requiredCapabilities: data.approvedCapabilities }],
+        })) };
       },
       executeCodex: async (...args) => {
         calls.codex.push(args);
         if (overrides.codexThrow) throw new Error("PRIVATE");
         return overrides.codex ?? {
           success: true, executionId: "execution-123", status: "completed", summary: "Codex completed safely.",
+          resultText: "Useful completion result.", outcome: "modification_completed",
         };
       },
       executeVerification: async (...args) => {
@@ -108,12 +112,12 @@ test("optional observer reports only real public workflow boundaries", async () 
   assert.deepEqual(stages, ["planning", "hermes", "codex", "verification", "commit"]);
 });
 
-test("local_commit without run_tests fails before every executor", async () => {
+test("Hermes proposal with local_commit without run_tests fails after proposal validation", async () => {
   const fake = harness();
   const result = await run(request(["repository_read", "isolated_worktree_write", "local_commit"]), fake);
-  assert.equal(result.stage, "planning");
-  assert.equal(result.error, "local_commit_requires_run_tests");
-  for (const calls of Object.values(fake.calls)) assert.equal(calls.length, 0);
+  assert.equal(result.stage, "hermes");
+  assert.equal(result.error, "invalid_hermes_proposal");
+  assert.equal(fake.calls.codex.length, 0);
 });
 
 test("Hermes failures and strict invalid JSON stop before Codex", async () => {
@@ -165,8 +169,26 @@ test("Codex success without run_tests is ready for review", async () => {
   const result = await run(request(), fake);
   assert.deepEqual(result, {
     ok: true, projectId: "approved-project", executionId: "execution-123",
-    status: "ready_for_review", executionSummary: "Codex completed safely.",
+    status: "ready_for_review", executionSummary: "Codex completed safely.", resultText: "Useful completion result.",
   });
+  assert.equal(fake.calls.verification.length, 0);
+  assert.equal(fake.calls.commit.length, 0);
+});
+
+test("all-capability ceiling with repository_read-only proposal succeeds as analyzed without verification or commit", async () => {
+  const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
+    summary: "Inspect only",
+    steps: [{ title: "Inspect", objective: "Report findings", requiredCapabilities: ["repository_read"] }],
+  })) }, codex: {
+    success: true, executionId: "execution-123", status: "completed", summary: "Codex analysis completed.",
+    resultText: "Useful repository analysis.", outcome: "analysis_completed",
+  } });
+  const result = await run(request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]), fake);
+  assert.deepEqual(result, {
+    ok: true, projectId: "approved-project", executionId: "execution-123", status: "analyzed",
+    executionSummary: "Codex analysis completed.", resultText: "Useful repository analysis.",
+  });
+  assert.deepEqual(fake.calls.codex[0][0].effectiveCapabilities, ["repository_read"]);
   assert.equal(fake.calls.verification.length, 0);
   assert.equal(fake.calls.commit.length, 0);
 });
@@ -205,6 +227,7 @@ test("verification success without local_commit returns verified", async () => {
   assert.deepEqual(result, {
     ok: true, projectId: "approved-project", executionId: "execution-123", status: "verified",
     executionSummary: "Codex completed safely.",
+    resultText: "Useful completion result.",
     verification: { status: "verified", checksPassed: 2, totalChecks: 2 },
   });
   assert.equal(fake.calls.commit.length, 0);
@@ -216,6 +239,7 @@ test("complete simulated LÍA -> Hermes -> Codex -> verification -> local commit
   assert.deepEqual(result, {
     ok: true, projectId: "approved-project", executionId: "execution-123", status: "committed",
     executionSummary: "Codex completed safely.",
+    resultText: "Useful completion result.",
     verification: { status: "verified", checksPassed: 2, totalChecks: 2 },
     commit: "0123456789abcdef0123456789abcdef01234567",
   });

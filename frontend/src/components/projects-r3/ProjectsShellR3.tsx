@@ -53,7 +53,14 @@ export function ProjectsShellR3(props: Props) {
   const [receipt, setReceipt] = useState<LiaProjectTaskReceipt | null>(null);
   const [stage, setStage] = useState<LiaProjectTaskStage | 'recovering' | null>(null);
   const submittingRef = useRef(false);
-  const workflowSteps = getWorkflowSteps(stage);
+  const workflowSteps = receipt?.status === 'analyzed'
+    ? [
+        { label: 'Hermes', state: 'completed', stateLabel: 'Completado' },
+        { label: 'Codex', state: 'completed', stateLabel: 'Completado' },
+        { label: 'Verificación', state: 'completed', stateLabel: 'No requerida' },
+        { label: 'Resultado', state: 'completed', stateLabel: 'Completado' },
+      ] satisfies WorkflowStep[]
+    : getWorkflowSteps(stage);
 
   const poll = async (task: PersistedProjectTask) => {
     setPending(true);
@@ -166,12 +173,14 @@ export function ProjectsShellR3(props: Props) {
         {error && <div className="lia-projects-r3-error" role="alert">{error}</div>}
         {receipt && (
           <article className="lia-projects-r3-receipt" aria-label="Resultado de la ejecución">
-            <h3>Tarea completada</h3>
+            <h3>{receipt.status === 'analyzed' ? 'Análisis completado' : 'Tarea completada'}</h3>
+            <p>{receipt.resultText}</p>
             <dl>
               <div><dt>Status</dt><dd>{receipt.status}</dd></div>
               <div><dt>Execution ID</dt><dd>{receipt.executionId}</dd></div>
               {receipt.commit && <div><dt>Commit</dt><dd>{receipt.commit}</dd></div>}
               {receipt.verification && <div><dt>Verificación</dt><dd>{receipt.verification.checksPassed}/{receipt.verification.totalChecks} verificaciones aprobadas</dd></div>}
+              {receipt.status === 'analyzed' && <div><dt>Verificación</dt><dd>No requerida</dd></div>}
             </dl>
           </article>
         )}

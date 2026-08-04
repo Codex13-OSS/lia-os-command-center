@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   executeProjectCodexHandoff,
+  PROJECT_CODEX_MAX_RESULT_CHARS,
   PROJECT_CODEX_MAX_PROMPT_CHARS,
   PROJECT_CODEX_WORKTREE_ROOT,
 } from "../dist/services/projectCodexExecutor.js";
@@ -14,6 +15,7 @@ const handoff = (overrides = {}) => ({
   instruction: "Implement the approved change.",
   priority: "normal",
   approvedCapabilities: ["repository_read", "isolated_worktree_write"],
+  effectiveCapabilities: ["repository_read", "isolated_worktree_write"],
   proposal: {
     summary: "Make a contained change",
     steps: [{
@@ -61,12 +63,42 @@ test("isolated Codex execution creates, executes, and retains its worktree", asy
     executionId: "execution-123",
     status: "completed",
     summary: "Codex execution completed in an isolated worktree.",
+    resultText: "done",
+    outcome: "modification_completed",
   });
   assert.equal(fake.gitCalls.length, 1);
   assert.deepEqual(fake.gitCalls[0].args, [
     "-C", "/private/repositories/safe-project", "worktree", "add", "-b",
     "lia/executor/execution-123", `${PROJECT_CODEX_WORKTREE_ROOT}/execution-123`, "HEAD",
   ]);
+});
+
+test("repository_read-only execution uses repository root and read-only sandbox without worktree or hydration", async () => {
+  const fake = harness({ codexResult: { success: true, stdout: "Architecture is sound.", stderr: "private" } });
+  let hydrated = false;
+  fake.dependencies.hydrateDependencies = async () => { hydrated = true; };
+  const result = await executeProjectCodexHandoff(handoff({
+    approvedCapabilities: ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+    effectiveCapabilities: ["repository_read"],
+    proposal: { summary: "Inspect", steps: [{ title: "Inspect", objective: "Analyze only", requiredCapabilities: ["repository_read"] }] },
+  }), fake.dependencies);
+  assert.equal(result.outcome, "analysis_completed");
+  assert.equal(result.resultText, "Architecture is sound.");
+  assert.equal(fake.gitCalls.length, 0);
+  assert.equal(hydrated, false);
+  assert.deepEqual(fake.codexCalls[0].args.slice(0, -1), [
+    "-a", "never", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+    "-s", "read-only", "-C", "/private/repositories/safe-project",
+  ]);
+});
+
+test("result sanitizer removes transcript lines and deterministically bounds useful text", async () => {
+  const fake = harness({ codexResult: { success: true, stdout: `command: git status\nUseful analysis ${"x".repeat(7000)}`, stderr: "never public" } });
+  const result = await executeProjectCodexHandoff(handoff(), fake.dependencies);
+  assert.equal(result.resultText.startsWith("Useful analysis"), true);
+  assert.equal(result.resultText.includes("git status"), false);
+  assert.equal(result.resultText.length, PROJECT_CODEX_MAX_RESULT_CHARS);
+  assert.equal(JSON.stringify(result).includes("never public"), false);
 });
 
 test("process invocations use fixed safe argv and shell false", async () => {
@@ -94,10 +126,9 @@ test("Codex prompt contains only approved handoff content and no execution inter
 
 for (const [name, capabilities, error] of [
   ["repository_read", ["isolated_worktree_write"], "missing_repository_read"],
-  ["isolated_worktree_write", ["repository_read"], "missing_isolated_worktree_write"],
 ]) test(`fails closed without ${name} before invoking a runner`, async () => {
   const fake = harness();
-  const result = await executeProjectCodexHandoff(handoff({ approvedCapabilities: capabilities }), fake.dependencies);
+  const result = await executeProjectCodexHandoff(handoff({ effectiveCapabilities: capabilities }), fake.dependencies);
   assert.equal(result.error, error);
   assert.equal(fake.gitCalls.length, 0);
   assert.equal(fake.codexCalls.length, 0);
@@ -163,10 +194,11 @@ test("LÍA does not run tests or commits even when capabilities are approved", a
   assert.equal(programArgs.includes("test"), false);
 });
 
-test("safe successful result never exposes process output or internal fields", async () => {
-  const fake = harness({ codexResult: { success: true, stdout: "SECRET", stderr: "SECRET" } });
+test("safe successful result preserves bounded final output but never stderr or internal fields", async () => {
+  const fake = harness({ codexResult: { success: true, stdout: "Useful result", stderr: "SECRET" } });
   const result = await executeProjectCodexHandoff(handoff(), fake.dependencies);
   const serialized = JSON.stringify(result);
+  assert.equal(result.resultText, "Useful result");
   for (const forbidden of ["SECRET", "repositoryRoot", "worktreePath", "branch", "prompt", "stderr", "/private/repositories"])
     assert.equal(serialized.includes(forbidden), false, forbidden);
 });
