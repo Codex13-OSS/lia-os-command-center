@@ -3,7 +3,7 @@ import { Router } from 'express';
 import type { LiaAgentConfig } from '../config.js';
 import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
 import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
-import { PROJECT_TASK_ID, type ProjectTaskStage, type ProjectTaskStore, type SafeTaskReceipt } from '../contracts/projectTask.js';
+import { PROJECT_TASK_ID, SAFE_TASK_ERROR_MESSAGES, type ProjectTaskStage, type ProjectTaskStore, type SafeTaskError, type SafeTaskReceipt } from '../contracts/projectTask.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
 import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
 import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
@@ -26,6 +26,18 @@ const safeReceipt = (result: Extract<ProjectTaskWorkflowResult, { ok: true }>): 
   ...(result.commit ? { commit: result.commit } : {}),
   });
 };
+const genericFailure = (): SafeTaskError => ({ code: 'workflow_failed', message: SAFE_TASK_ERROR_MESSAGES.workflow_failed });
+const FAILURE_STAGES = new Set(['planning', 'hermes', 'approval', 'codex', 'verification', 'commit']);
+const safeFailure = (result: Extract<ProjectTaskWorkflowResult, { ok: false }>): SafeTaskError => {
+  if (!FAILURE_STAGES.has(result.stage) || !Object.hasOwn(SAFE_TASK_ERROR_MESSAGES, result.error)) return genericFailure();
+  return {
+    stage: result.stage,
+    code: result.error,
+    message: SAFE_TASK_ERROR_MESSAGES[result.error],
+    ...(result.projectId && /^[A-Za-z0-9._-]{1,120}$/.test(result.projectId) ? { projectId: result.projectId } : {}),
+    ...(result.executionId && /^[A-Za-z0-9_-]{1,128}$/.test(result.executionId) ? { executionId: result.executionId } : {}),
+  } as SafeTaskError;
+};
 
 export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: ProjectTasksDependencies): Router {
   const router = Router();
@@ -46,9 +58,9 @@ export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: P
         ? dependencies.executeWorkflow(validation.request, observe)
         : executeProjectTaskWorkflow(config, validation.request, dependencies.registry!, dependencies.verificationRegistry, { onStage: observe });
       void run.then((result) => {
-        if (result.ok) { const receipt = safeReceipt(result); if (receipt) dependencies.store.complete(taskId, receipt); else dependencies.store.fail(taskId, { code: 'workflow_failed', message: 'La ejecución no pudo completarse.' }); }
-        else dependencies.store.fail(taskId, { code: 'workflow_failed', message: 'La ejecución no pudo completarse.', ...(result.projectId && /^[A-Za-z0-9._-]{1,120}$/.test(result.projectId) ? { projectId: result.projectId } : {}), ...(result.executionId && /^[A-Za-z0-9_-]{1,128}$/.test(result.executionId) ? { executionId: result.executionId } : {}) });
-      }).catch(() => dependencies.store.fail(taskId, { code: 'workflow_failed', message: 'La ejecución no pudo completarse.' }));
+        if (result.ok) { const receipt = safeReceipt(result); if (receipt) dependencies.store.complete(taskId, receipt); else dependencies.store.fail(taskId, genericFailure()); }
+        else dependencies.store.fail(taskId, safeFailure(result));
+      }).catch(() => dependencies.store.fail(taskId, genericFailure()));
     });
     const receiptStatus = reserved.record.status;
     res.status(reserved.kind === 'created' ? 202 : 200).json({ ok: true, integration: 'project_task', taskId, status: receiptStatus, alreadyKnown: reserved.kind === 'known' });

@@ -84,10 +84,15 @@ export async function executeProjectTaskWorkflow(
 
   let hermesResult: HermesExecutionResult;
   await observe(dependencies, 'hermes');
-  try {
-    hermesResult = await (dependencies.executeHermes ?? executeHermesReasoningOnly)(config, prompt);
-  } catch {
-    return failed('hermes', 'execution_failed', 'Hermes reasoning did not complete.', identifiers);
+  const executeHermes = dependencies.executeHermes ?? executeHermesReasoningOnly;
+  const retryableHermesErrors = new Set(['timeout', 'execution_failed', 'empty_response']);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      hermesResult = await executeHermes(config, prompt);
+    } catch {
+      hermesResult = { ok: false, error: 'execution_failed' };
+    }
+    if (hermesResult.ok || attempt === 1 || !retryableHermesErrors.has(hermesResult.error)) break;
   }
   if (!hermesResult.ok) {
     return failed('hermes', hermesResult.error, 'Hermes reasoning did not complete.', identifiers);

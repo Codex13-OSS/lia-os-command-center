@@ -39,6 +39,20 @@ test('terminalizes thrown failures and validates invalid and unknown IDs', async
   });
 });
 
+test('GET preserves only the controlled public workflow failure diagnosis', async () => {
+  const app = createApp(loadConfig({}), { projectRegistrySource: registry, projectTasksWorkflowExecutor: async (_request, observe) => {
+    observe('planning'); observe('hermes');
+    return { ok: false, status: 'failed', stage: 'hermes', error: 'execution_failed', summary: 'PRIVATE prompt command stdout stderr /safe/repo', projectId: 'safe' };
+  } });
+  await server(app, async (base) => {
+    await post(base, request()); await new Promise(setImmediate);
+    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+    assert.deepEqual(body.error, { stage: 'hermes', code: 'execution_failed', message: 'Hermes no pudo completar el razonamiento.', projectId: 'safe' });
+    const publicResponse = JSON.stringify(body);
+    for (const privateValue of ['prompt', 'command', 'stdout', 'stderr', '/safe/repo']) assert.equal(publicResponse.includes(privateValue), false);
+  });
+});
+
 test('serves current status promptly while a deliberately slow workflow is still running', async () => {
   const gate = deferred();
   const enteredCodex = deferred();

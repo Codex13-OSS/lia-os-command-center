@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { sanitizeProjectTaskPayload } from '../lia-project-task-public-contract.mjs';
 import test from 'node:test';
 
 const runtimePath = new URL('../lia-production-same-origin-runtime-server.mjs', import.meta.url);
@@ -15,8 +16,32 @@ test('runtime exposes only exact async submit/status routes with short deadlines
   assert.doesNotMatch(source, /spawnSync/);
   assert.match(source, /requestUrl\.pathname === SAME_ORIGIN_PROJECT_TASKS_PATH/);
   assert.match(source, /\^\\\/api\\\/lia-agent\\\/projects\\\/tasks\\\/\(\[\^\/\]\+\)\$/);
-  assert.match(source, /sanitizeTaskPayload/);
+  assert.match(source, /sanitizeProjectTaskPayload/);
   assert.doesNotMatch(source, /startsWith\('\/api\/lia-agent\/projects\/tasks'/);
+});
+
+test('same-origin task sanitizer allowlists terminal diagnostics and strips internal fields', () => {
+  const base = { ok: true, integration: 'project_task', taskId: '550e8400-e29b-41d4-a716-446655440000', status: 'failed', terminal: true };
+  const safe = sanitizeProjectTaskPayload({ ...base, error: { stage: 'hermes', code: 'timeout', message: 'Hermes agotó el tiempo de respuesta.', path: '/private', command: 'rm', stderr: 'secret', stdout: 'secret', prompt: 'secret' } });
+  assert.deepEqual(safe, { ...base, error: { stage: 'hermes', code: 'timeout', message: 'Hermes agotó el tiempo de respuesta.' } });
+  for (const mutation of [
+    { stage: 'hermes', code: 'attacker_code', message: 'safe' },
+    { stage: 'fake', code: 'timeout', message: 'Hermes agotó el tiempo de respuesta.' },
+    { stage: 'hermes', code: 'timeout', message: 'attacker-controlled' },
+  ]) assert.equal(sanitizeProjectTaskPayload({ ...base, error: mutation }), null);
+});
+
+test('frontend maps controlled Hermes failures and retains a generic unknown fallback', async () => {
+  const client = await readFile(new URL('../../frontend/src/integrations/liaProjectTaskClient.ts', import.meta.url), 'utf8');
+  for (const [code, message] of [
+    ['timeout', 'Hermes agotó el tiempo de respuesta.'],
+    ['execution_failed', 'Hermes no pudo completar el razonamiento.'],
+    ['invalid_hermes_json', 'Hermes devolvió una respuesta con formato inválido.'],
+    ['invalid_hermes_proposal', 'Hermes produjo un plan que LÍA rechazó por seguridad o estructura.'],
+  ]) {
+    assert.match(client, new RegExp(`${code}: '${message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
+  }
+  assert.match(client, /FAILURE_MESSAGES\[code\] \?\? 'La ejecución no pudo completarse\.'/);
 });
 
 test('frontend creates new persisted tasks, recovers reloads, retries idempotently and avoids synchronous workflow', async () => {

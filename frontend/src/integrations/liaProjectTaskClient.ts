@@ -3,16 +3,27 @@ import type { LiaProjectTaskPriority } from './liaProjectTaskWorkflowClient';
 export const LIA_PROJECT_TASKS_PATH = '/api/lia-agent/projects/tasks';
 export const LIA_PROJECT_TASK_STORAGE_KEY = 'lia.project-task.pending.v1';
 export type LiaProjectTaskStage = 'accepted' | 'planning' | 'hermes' | 'codex' | 'verification' | 'commit' | 'completed' | 'failed';
+export type LiaProjectTaskFailureStage = 'planning' | 'hermes' | 'approval' | 'codex' | 'verification' | 'commit';
 export type LiaProjectTaskRequest = { projectId: string; instruction: string; priority: LiaProjectTaskPriority; requestedCapabilities: string[] };
 export type LiaProjectTaskReceipt = { executionId: string; status: 'analyzed' | 'ready_for_review' | 'verified' | 'committed'; resultText: string; verification?: { status: 'verified'; checksPassed: number; totalChecks: number }; commit?: string };
 export type PersistedProjectTask = { taskId: string; request: LiaProjectTaskRequest; createdAt: number; lastStatus: LiaProjectTaskStage };
-export type LiaProjectTaskStatus = { kind: 'active'; taskId: string; status: LiaProjectTaskStage } | { kind: 'completed'; taskId: string; status: 'completed'; receipt: LiaProjectTaskReceipt } | { kind: 'failed'; taskId: string; status: 'failed'; message: string } | { kind: 'unknown'; taskId: string } | { kind: 'temporary'; taskId: string } | { kind: 'contract'; taskId: string; message: string };
+export type LiaProjectTaskStatus = { kind: 'active'; taskId: string; status: LiaProjectTaskStage } | { kind: 'completed'; taskId: string; status: 'completed'; receipt: LiaProjectTaskReceipt } | { kind: 'failed'; taskId: string; status: 'failed'; stage?: LiaProjectTaskFailureStage; code: string; message: string } | { kind: 'unknown'; taskId: string } | { kind: 'temporary'; taskId: string } | { kind: 'contract'; taskId: string; message: string };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STAGES = new Set<LiaProjectTaskStage>(['accepted', 'planning', 'hermes', 'codex', 'verification', 'commit', 'completed', 'failed']);
+const FAILURE_STAGES = new Set<LiaProjectTaskFailureStage>(['planning', 'hermes', 'approval', 'codex', 'verification', 'commit']);
+const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
+  timeout: 'Hermes agotó el tiempo de respuesta.',
+  execution_failed: 'Hermes no pudo completar el razonamiento.',
+  empty_response: 'Hermes terminó sin producir una respuesta válida.',
+  invalid_hermes_json: 'Hermes devolvió una respuesta con formato inválido.',
+  invalid_hermes_proposal: 'Hermes produjo un plan que LÍA rechazó por seguridad o estructura.',
+  human_approval_required: 'La tarea requiere aprobación antes de continuar.',
+};
 const CAPABILITIES = ['repository_read', 'isolated_worktree_write', 'run_tests', 'local_commit'];
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const fetchShort = async (url: string, init: RequestInit, ms: number) => { const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), ms); try { return await fetch(url, { ...init, signal: controller.signal }); } finally { clearTimeout(timer); } };
+export const projectTaskFailureMessage = (code: string): string => FAILURE_MESSAGES[code] ?? 'La ejecución no pudo completarse.';
 
 function createProjectTaskId(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
@@ -50,7 +61,10 @@ export async function getProjectTaskStatus(taskId: string): Promise<LiaProjectTa
     if (response.status === 404 && isRecord(body) && body.error === 'task_not_found') return { kind: 'unknown', taskId };
     if (response.status >= 500) return { kind: 'temporary', taskId };
     if (!response.ok || !isRecord(body) || body.ok !== true || body.taskId !== taskId || !STAGES.has(body.status as LiaProjectTaskStage)) return { kind: 'contract', taskId, message: 'La respuesta de estado no es válida.' };
-    if (body.status === 'failed') return { kind: 'failed', taskId, status: 'failed', message: isRecord(body.error) && body.error.message === 'La ejecución no pudo completarse.' ? body.error.message : 'La ejecución no pudo completarse.' };
+    if (body.status === 'failed') {
+      if (!isRecord(body.error) || typeof body.error.code !== 'string' || (body.error.stage !== undefined && !FAILURE_STAGES.has(body.error.stage as LiaProjectTaskFailureStage))) return { kind: 'contract', taskId, message: 'La respuesta de estado no es válida.' };
+      return { kind: 'failed', taskId, status: 'failed', ...(body.error.stage ? { stage: body.error.stage as LiaProjectTaskFailureStage } : {}), code: body.error.code, message: projectTaskFailureMessage(body.error.code) };
+    }
     if (body.status === 'completed' && isRecord(body.receipt)) {
       const receipt = body.receipt;
       const status = String(receipt.status);

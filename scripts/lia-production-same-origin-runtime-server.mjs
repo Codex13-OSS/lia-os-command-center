@@ -5,6 +5,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { PROJECT_TASK_ID, sanitizeProjectTaskPayload } from './lia-project-task-public-contract.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..');
@@ -34,8 +35,6 @@ const PROJECT_SUBMIT_TIMEOUT_MS = 8_000;
 // browser's status deadline. Equal deadlines make the browser abort the useful
 // proxy response under transient backend delay.
 const PROJECT_STATUS_TIMEOUT_MS = 3_000;
-const PROJECT_TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const PROJECT_TASK_STAGES = new Set(['accepted', 'planning', 'hermes', 'codex', 'verification', 'commit', 'completed', 'failed']);
 const ALLOWED_HERMES_ERRORS = new Set(['invalid_query', 'execution_disabled', 'timeout', 'execution_failed', 'empty_response', 'internal_error']);
 const PROJECT_PRIORITIES = new Set(['low', 'normal', 'high', 'critical']);
 const PROJECT_CAPABILITIES = ['repository_read', 'isolated_worktree_write', 'run_tests', 'local_commit'];
@@ -703,30 +702,6 @@ async function proxyProjectTaskWorkflow(request, response) {
 }
 
 function safeTaskError(error = 'backend_unavailable') { return { ok: false, integration: 'project_task', error }; }
-function sanitizeTaskPayload(payload) {
-  if (payload?.ok === false && ['invalid_task_id', 'invalid_task', 'project_not_found', 'project_disabled', 'registry_unavailable', 'task_id_conflict', 'task_registry_full', 'task_not_found'].includes(payload.error)) return safeTaskError(payload.error);
-  if (payload?.ok !== true || payload.integration !== 'project_task' || !PROJECT_TASK_ID.test(payload.taskId) || !PROJECT_TASK_STAGES.has(payload.status)) return null;
-  if (typeof payload.alreadyKnown === 'boolean') return { ok: true, integration: 'project_task', taskId: payload.taskId, status: payload.status, alreadyKnown: payload.alreadyKnown };
-  if (typeof payload.terminal !== 'boolean') return null;
-  const base = { ok: true, integration: 'project_task', taskId: payload.taskId, status: payload.status, terminal: payload.terminal };
-  if (!payload.terminal) return base;
-  if (payload.status === 'failed') {
-    if (payload.error?.code !== 'workflow_failed' || payload.error?.message !== 'La ejecución no pudo completarse.') return null;
-    return { ...base, error: { code: payload.error.code, message: payload.error.message, ...(typeof payload.error.projectId === 'string' ? { projectId: payload.error.projectId } : {}), ...(typeof payload.error.executionId === 'string' ? { executionId: payload.error.executionId } : {}) } };
-  }
-  const r = payload.receipt;
-  if (payload.status !== 'completed' || typeof r?.executionId !== 'string' || !['analyzed', 'ready_for_review', 'verified', 'committed'].includes(r.status) || typeof r.resultText !== 'string' || r.resultText.length < 1 || r.resultText.length > 6000) return null;
-  const receipt = { executionId: r.executionId, status: r.status, resultText: r.resultText };
-  if (r.verification !== undefined) {
-    if (r.verification.status !== 'verified' || !Number.isSafeInteger(r.verification.checksPassed) || !Number.isSafeInteger(r.verification.totalChecks) || r.verification.checksPassed < 0 || r.verification.totalChecks < r.verification.checksPassed) return null;
-    receipt.verification = { status: 'verified', checksPassed: r.verification.checksPassed, totalChecks: r.verification.totalChecks };
-  }
-  if (r.commit !== undefined) { if (!/^[0-9a-fA-F]{40,64}$/.test(r.commit)) return null; receipt.commit = r.commit; }
-  if ((r.status === 'verified' || r.status === 'committed') !== (r.verification !== undefined)) return null;
-  if ((r.status === 'committed') !== (r.commit !== undefined)) return null;
-  return { ...base, receipt };
-}
-
 async function proxyProjectTaskSubmit(request, response) {
   const contentType = String(request.headers['content-type'] || '').toLowerCase();
   if (!contentType.includes('application/json')) return sendJson(response, 415, safeTaskError('unsupported_media_type'));
@@ -742,14 +717,14 @@ async function proxyProjectTaskSubmit(request, response) {
   if (keys.length !== 5 || !['taskId', 'projectId', 'instruction', 'priority', 'requestedCapabilities'].every((key) => keys.includes(key)) || body.projectId !== 'lia-hermes' || instruction.length === 0 || instruction.length > MAX_QUERY_CHARACTERS || !PROJECT_PRIORITIES.has(body.priority) || !validCapabilities) return sendJson(response, 400, safeTaskError('invalid_task'));
   const upstream = await requestLocal(INTERNAL_BACKEND_PORT, PROJECT_TASKS_PATH, { method: 'POST', timeout: PROJECT_SUBMIT_TIMEOUT_MS, maxResponseBytes: MAX_RESPONSE_BYTES, headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!upstream.ok) return sendJson(response, 503, safeTaskError('backend_unavailable'));
-  const sanitized = sanitizeTaskPayload(parseJsonBody(upstream));
+  const sanitized = sanitizeProjectTaskPayload(parseJsonBody(upstream));
   sendJson(response, sanitized ? upstream.statusCode : 502, sanitized ?? safeTaskError('invalid_backend_response'));
 }
 
 async function proxyProjectTaskStatus(taskId, response) {
   const upstream = await requestLocal(INTERNAL_BACKEND_PORT, `${PROJECT_TASKS_PATH}/${taskId}`, { timeout: PROJECT_STATUS_TIMEOUT_MS, maxResponseBytes: MAX_RESPONSE_BYTES, headers: { Accept: 'application/json' } });
   if (!upstream.ok) return sendJson(response, 503, safeTaskError('backend_unavailable'));
-  const sanitized = sanitizeTaskPayload(parseJsonBody(upstream));
+  const sanitized = sanitizeProjectTaskPayload(parseJsonBody(upstream));
   sendJson(response, sanitized ? upstream.statusCode : 502, sanitized ?? safeTaskError('invalid_backend_response'));
 }
 

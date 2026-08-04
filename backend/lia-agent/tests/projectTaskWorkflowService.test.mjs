@@ -132,6 +132,51 @@ test("Hermes failures and strict invalid JSON stop before Codex", async () => {
   }
 });
 
+test("one transient Hermes failure is retried with the identical request and then continues", async () => {
+  const fake = harness();
+  const stages = [];
+  fake.dependencies.onStage = (stage) => stages.push(stage);
+  const original = fake.dependencies.executeHermes;
+  let attempt = 0;
+  fake.dependencies.executeHermes = async (...args) => {
+    fake.calls.hermes.push(args);
+    if (attempt++ === 0) return { ok: false, error: "execution_failed" };
+    const data = JSON.parse(args[1].split("<PROJECT_TASK_DATA>\n")[1].split("\n</PROJECT_TASK_DATA>")[0]);
+    return { ok: true, response: JSON.stringify(proposal({ steps: [{ title: "Implement", objective: "Change only approved files", requiredCapabilities: data.approvedCapabilities }] })) };
+  };
+  void original;
+  const result = await run(request(), fake);
+  assert.equal(result.ok, true);
+  assert.equal(fake.calls.hermes.length, 2);
+  assert.strictEqual(fake.calls.hermes[0][0], fake.calls.hermes[1][0]);
+  assert.equal(fake.calls.hermes[0][1], fake.calls.hermes[1][1]);
+  assert.equal(fake.calls.codex.length, 1);
+  assert.deepEqual(stages, ["planning", "hermes", "codex"]);
+});
+
+test("two transient Hermes failures terminalize with the safe second error", async () => {
+  const fake = harness({ hermes: { ok: false, error: "execution_failed" } });
+  const result = await run(request(), fake);
+  assert.equal(fake.calls.hermes.length, 2);
+  assert.equal(fake.calls.codex.length, 0);
+  assert.equal(result.stage, "hermes");
+  assert.equal(result.error, "execution_failed");
+});
+
+test("invalid Hermes JSON, invalid proposals and approval requirements are never retried", async () => {
+  const cases = [
+    [harness({ hermes: { ok: true, response: "not-json" } }), "invalid_hermes_json"],
+    [harness({ hermes: { ok: true, response: "{}" } }), "invalid_hermes_proposal"],
+    [harness({ hermes: { ok: true, response: JSON.stringify(proposal({ requiresHumanApproval: true, blockedActions: ["deploy"] })) } }), "human_approval_required"],
+  ];
+  for (const [fake, expected] of cases) {
+    const result = await run(request(), fake);
+    assert.equal(fake.calls.hermes.length, 1);
+    assert.equal(fake.calls.codex.length, 0);
+    assert.equal(result.error, expected);
+  }
+});
+
 test("capability escalation is rejected before Codex", async () => {
   const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
     steps: [{ title: "Escalate", objective: "Run tests", requiredCapabilities: ["run_tests"] }],
