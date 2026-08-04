@@ -70,4 +70,6 @@ export async function getProjectTaskStatus(taskId: string): Promise<LiaProjectTa
     return { kind: 'active', taskId, status: body.status as LiaProjectTaskStage };
   } catch { return { kind: 'temporary', taskId }; }
 }
-export function persistProjectTaskStatus(task: PersistedProjectTask, status: LiaProjectTaskStage, storage: Storage = localStorage) { storage.setItem(LIA_PROJECT_TASK_STORAGE_KEY, JSON.stringify({ ...task, lastStatus: status })); }
+export function persistProjectTaskStatus(task: PersistedProjectTask, status: LiaProjectTaskStage, storage: Storage = localStorage): void {
+  try { storage.setItem(LIA_PROJECT_TASK_STORAGE_KEY, JSON.stringify({ ...task, lastStatus: status })); } catch { /* Polling must continue when storage is unavailable. */ }
+}

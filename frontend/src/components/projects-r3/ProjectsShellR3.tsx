@@ -19,6 +19,10 @@ type Props = {
 };
 
 const PROJECT_ID = 'lia-hermes';
+const POLL_INTERVAL_MS = 1500;
+const TEMPORARY_RETRY_MS = 2500;
+const MAX_CONSECUTIVE_TEMPORARY_FAILURES = 8;
+const MAX_POLL_DURATION_MS = 10 * 60 * 1000;
 
 type WorkflowStepState = 'pending' | 'active' | 'completed' | 'failed';
 type WorkflowStep = { label: string; state: WorkflowStepState; stateLabel: string };
@@ -53,6 +57,9 @@ export function ProjectsShellR3(props: Props) {
   const [receipt, setReceipt] = useState<LiaProjectTaskReceipt | null>(null);
   const [stage, setStage] = useState<LiaProjectTaskStage | 'recovering' | null>(null);
   const submittingRef = useRef(false);
+  const mountedRef = useRef(false);
+  const pollRunRef = useRef(0);
+  const sleepRef = useRef<{ run: number; timer: ReturnType<typeof setTimeout>; resolve: () => void } | null>(null);
   const workflowSteps = receipt?.status === 'analyzed'
     ? [
         { label: 'Hermes', state: 'completed', stateLabel: 'Completado' },
@@ -62,22 +69,81 @@ export function ProjectsShellR3(props: Props) {
       ] satisfies WorkflowStep[]
     : getWorkflowSteps(stage);
 
+  const cancelSleep = () => {
+    const sleep = sleepRef.current;
+    if (!sleep) return;
+    clearTimeout(sleep.timer);
+    sleepRef.current = null;
+    sleep.resolve();
+  };
+
   const poll = async (task: PersistedProjectTask) => {
-    setPending(true);
-    while (true) {
+    const run = ++pollRunRef.current;
+    const startedAt = Date.now();
+    let consecutiveTemporaryFailures = 0;
+    cancelSleep();
+    if (mountedRef.current) setPending(true);
+
+    const isCurrent = () => mountedRef.current && pollRunRef.current === run;
+    const wait = (delay: number) => new Promise<void>((resolve) => {
+      let sleep: { run: number; timer: ReturnType<typeof setTimeout>; resolve: () => void };
+      const timer = setTimeout(() => {
+        if (sleepRef.current === sleep) sleepRef.current = null;
+        resolve();
+      }, delay);
+      sleep = { run, timer, resolve };
+      sleepRef.current = sleep;
+    });
+
+    while (isCurrent()) {
+      if (Date.now() - startedAt >= MAX_POLL_DURATION_MS) {
+        setPending(false);
+        submittingRef.current = false;
+        setError('El seguimiento se pausó por tiempo límite. La ejecución puede seguir en curso; recarga la página para reanudarlo.');
+        return;
+      }
       const result = await getProjectTaskStatus(task.taskId);
-      if (result.kind === 'active') { setStage(result.status); persistProjectTaskStatus(task, result.status); await new Promise((resolve) => setTimeout(resolve, 1500)); continue; }
-      if (result.kind === 'temporary') { setError('El estado no está disponible temporalmente. La ejecución puede seguir en curso.'); await new Promise((resolve) => setTimeout(resolve, 2500)); continue; }
+      if (!isCurrent()) return;
+      if (result.kind === 'active') {
+        consecutiveTemporaryFailures = 0;
+        setStage(result.status);
+        setError(null);
+        persistProjectTaskStatus(task, result.status);
+        await wait(POLL_INTERVAL_MS);
+        continue;
+      }
+      if (result.kind === 'temporary') {
+        consecutiveTemporaryFailures += 1;
+        setError('El estado no está disponible temporalmente. La ejecución puede seguir en curso.');
+        if (consecutiveTemporaryFailures >= MAX_CONSECUTIVE_TEMPORARY_FAILURES) {
+          setPending(false);
+          submittingRef.current = false;
+          setError('El seguimiento se pausó tras varios fallos temporales. La ejecución puede seguir en curso; recarga la página para reanudarlo.');
+          return;
+        }
+        await wait(TEMPORARY_RETRY_MS);
+        continue;
+      }
       setPending(false); submittingRef.current = false;
-      if (result.kind === 'completed') { setStage('completed'); setReceipt(result.receipt); setError(null); }
-      else if (result.kind === 'failed') { setStage('failed'); setError(result.message); }
+      if (result.kind === 'completed') { clearPersistedProjectTask(task.taskId); setStage('completed'); setReceipt(result.receipt); setError(null); }
+      else if (result.kind === 'failed') { clearPersistedProjectTask(task.taskId); setStage('failed'); setError(result.message); }
       else if (result.kind === 'unknown') { clearPersistedProjectTask(task.taskId); setStage(null); setError('No se pudo recuperar el estado de esta ejecución. El servicio pudo haberse reiniciado.'); }
       else setError(result.message);
       return;
     }
   };
 
-  useEffect(() => { const saved = loadPersistedProjectTask(); if (saved) { setStage('recovering'); void poll(saved); } }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    const saved = loadPersistedProjectTask();
+    if (saved && saved.lastStatus !== 'completed' && saved.lastStatus !== 'failed') { setStage('recovering'); void poll(saved); }
+    else if (saved) clearPersistedProjectTask(saved.taskId);
+    return () => {
+      mountedRef.current = false;
+      pollRunRef.current += 1;
+      cancelSleep();
+    };
+  }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -96,10 +162,17 @@ export function ProjectsShellR3(props: Props) {
       const task = prepareProjectTask({ projectId: PROJECT_ID, instruction: cleanInstruction, priority });
       setStage('accepted');
       const submitted = await submitProjectTask(task);
-      if (submitted === 'contract') { setError('No fue posible aceptar la tarea.'); submittingRef.current = false; setPending(false); return; }
-      if (submitted === 'ambiguous') await submitProjectTask(task); // Same persisted UUID; backend idempotency is authoritative.
+      if (!mountedRef.current) return;
+      if (submitted === 'contract') { clearPersistedProjectTask(task.taskId); setError('No fue posible aceptar la tarea.'); submittingRef.current = false; setPending(false); return; }
+      if (submitted === 'ambiguous') {
+        await submitProjectTask(task); // Same persisted UUID; backend idempotency is authoritative.
+        if (!mountedRef.current) return;
+      }
       await poll(task);
-    } catch { submittingRef.current = false; setPending(false); setError('No fue posible preparar o enviar la tarea.'); }
+    } catch {
+      submittingRef.current = false;
+      if (mountedRef.current) { setPending(false); setError('No fue posible preparar o enviar la tarea.'); }
+    }
   };
 
   const rail = (
