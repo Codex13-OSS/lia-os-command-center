@@ -1,10 +1,9 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ExecutiveShellR3 } from '../executive-r3/ExecutiveShellR3';
 import {
-  requestLiaProjectTaskWorkflow,
   type LiaProjectTaskPriority,
-  type LiaProjectTaskWorkflowReceipt,
 } from '../../integrations/liaProjectTaskWorkflowClient';
+import { getProjectTaskStatus, loadPersistedProjectTask, persistProjectTaskStatus, prepareProjectTask, submitProjectTask, type LiaProjectTaskReceipt, type LiaProjectTaskStage, type PersistedProjectTask } from '../../integrations/liaProjectTaskClient';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import '../../styles/projectsExecutiveR3.css';
 
@@ -26,8 +25,26 @@ export function ProjectsShellR3(props: Props) {
   const [priority, setPriority] = useState<LiaProjectTaskPriority>('normal');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<LiaProjectTaskWorkflowReceipt | null>(null);
+  const [receipt, setReceipt] = useState<LiaProjectTaskReceipt | null>(null);
+  const [stage, setStage] = useState<LiaProjectTaskStage | 'recovering' | null>(null);
   const submittingRef = useRef(false);
+
+  const poll = async (task: PersistedProjectTask) => {
+    setPending(true);
+    while (true) {
+      const result = await getProjectTaskStatus(task.taskId);
+      if (result.kind === 'active') { setStage(result.status); persistProjectTaskStatus(task, result.status); await new Promise((resolve) => setTimeout(resolve, 1500)); continue; }
+      if (result.kind === 'temporary') { setError('El estado no está disponible temporalmente. La ejecución puede seguir en curso.'); await new Promise((resolve) => setTimeout(resolve, 2500)); continue; }
+      setPending(false); submittingRef.current = false;
+      if (result.kind === 'completed') { setStage('completed'); setReceipt(result.receipt); setError(null); }
+      else if (result.kind === 'failed') { setStage('failed'); setError(result.message); }
+      else if (result.kind === 'unknown') { setStage(null); setError('No se pudo recuperar el estado de esta ejecución. El servicio pudo haberse reiniciado.'); }
+      else setError(result.message);
+      return;
+    }
+  };
+
+  useEffect(() => { const saved = loadPersistedProjectTask(); if (saved) { setStage('recovering'); void poll(saved); } }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -43,13 +60,13 @@ export function ProjectsShellR3(props: Props) {
     setError(null);
     setReceipt(null);
     try {
-      const result = await requestLiaProjectTaskWorkflow({ projectId: PROJECT_ID, instruction: cleanInstruction, priority });
-      if (result.ok) setReceipt(result.receipt);
-      else setError(result.message);
-    } finally {
-      submittingRef.current = false;
-      setPending(false);
-    }
+      const task = prepareProjectTask({ projectId: PROJECT_ID, instruction: cleanInstruction, priority });
+      setStage('accepted');
+      const submitted = await submitProjectTask(task);
+      if (submitted === 'contract') { setError('No fue posible aceptar la tarea.'); submittingRef.current = false; setPending(false); return; }
+      if (submitted === 'ambiguous') await submitProjectTask(task); // Same persisted UUID; backend idempotency is authoritative.
+      await poll(task);
+    } catch { submittingRef.current = false; setPending(false); setError('No fue posible iniciar la recuperación de la tarea.'); }
   };
 
   const rail = (
@@ -102,7 +119,7 @@ export function ProjectsShellR3(props: Props) {
         </form>
 
         <ol className={`lia-projects-r3-stages${pending ? ' is-running' : ''}${receipt ? ' is-complete' : ''}`} aria-label="Flujo de ejecución" aria-live="polite">
-          <li><i />Analizando con Hermes</li><li><i />Ejecutando con Codex</li><li><i />Verificando</li><li><i />Terminado</li>
+          <li><i />{stage === 'recovering' ? 'Recuperando estado…' : stage ? `Estado: ${stage}` : 'Esperando ejecución'}</li>
         </ol>
 
         {error && <div className="lia-projects-r3-error" role="alert">{error}</div>}
@@ -113,7 +130,7 @@ export function ProjectsShellR3(props: Props) {
               <div><dt>Status</dt><dd>{receipt.status}</dd></div>
               <div><dt>Execution ID</dt><dd>{receipt.executionId}</dd></div>
               {receipt.commit && <div><dt>Commit</dt><dd>{receipt.commit}</dd></div>}
-              <div><dt>Resumen de verificación</dt><dd>{receipt.executionSummary}{receipt.verification ? ` · ${receipt.verification.checksPassed}/${receipt.verification.totalChecks} verificaciones aprobadas` : ''}</dd></div>
+              {receipt.verification && <div><dt>Verificación</dt><dd>{receipt.verification.checksPassed}/{receipt.verification.totalChecks} verificaciones aprobadas</dd></div>}
             </dl>
           </article>
         )}

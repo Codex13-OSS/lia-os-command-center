@@ -99,6 +99,15 @@ test("invalid task and registry resolution failures stop during planning", async
   }
 });
 
+test("optional observer reports only real public workflow boundaries", async () => {
+  const fake = harness();
+  const stages = [];
+  fake.dependencies.onStage = (stage) => stages.push(stage);
+  const result = await run(request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]), fake);
+  assert.equal(result.status, "committed");
+  assert.deepEqual(stages, ["planning", "hermes", "codex", "verification", "commit"]);
+});
+
 test("local_commit without run_tests fails before every executor", async () => {
   const fake = harness();
   const result = await run(request(["repository_read", "isolated_worktree_write", "local_commit"]), fake);

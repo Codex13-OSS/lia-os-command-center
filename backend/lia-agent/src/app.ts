@@ -21,6 +21,8 @@ import {
   type ProjectTaskWorkflowExecutor,
 } from './routes/projectTaskWorkflow.js';
 import { createStatusRouter } from './routes/status.js';
+import { createProjectTasksRouter, type ProjectTasksDependencies } from './routes/projectTasks.js';
+import { InMemoryProjectTaskStore } from './services/inMemoryProjectTaskStore.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
 import type { HermesQueryExecutor } from './services/hermesExecutor.js';
 
@@ -32,6 +34,8 @@ export type LiaAgentDependencies = {
   projectTaskExecutionExecutor?: ProjectTaskExecutionExecutor;
   projectVerificationRegistry?: ProjectVerificationRegistry;
   projectTaskWorkflowExecutor?: ProjectTaskWorkflowExecutor;
+  projectTaskStore?: ProjectTasksDependencies['store'];
+  projectTasksWorkflowExecutor?: ProjectTasksDependencies['executeWorkflow'];
 };
 
 export function createApp(
@@ -78,6 +82,12 @@ export function createApp(
     projectRegistrySource: dependencies.projectRegistrySource,
     projectVerificationRegistry: dependencies.projectVerificationRegistry,
     executeWorkflow: dependencies.projectTaskWorkflowExecutor,
+  }));
+  app.use(createProjectTasksRouter(config, {
+    store: dependencies.projectTaskStore ?? new InMemoryProjectTaskStore(),
+    registry: dependencies.projectRegistrySource,
+    verificationRegistry: dependencies.projectVerificationRegistry,
+    executeWorkflow: dependencies.projectTasksWorkflowExecutor,
   }));
   app.use(notFound);
   app.use(errorHandler);

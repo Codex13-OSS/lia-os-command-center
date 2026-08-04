@@ -28,7 +28,13 @@ export interface ProjectTaskWorkflowDependencies {
   executeCodex?: CodexExecutor;
   executeVerification?: VerificationExecutor;
   executeCommit?: CommitExecutor;
+  /** Internal observability only. Receives no workflow internals. */
+  onStage?: (stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => void | Promise<void>;
 }
+
+const observe = async (dependencies: ProjectTaskWorkflowDependencies, stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => {
+  try { await dependencies.onStage?.(stage); } catch { /* State publication must not alter execution. */ }
+};
 
 const failed = (
   stage: Extract<ProjectTaskWorkflowResult, { ok: false }>['stage'],
@@ -44,6 +50,7 @@ export async function executeProjectTaskWorkflow(
   verificationRegistry?: ProjectVerificationRegistry,
   dependencies: ProjectTaskWorkflowDependencies = {},
 ): Promise<ProjectTaskWorkflowResult> {
+  await observe(dependencies, 'planning');
   const planning = await planProjectTask(request, projectRegistrySource);
   if (!planning.ok) {
     return failed('planning', planning.error, 'Project task planning failed.');
@@ -78,6 +85,7 @@ export async function executeProjectTaskWorkflow(
   }
 
   let hermesResult: HermesExecutionResult;
+  await observe(dependencies, 'hermes');
   try {
     hermesResult = await (dependencies.executeHermes ?? executeHermesReasoningOnly)(config, prompt);
   } catch {
@@ -108,6 +116,7 @@ export async function executeProjectTaskWorkflow(
   }
 
   let codexResult: ProjectCodexExecutionResult;
+  await observe(dependencies, 'codex');
   try {
     codexResult = await (dependencies.executeCodex ?? executeProjectCodexHandoff)(handoffResult.handoff);
   } catch {
@@ -139,6 +148,7 @@ export async function executeProjectTaskWorkflow(
   }
 
   let verificationResult: ProjectCodexVerificationResult;
+  await observe(dependencies, 'verification');
   try {
     verificationResult = await (dependencies.executeVerification ?? verifyProjectCodexWorkspace)(
       plan.repositoryRoot,
@@ -182,6 +192,7 @@ export async function executeProjectTaskWorkflow(
   }
 
   let commitResult: ProjectCodexCommitResult;
+  await observe(dependencies, 'commit');
   try {
     commitResult = await (dependencies.executeCommit ?? commitVerifiedProjectCodexWorkspace)(
       plan.repositoryRoot,
