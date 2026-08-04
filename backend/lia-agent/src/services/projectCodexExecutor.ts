@@ -9,7 +9,9 @@ import type {
 import {
   PROJECT_CODEX_WORKTREE_ROOT,
   discardProjectCodexWorkspace,
+  hydrateProjectCodexNodeModules,
   resolveProjectCodexWorkspace,
+  type ProjectCodexDependencyHydrator,
 } from "./projectCodexWorkspace.js";
 
 export { PROJECT_CODEX_WORKTREE_ROOT } from "./projectCodexWorkspace.js";
@@ -38,6 +40,7 @@ export interface ProjectCodexExecutorDependencies {
   codexRunner?: ProjectCodexProcessRunner;
   executionIdFactory?: () => string;
   ensureWorktreeRoot?: () => Promise<void>;
+  hydrateDependencies?: ProjectCodexDependencyHydrator;
   timeoutMs?: number;
 }
 
@@ -162,7 +165,7 @@ export async function executeProjectCodexHandoff(
   } catch {
     return failed(executionId, "worktree_create_failed");
   }
-  let stage: "create" | "execute" = "create";
+  let stage: "create" | "hydrate" | "execute" = "create";
   try {
     worktreeAttempted = true;
     const added = await gitRunner({
@@ -173,6 +176,11 @@ export async function executeProjectCodexHandoff(
     if (!added.success) {
       result = failed(executionId, added.reason === "timeout" ? "timeout" : "worktree_create_failed");
     } else {
+      stage = "hydrate";
+      await (dependencies.hydrateDependencies ?? hydrateProjectCodexNodeModules)({
+        sourceRoot: handoff.repositoryRoot,
+        worktreeRoot: worktreePath,
+      });
       stage = "execute";
       const executed = await codexRunner({
         file: "codex",
@@ -187,7 +195,7 @@ export async function executeProjectCodexHandoff(
         : failed(executionId, executed.reason === "timeout" ? "timeout" : "codex_execution_failed");
     }
   } catch {
-    result = failed(executionId, stage === "create" ? "worktree_create_failed" : "codex_execution_failed");
+    result = failed(executionId, stage === "execute" ? "codex_execution_failed" : "worktree_create_failed");
   } finally {
     if (worktreeAttempted && !result?.success) {
       const cleaned = await discardProjectCodexWorkspace(handoff.repositoryRoot, executionId, {

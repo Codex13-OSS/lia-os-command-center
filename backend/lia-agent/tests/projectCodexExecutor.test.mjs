@@ -40,6 +40,7 @@ function harness({ codexResult, gitResults } = {}) {
     dependencies: {
       executionIdFactory: () => "execution-123",
       ensureWorktreeRoot: async () => {},
+      hydrateDependencies: async () => {},
       gitRunner: async (request) => {
         gitCalls.push(request);
         return gitResults?.[index++] ?? { success: true, stdout: "", stderr: "" };
@@ -228,4 +229,34 @@ test("simulated integration retains the worktree after fake git add and fake Cod
   assert.equal(fake.gitCalls.length, 1);
   assert.equal(fake.gitCalls[0].args.includes("add"), true);
   assert.equal(fake.gitCalls.some((call) => call.args.includes("remove")), false);
+});
+
+test("hydrates after worktree creation and before Codex execution", async () => {
+  const events = [];
+  const fake = harness();
+  fake.dependencies.gitRunner = async (request) => {
+    events.push(request.args.includes("add") ? "worktree" : "cleanup");
+    fake.gitCalls.push(request);
+    return { success: true, stdout: "", stderr: "" };
+  };
+  fake.dependencies.hydrateDependencies = async () => { events.push("hydrate"); };
+  fake.dependencies.codexRunner = async (request) => {
+    events.push("codex");
+    fake.codexCalls.push(request);
+    return { success: true, stdout: "", stderr: "" };
+  };
+  assert.equal((await executeProjectCodexHandoff(handoff(), fake.dependencies)).success, true);
+  assert.deepEqual(events, ["worktree", "hydrate", "codex"]);
+});
+
+test("hydration failure prevents Codex, cleans the worktree, and exposes no internals", async () => {
+  const fake = harness();
+  fake.dependencies.hydrateDependencies = async () => { throw new Error("SECRET /private/source /tmp/worktree"); };
+  const result = await executeProjectCodexHandoff(handoff(), fake.dependencies);
+  assert.equal(result.error, "worktree_create_failed");
+  assert.equal(fake.codexCalls.length, 0);
+  assert.equal(fake.gitCalls.length, 2);
+  assert.equal(fake.gitCalls[1].args.includes("remove"), true);
+  for (const forbidden of ["SECRET", "/private/source", "/tmp/worktree", "repositoryRoot", "worktreePath", "stdout", "stderr"])
+    assert.equal(JSON.stringify(result).includes(forbidden), false);
 });
