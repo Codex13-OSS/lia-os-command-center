@@ -16,12 +16,23 @@ test('runtime exposes only exact async submit/status routes with short deadlines
   assert.doesNotMatch(source, /startsWith\('\/api\/lia-agent\/projects\/tasks'/);
 });
 
-test('frontend persists before submit, reuses UUID, polls server stages and does not use synchronous workflow', async () => {
+test('frontend creates new persisted tasks, recovers reloads, retries idempotently and avoids synchronous workflow', async () => {
   const [client, component] = await Promise.all([readFile(clientPath, 'utf8'), readFile(componentPath, 'utf8')]);
   assert.ok(client.indexOf('storage.setItem(LIA_PROJECT_TASK_STORAGE_KEY') < client.indexOf('export async function submitProjectTask'));
-  assert.match(client, /const existing = loadPersistedProjectTask\(storage\); if \(existing\) return existing/);
+  assert.doesNotMatch(client, /const existing = loadPersistedProjectTask\(storage\)/);
+  assert.match(client, /taskId: createProjectTaskId\(\)/);
+  assert.match(client, /typeof globalThis\.crypto\?\.randomUUID === 'function'/);
+  assert.match(client, /globalThis\.crypto\.getRandomValues\(new Uint8Array\(16\)\)/);
+  assert.match(client, /bytes\[6\].*0x40/);
+  assert.match(client, /bytes\[8\].*0x80/);
+  assert.match(client, /export function clearPersistedProjectTask\(taskId: string/);
+  assert.match(client, /persisted\?\.taskId === taskId/);
   assert.match(client, /body\.status as LiaProjectTaskStage/);
-  assert.match(component, /loadPersistedProjectTask\(\)/);
+  assert.match(component, /useEffect\(\(\) => \{ const saved = loadPersistedProjectTask\(\)/);
+  assert.match(component, /result\.kind === 'unknown'\) \{ clearPersistedProjectTask\(task\.taskId\)/);
+  assert.match(component, /if \(submitted === 'ambiguous'\) await submitProjectTask\(task\)/);
+  assert.match(component, /No fue posible preparar o enviar la tarea\./);
+  assert.doesNotMatch(component, /No fue posible iniciar la recuperación de la tarea\./);
   assert.match(component, /LÍA · Hermes · Codex conectados/);
   assert.match(component, /Recuperando ejecución…/);
   assert.match(component, /LÍA está lista para recibir una tarea\./);

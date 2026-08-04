@@ -14,12 +14,27 @@ const CAPABILITIES = ['repository_read', 'isolated_worktree_write', 'run_tests',
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const fetchShort = async (url: string, init: RequestInit, ms: number) => { const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), ms); try { return await fetch(url, { ...init, signal: controller.signal }); } finally { clearTimeout(timer); } };
 
+function createProjectTaskId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  if (typeof globalThis.crypto?.getRandomValues !== 'function') throw new Error('Secure UUID generation is unavailable.');
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export function loadPersistedProjectTask(storage: Storage = localStorage): PersistedProjectTask | null {
   try { const value: unknown = JSON.parse(storage.getItem(LIA_PROJECT_TASK_STORAGE_KEY) ?? 'null'); if (!isRecord(value) || !UUID.test(String(value.taskId)) || !isRecord(value.request) || !STAGES.has(value.lastStatus as LiaProjectTaskStage)) return null; return value as unknown as PersistedProjectTask; } catch { return null; }
 }
+export function clearPersistedProjectTask(taskId: string, storage: Storage = localStorage): void {
+  try {
+    const persisted = loadPersistedProjectTask(storage);
+    if (persisted?.taskId === taskId) storage.removeItem(LIA_PROJECT_TASK_STORAGE_KEY);
+  } catch { /* A storage denial must not trap the UI in polling. */ }
+}
 export function prepareProjectTask(input: { projectId: string; instruction: string; priority: LiaProjectTaskPriority }, storage: Storage = localStorage): PersistedProjectTask {
-  const existing = loadPersistedProjectTask(storage); if (existing) return existing;
-  const task: PersistedProjectTask = { taskId: crypto.randomUUID(), request: { projectId: input.projectId.trim(), instruction: input.instruction.trim(), priority: input.priority, requestedCapabilities: CAPABILITIES }, createdAt: Date.now(), lastStatus: 'accepted' };
+  const task: PersistedProjectTask = { taskId: createProjectTaskId(), request: { projectId: input.projectId.trim(), instruction: input.instruction.trim(), priority: input.priority, requestedCapabilities: CAPABILITIES }, createdAt: Date.now(), lastStatus: 'accepted' };
   storage.setItem(LIA_PROJECT_TASK_STORAGE_KEY, JSON.stringify(task)); // Must precede the first network request.
   return task;
 }

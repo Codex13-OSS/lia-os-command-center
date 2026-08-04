@@ -3,7 +3,7 @@ import { ExecutiveShellR3 } from '../executive-r3/ExecutiveShellR3';
 import {
   type LiaProjectTaskPriority,
 } from '../../integrations/liaProjectTaskWorkflowClient';
-import { getProjectTaskStatus, loadPersistedProjectTask, persistProjectTaskStatus, prepareProjectTask, submitProjectTask, type LiaProjectTaskReceipt, type LiaProjectTaskStage, type PersistedProjectTask } from '../../integrations/liaProjectTaskClient';
+import { clearPersistedProjectTask, getProjectTaskStatus, loadPersistedProjectTask, persistProjectTaskStatus, prepareProjectTask, submitProjectTask, type LiaProjectTaskReceipt, type LiaProjectTaskStage, type PersistedProjectTask } from '../../integrations/liaProjectTaskClient';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import '../../styles/projectsExecutiveR3.css';
 
@@ -64,7 +64,7 @@ export function ProjectsShellR3(props: Props) {
       setPending(false); submittingRef.current = false;
       if (result.kind === 'completed') { setStage('completed'); setReceipt(result.receipt); setError(null); }
       else if (result.kind === 'failed') { setStage('failed'); setError(result.message); }
-      else if (result.kind === 'unknown') { setStage(null); setError('No se pudo recuperar el estado de esta ejecución. El servicio pudo haberse reiniciado.'); }
+      else if (result.kind === 'unknown') { clearPersistedProjectTask(task.taskId); setStage(null); setError('No se pudo recuperar el estado de esta ejecución. El servicio pudo haberse reiniciado.'); }
       else setError(result.message);
       return;
     }
@@ -92,7 +92,7 @@ export function ProjectsShellR3(props: Props) {
       if (submitted === 'contract') { setError('No fue posible aceptar la tarea.'); submittingRef.current = false; setPending(false); return; }
       if (submitted === 'ambiguous') await submitProjectTask(task); // Same persisted UUID; backend idempotency is authoritative.
       await poll(task);
-    } catch { submittingRef.current = false; setPending(false); setError('No fue posible iniciar la recuperación de la tarea.'); }
+    } catch { submittingRef.current = false; setPending(false); setError('No fue posible preparar o enviar la tarea.'); }
   };
 
   const rail = (
