@@ -3,8 +3,17 @@ import { loadConfig } from './config.js';
 import { createAgendaSqliteReadSource } from './services/agendaSqliteReadSource.js';
 import { createProjectRegistryFileSource } from './services/projectRegistryFileSource.js';
 import { createFileProjectVerificationRegistry } from './services/projectVerificationFileSource.js';
+import { createProjectTaskStore } from './services/projectTaskStoreFactory.js';
+import { reconcileInterruptedTasksIfSupported } from './services/projectTaskReconciliation.js';
 
 const config = loadConfig();
+const projectTaskStore = createProjectTaskStore(config);
+
+// Reconcile tasks interrupted by a previous service restart before the app
+// starts listening. A failure here fails startup closed: app.listen never
+// runs and there is no silent fallback to the in-memory store.
+reconcileInterruptedTasksIfSupported(projectTaskStore);
+
 const dependencies = {
   ...(config.agendaSqlitePath === ''
     ? {}
@@ -18,6 +27,7 @@ const dependencies = {
         projectVerificationRegistry:
           createFileProjectVerificationRegistry(config.projectVerificationPath),
       }),
+  projectTaskStore,
 };
 const app = createApp(config, dependencies);
 const server = app.listen(config.port, config.host, () => {
@@ -33,6 +43,15 @@ server.on('error', (error) => {
 });
 
 function shutdown() {
+  const closeStore = (projectTaskStore as { close?: () => void }).close;
+  if (typeof closeStore === 'function') {
+    try {
+      closeStore();
+    } catch {
+      // Best-effort close during shutdown; server exit proceeds regardless.
+    }
+  }
+
   server.close(() => {
     process.exit(0);
   });

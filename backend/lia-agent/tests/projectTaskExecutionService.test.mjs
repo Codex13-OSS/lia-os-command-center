@@ -31,10 +31,14 @@ const registry = (overrides = {}) => ({
 const proposal = (overrides = {}) => ({
   summary: "Apply a contained change",
   steps: [{
+    id: "step-1",
     title: "Implement",
     objective: "Change only approved files",
+    role: "implementer",
+    dependsOn: [],
     requiredCapabilities: ["isolated_worktree_write"],
   }],
+  executionMode: "direct",
   requiresHumanApproval: false,
   blockedActions: [],
   ...overrides,
@@ -120,7 +124,7 @@ test("uses strict JSON parsing without repair and does not invoke Codex", async 
 
 test("rejects capability escalation before Codex", async () => {
   const escalated = proposal({
-    steps: [{ title: "Escalate", objective: "Run tests", requiredCapabilities: ["run_tests"] }],
+    steps: [{ id: "step-1", title: "Escalate", objective: "Run tests", role: "implementer", dependsOn: [], requiredCapabilities: ["run_tests"] }],
   });
   const fake = harness({ hermesResult: { ok: true, response: JSON.stringify(escalated) } });
   const result = await executeProjectTask(config, request(), registry(), fake.dependencies);

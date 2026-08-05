@@ -24,7 +24,10 @@ import {
 } from '../dist/services/projectRegistry.js';
 import { createProjectRegistryFileSource } from '../dist/services/projectRegistryFileSource.js';
 import { planProjectTask } from '../dist/services/projectExecutionPlanner.js';
-import { buildProjectOrchestrationPrompt } from '../dist/services/projectOrchestrationPrompt.js';
+import {
+  buildProjectOrchestrationPrompt,
+  buildProjectOrchestrationRepairPrompt,
+} from '../dist/services/projectOrchestrationPrompt.js';
 import { orchestrateProjectTask } from '../dist/services/projectOrchestrationService.js';
 import {
   buildHermesReasoningInvocation,
@@ -1972,9 +1975,20 @@ const orchestrationPlan = (approvedCapabilities = ["repository_read", "run_tests
   approvedCapabilities,
 });
 
+const orchestrationStep = (overrides = {}) => ({
+  id: "step-1",
+  title: "Inspeccionar",
+  objective: "Entender la tarea",
+  role: "orchestrator",
+  dependsOn: [],
+  requiredCapabilities: ["repository_read"],
+  ...overrides,
+});
+
 const orchestrationProposal = (overrides = {}) => ({
   summary: "Propuesta segura",
-  steps: [{ title: "Inspeccionar", objective: "Entender la tarea", requiredCapabilities: ["repository_read"] }],
+  steps: [orchestrationStep()],
+  executionMode: "direct",
   requiresHumanApproval: false,
   blockedActions: [],
   ...overrides,
@@ -2003,13 +2017,14 @@ function reasoningConfig(overrides = {}) {
   };
 }
 
-test('project orchestration defaults to the reasoning-only executor, not chat Hermes', async () => {
+test('project orchestration defaults to the Supervisor executor, not chat Hermes', async () => {
   const source = await readFile(
     new URL('../src/services/projectOrchestrationService.ts', import.meta.url),
     'utf8',
   );
 
-  assert.match(source, /executeQuery \?\? executeHermesReasoningOnly/);
+  assert.match(source, /executeQuery \?\? executeHermesSupervisor/);
+  assert.equal(source.includes('executeHermesReasoningOnly'), false);
   assert.equal(source.includes('executeHermesQuery'), false);
 });
 
@@ -2111,21 +2126,23 @@ test("project orchestration builds a safe prompt without repository paths", () =
 test("project orchestration accepts and normalizes a valid proposal", () => {
   const result = validateProjectOrchestrationProposal(orchestrationProposal({
     summary: "  Propuesta segura  ",
+    executionMode: "delegated",
     steps: [
-      { title: "  Inspeccionar  ", objective: "  Entender la tarea  ", requiredCapabilities: ["repository_read", "repository_read"] },
-      { title: "  Verificar  ", objective: "  Ejecutar las pruebas autorizadas  ", requiredCapabilities: ["run_tests"] },
+      { id: "step-1", title: "  Inspeccionar  ", objective: "  Entender la tarea  ", role: "orchestrator", dependsOn: [], requiredCapabilities: ["repository_read", "repository_read"] },
+      { id: "step-2", title: "  Verificar  ", objective: "  Ejecutar las pruebas autorizadas  ", role: "reviewer", dependsOn: ["step-1"], requiredCapabilities: ["run_tests"] },
     ],
   }), orchestrationPlan());
   assert.equal(result.success, true);
   assert.equal(result.proposal.summary, "Propuesta segura");
   assert.deepEqual(result.proposal.steps[0].requiredCapabilities, ["repository_read"]);
   assert.equal(result.proposal.steps[1].title, "Verificar");
+  assert.deepEqual(result.proposal.steps[1].dependsOn, ["step-1"]);
 });
 
 test("project orchestration rejects unknown fields", () => {
   const topLevel = validateProjectOrchestrationProposal({ ...orchestrationProposal(), command: "do something" }, orchestrationPlan());
   const stepLevel = validateProjectOrchestrationProposal(orchestrationProposal({
-    steps: [{ title: "Paso", objective: "Objetivo", requiredCapabilities: [], branch: "main", repositoryRoot: "/private" }],
+    steps: [{ id: "step-1", title: "Paso", objective: "Objetivo", role: "implementer", dependsOn: [], requiredCapabilities: [], branch: "main", repositoryRoot: "/private" }],
   }), orchestrationPlan());
   assert.equal(topLevel.success, false);
   assert.equal(stepLevel.success, false);
@@ -2133,7 +2150,7 @@ test("project orchestration rejects unknown fields", () => {
 
 test("project orchestration rejects capabilities not approved by LÍA", () => {
   const result = validateProjectOrchestrationProposal(orchestrationProposal({
-    steps: [{ title: "Probar", objective: "Ejecutar pruebas", requiredCapabilities: ["run_tests"] }],
+    steps: [{ id: "step-1", title: "Probar", objective: "Ejecutar pruebas", role: "implementer", dependsOn: [], requiredCapabilities: ["run_tests"] }],
   }), orchestrationPlan(["repository_read"]));
   assert.equal(result.success, false);
 });
@@ -2147,10 +2164,456 @@ test("project orchestration validates and deduplicates blocked actions", () => {
 });
 
 test("project orchestration enforces structural limits", () => {
-  const step = { title: "Paso", objective: "Objetivo", requiredCapabilities: [] };
+  const step = { id: "step-1", title: "Paso", objective: "Objetivo", role: "orchestrator", dependsOn: [], requiredCapabilities: [] };
   assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: [] }), orchestrationPlan()).success, false);
-  assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: Array.from({ length: 13 }, () => ({ ...step })) }), orchestrationPlan()).success, false);
+  assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ steps: Array.from({ length: 13 }, (_, index) => ({ ...step, id: `step-${index}` })) }), orchestrationPlan()).success, false);
   assert.equal(validateProjectOrchestrationProposal(orchestrationProposal({ summary: "   " }), orchestrationPlan()).success, false);
+});
+
+test("project orchestration accepts a valid direct proposal", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "direct",
+    steps: [orchestrationStep({ role: "orchestrator" })],
+  }), orchestrationPlan());
+  assert.equal(result.success, true);
+  assert.equal(result.proposal.executionMode, "direct");
+  assert.equal(result.proposal.steps[0].role, "orchestrator");
+  assert.deepEqual(result.proposal.steps[0].dependsOn, []);
+});
+
+test("project orchestration accepts a valid delegated proposal with multiple roles", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "research", role: "researcher", dependsOn: [], requiredCapabilities: ["repository_read"] }),
+      orchestrationStep({ id: "arch", role: "architect", dependsOn: ["research"], requiredCapabilities: ["repository_read"] }),
+      orchestrationStep({ id: "impl", role: "implementer", dependsOn: ["arch"], requiredCapabilities: ["isolated_worktree_write"] }),
+      orchestrationStep({ id: "review", role: "reviewer", dependsOn: ["impl"], requiredCapabilities: ["run_tests"] }),
+    ],
+  }), orchestrationPlan(["repository_read", "isolated_worktree_write", "run_tests"]));
+  assert.equal(result.success, true);
+  assert.equal(result.proposal.executionMode, "delegated");
+  assert.deepEqual(result.proposal.steps.map((step) => step.role), ["researcher", "architect", "implementer", "reviewer"]);
+});
+
+test("project orchestration rejects an invalid step role", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [orchestrationStep({ role: "deployer" })],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.path === "$.steps[0].role"));
+});
+
+test("project orchestration rejects duplicate step ids", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [
+      orchestrationStep(),
+      orchestrationStep({ title: "Duplicado", objective: "Mismo id", requiredCapabilities: [] }),
+    ],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "must be unique"));
+});
+
+test("project orchestration rejects dependsOn referencing a missing step id", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [orchestrationStep({ dependsOn: ["missing-step"] })],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "references an unknown step id"));
+});
+
+test("project orchestration rejects self dependency", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [orchestrationStep({ dependsOn: ["step-1"] })],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "must not reference itself"));
+});
+
+test("project orchestration rejects a dependency cycle A -> B -> A", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [
+      orchestrationStep({ id: "step-a", dependsOn: ["step-b"] }),
+      orchestrationStep({ id: "step-b", dependsOn: ["step-a"] }),
+    ],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => /dependency cycle/.test(error.message)));
+});
+
+test("project orchestration rejects a capability not approved by LÍA even with supervisor metadata", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a", role: "researcher" }),
+      orchestrationStep({ id: "step-b", role: "implementer", dependsOn: ["step-a"], requiredCapabilities: ["run_tests"] }),
+    ],
+  }), orchestrationPlan(["repository_read"]));
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "contains a capability not approved by LÍA"));
+});
+
+test("project orchestration rejects forbidden supervisor internals as extra fields", () => {
+  const topLevel = validateProjectOrchestrationProposal({
+    ...orchestrationProposal(),
+    subagent_id: "sub-1",
+    child_session_id: "session-1",
+    parent_session_id: "session-0",
+    transcripts: ["t"],
+    shell: "/bin/sh",
+    command: "npm test",
+  }, orchestrationPlan());
+  const stepLevel = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [orchestrationStep({ prompt: "internal", shell: "/bin/sh" })],
+  }), orchestrationPlan());
+  assert.equal(topLevel.success, false);
+  assert.equal(stepLevel.success, false);
+});
+
+test("blocked actions still require human approval under the supervisor contract", () => {
+  const valid = validateProjectOrchestrationProposal(orchestrationProposal({
+    blockedActions: ["deploy"],
+    requiresHumanApproval: true,
+  }), orchestrationPlan());
+  const invalid = validateProjectOrchestrationProposal(orchestrationProposal({
+    blockedActions: ["deploy"],
+    requiresHumanApproval: false,
+  }), orchestrationPlan());
+  assert.equal(valid.success, true);
+  assert.equal(valid.proposal.requiresHumanApproval, true);
+  assert.equal(invalid.success, false);
+});
+
+test("supervisor metadata never expands effective capabilities in the Codex handoff", () => {
+  const result = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: ["repository_read", "run_tests"] }),
+    orchestrationProposal({
+      executionMode: "delegated",
+      steps: [
+        orchestrationStep({ id: "step-a", role: "researcher", dependsOn: [], requiredCapabilities: ["repository_read"] }),
+        orchestrationStep({ id: "step-b", role: "reviewer", dependsOn: ["step-a"], requiredCapabilities: ["run_tests"] }),
+      ],
+    }),
+  );
+  assert.equal(result.success, true);
+  assert.deepEqual(result.handoff.effectiveCapabilities, ["repository_read", "run_tests"]);
+  assert.deepEqual(result.handoff.proposal.steps, [
+    { title: "Inspeccionar", objective: "Entender la tarea", requiredCapabilities: ["repository_read"] },
+    { title: "Inspeccionar", objective: "Entender la tarea", requiredCapabilities: ["run_tests"] },
+  ]);
+  assert.deepEqual(Object.keys(result.handoff.proposal.steps[0]).sort(), ["objective", "requiredCapabilities", "title"]);
+  assert.equal(Object.hasOwn(result.handoff, "executionMode"), false);
+  assert.equal(Object.hasOwn(result.handoff, "role"), false);
+  assert.equal(Object.hasOwn(result.handoff, "dependsOn"), false);
+});
+
+test("direct executionMode rejects more than one step", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "direct",
+    steps: [orchestrationStep(), orchestrationStep({ id: "step-2" })],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "direct executionMode must contain exactly 1 step"));
+});
+
+test("direct executionMode rejects a dependency", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "direct",
+    steps: [orchestrationStep({ dependsOn: ["step-1"] })],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "direct executionMode must not declare dependencies"));
+});
+
+test("delegated executionMode rejects a single step", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [orchestrationStep()],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "delegated executionMode must contain at least 2 steps"));
+});
+
+test("duplicate normalized ids inside a dependsOn array are rejected", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a" }),
+      orchestrationStep({ id: "step-b", dependsOn: ["step-a", "step-a"] }),
+    ],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.path === "$.steps[1].dependsOn" && error.message === "must not contain duplicate step ids"));
+  const whitespaceNormalized = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a" }),
+      orchestrationStep({ id: "step-b", dependsOn: ["step-a", " step-a "] }),
+    ],
+  }), orchestrationPlan());
+  assert.equal(whitespaceNormalized.success, false);
+  assert.ok(whitespaceNormalized.errors.some((error) => error.message === "must not contain duplicate step ids"));
+});
+
+test("role metadata cannot grant a capability", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a", role: "implementer" }),
+      orchestrationStep({ id: "step-b", role: "implementer", dependsOn: ["step-a"], requiredCapabilities: ["local_commit"] }),
+    ],
+  }), orchestrationPlan(["repository_read"]));
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "contains a capability not approved by LÍA"));
+});
+
+test("executionMode metadata cannot grant a capability", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a" }),
+      orchestrationStep({ id: "step-b", dependsOn: ["step-a"], requiredCapabilities: ["run_tests"] }),
+    ],
+  }), orchestrationPlan(["repository_read"]));
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "contains a capability not approved by LÍA"));
+});
+
+test("requiresHumanApproval=true with empty blockedActions fails closed", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    requiresHumanApproval: true,
+    blockedActions: [],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.path === "$.requiresHumanApproval"));
+});
+
+test("step id length boundary: 64 characters valid, 65 rejected", () => {
+  const maxId = "a".repeat(64);
+  const valid = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [orchestrationStep({ id: maxId })],
+  }), orchestrationPlan());
+  assert.equal(valid.success, true);
+  assert.equal(valid.proposal.steps[0].id, maxId);
+  const tooLong = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [orchestrationStep({ id: "a".repeat(65) })],
+  }), orchestrationPlan());
+  assert.equal(tooLong.success, false);
+  assert.ok(tooLong.errors.some((error) => error.path === "$.steps[0].id"));
+});
+
+test("step count boundary: 12 steps valid, 13 rejected", () => {
+  const twelve = Array.from({ length: 12 }, (_, index) => orchestrationStep({
+    id: `step-${index}`,
+    dependsOn: index === 0 ? [] : [`step-${index - 1}`],
+  }));
+  const valid = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: twelve,
+  }), orchestrationPlan());
+  assert.equal(valid.success, true);
+  assert.equal(valid.proposal.steps.length, 12);
+  const rejected = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [...twelve, orchestrationStep({ id: "step-12", dependsOn: ["step-11"] })],
+  }), orchestrationPlan());
+  assert.equal(rejected.success, false);
+  assert.ok(rejected.errors.some((error) => error.message === "must contain at most 12 steps"));
+});
+
+test("dependsOn boundary: 12 entries pass the length check, 13 are rejected", () => {
+  const twelveDependencies = Array.from({ length: 12 }, (_, index) => `missing-${index}`);
+  const atLimit = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a" }),
+      orchestrationStep({ id: "step-b", dependsOn: twelveDependencies }),
+    ],
+  }), orchestrationPlan());
+  assert.equal(atLimit.success, false);
+  assert.equal(atLimit.errors.some((error) => error.message === "must contain at most 12 entries"), false);
+  const overLimit = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a" }),
+      orchestrationStep({ id: "step-b", dependsOn: [...twelveDependencies, "missing-12"] }),
+    ],
+  }), orchestrationPlan());
+  assert.equal(overLimit.success, false);
+  assert.ok(overLimit.errors.some((error) => error.message === "must contain at most 12 entries"));
+});
+
+test("blockedActions boundary: 6 entries valid, 7 rejected", () => {
+  const all = ["push", "merge", "deploy", "production_write", "database_write", "secret_access"];
+  const valid = validateProjectOrchestrationProposal(orchestrationProposal({
+    blockedActions: all,
+    requiresHumanApproval: true,
+  }), orchestrationPlan());
+  assert.equal(valid.success, true);
+  assert.deepEqual(valid.proposal.blockedActions, all);
+  const rejected = validateProjectOrchestrationProposal(orchestrationProposal({
+    blockedActions: [...all, "unknown_action"],
+    requiresHumanApproval: true,
+  }), orchestrationPlan());
+  assert.equal(rejected.success, false);
+  assert.ok(rejected.errors.some((error) => error.message === "must contain at most 6 actions"));
+});
+
+test("summary length boundary: 1200 characters valid, 1201 rejected", () => {
+  const valid = validateProjectOrchestrationProposal(orchestrationProposal({
+    summary: "a".repeat(1200),
+  }), orchestrationPlan());
+  assert.equal(valid.success, true);
+  const rejected = validateProjectOrchestrationProposal(orchestrationProposal({
+    summary: "a".repeat(1201),
+  }), orchestrationPlan());
+  assert.equal(rejected.success, false);
+  assert.ok(rejected.errors.some((error) => error.path === "$.summary"));
+});
+
+test("non-string dependsOn entries are rejected", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    steps: [orchestrationStep({ dependsOn: [123] })],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.path === "$.steps[0].dependsOn" && error.message === "must be a string"));
+});
+
+test("production_write blocked action cannot be handed off to Codex", () => {
+  const result = buildProjectCodexHandoff(
+    codexHandoffPlan(),
+    orchestrationProposal({
+      blockedActions: ["production_write"],
+      requiresHumanApproval: true,
+    }),
+  );
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "blocked actions cannot be handed off to Codex"));
+});
+
+test("database_write blocked action cannot be handed off to Codex", () => {
+  const result = buildProjectCodexHandoff(
+    codexHandoffPlan(),
+    orchestrationProposal({
+      blockedActions: ["database_write"],
+      requiresHumanApproval: true,
+    }),
+  );
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "blocked actions cannot be handed off to Codex"));
+});
+
+test("a longer dependency cycle is rejected", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a", dependsOn: ["step-b"] }),
+      orchestrationStep({ id: "step-b", dependsOn: ["step-c"] }),
+      orchestrationStep({ id: "step-c", dependsOn: ["step-d"] }),
+      orchestrationStep({ id: "step-d", dependsOn: ["step-a"] }),
+    ],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => /dependency cycle/.test(error.message)));
+});
+
+test("duplicate step ids with a cycle remain fail-closed without index ambiguity", () => {
+  const result = validateProjectOrchestrationProposal(orchestrationProposal({
+    executionMode: "delegated",
+    steps: [
+      orchestrationStep({ id: "step-a", dependsOn: [] }),
+      orchestrationStep({ id: "step-a", dependsOn: ["step-b"] }),
+      orchestrationStep({ id: "step-b", dependsOn: ["step-a"] }),
+    ],
+  }), orchestrationPlan());
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some((error) => error.message === "must be unique"));
+  assert.ok(result.errors.some((error) => error.path === "$.steps[1].id"));
+});
+
+test("effectiveCapabilities remains a subset of approvedCapabilities", () => {
+  const result = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: ["repository_read", "run_tests", "isolated_worktree_write"] }),
+    orchestrationProposal({
+      executionMode: "delegated",
+      steps: [
+        orchestrationStep({ id: "step-a", requiredCapabilities: ["repository_read"] }),
+        orchestrationStep({ id: "step-b", dependsOn: ["step-a"], requiredCapabilities: ["run_tests"] }),
+      ],
+    }),
+  );
+  assert.equal(result.success, true);
+  for (const capability of result.handoff.effectiveCapabilities) {
+    assert.ok(result.handoff.approvedCapabilities.includes(capability));
+  }
+  assert.equal(result.handoff.effectiveCapabilities.length <= result.handoff.approvedCapabilities.length, true);
+});
+
+test("id, role, dependsOn and executionMode never become execution authority", () => {
+  const first = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: ["repository_read"] }),
+    orchestrationProposal({
+      executionMode: "delegated",
+      steps: [
+        orchestrationStep({ id: "step-a", role: "researcher", requiredCapabilities: ["repository_read"] }),
+        orchestrationStep({ id: "step-b", role: "reviewer", dependsOn: ["step-a"], requiredCapabilities: ["repository_read"] }),
+      ],
+    }),
+  );
+  const second = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: ["repository_read"] }),
+    orchestrationProposal({
+      executionMode: "delegated",
+      steps: [
+        orchestrationStep({ id: "x", role: "architect", requiredCapabilities: ["repository_read"] }),
+        orchestrationStep({ id: "y", role: "implementer", dependsOn: ["x"], requiredCapabilities: ["repository_read"] }),
+      ],
+    }),
+  );
+  assert.equal(first.success, true);
+  assert.equal(second.success, true);
+  assert.deepEqual(first.handoff.effectiveCapabilities, ["repository_read"]);
+  assert.deepEqual(second.handoff.effectiveCapabilities, ["repository_read"]);
+  for (const key of ["id", "role", "dependsOn", "executionMode"]) {
+    assert.equal(Object.hasOwn(first.handoff, key), false);
+    assert.equal(Object.hasOwn(second.handoff, key), false);
+    assert.equal(Object.hasOwn(first.handoff.proposal.steps[0], key), false);
+    assert.equal(Object.hasOwn(first.handoff.proposal.steps[1], key), false);
+  }
+});
+
+test("project orchestration prompt includes the supervisor schema", () => {
+  const prompt = buildProjectOrchestrationPrompt(orchestrationPlan());
+  assert.match(prompt, /"executionMode":"direct"/);
+  assert.match(prompt, /"role":"orchestrator"/);
+  assert.match(prompt, /"dependsOn":\[\]/);
+  assert.match(prompt, /"id":"step-1"/);
+  assert.match(prompt, /"requiredCapabilities":\["repository_read"\]/);
+  assert.match(prompt, /Valores permitidos para executionMode/);
+  assert.match(prompt, /Valores permitidos para role/);
+  assert.match(prompt, /La metadata jamás concede capacidades ni autoridad/);
+  assert.match(prompt, /se derivan exclusivamente de requiredCapabilities/);
+  assert.match(prompt, /subconjunto MÍNIMO de requiredCapabilities/);
+  assert.match(prompt, /No solicites el techo completo de approvedCapabilities/);
+  assert.doesNotMatch(prompt, /direct\|delegated/);
+  assert.doesNotMatch(prompt, /architect\|implementer\|reviewer\|researcher\|orchestrator/);
+});
+
+test("project orchestration repair prompt includes the supervisor schema", () => {
+  const prompt = buildProjectOrchestrationRepairPrompt(orchestrationPlan());
+  assert.match(prompt, /"executionMode":"direct"/);
+  assert.match(prompt, /"role":"orchestrator"/);
+  assert.match(prompt, /"dependsOn":\[\]/);
+  assert.match(prompt, /"id":"step-1"/);
+  assert.match(prompt, /"requiredCapabilities":\["repository_read"\]/);
+  assert.match(prompt, /Valores permitidos para executionMode/);
+  assert.match(prompt, /Valores permitidos para role/);
+  assert.match(prompt, /La metadata jamás concede capacidades ni autoridad/);
+  assert.match(prompt, /exactamente id, title, objective, role, dependsOn y requiredCapabilities/);
+  assert.match(prompt, /No copies el techo completo de approvedCapabilities/);
+  assert.doesNotMatch(prompt, /direct \| delegated/);
+  assert.doesNotMatch(prompt, /architect \| implementer \| reviewer \| researcher \| orchestrator/);
 });
 
 const codexHandoffPlan = (overrides = {}) => ({
@@ -2215,11 +2678,7 @@ test("internal Codex handoff rejects capability escalation", () => {
   const result = buildProjectCodexHandoff(
     codexHandoffPlan({ approvedCapabilities: ["repository_read"] }),
     orchestrationProposal({
-      steps: [{
-        title: "Probar",
-        objective: "Ejecutar pruebas",
-        requiredCapabilities: ["run_tests"],
-      }],
+      steps: [orchestrationStep({ requiredCapabilities: ["run_tests"] })],
     }),
   );
   assert.equal(result.success, false);
@@ -2278,15 +2737,22 @@ test('project orchestration service completes a valid simulated flow without lea
   const calls = [];
   const proposal = {
     summary: 'Inspección y verificación seguras',
+    executionMode: 'delegated',
     steps: [
       {
+        id: 'step-1',
         title: 'Inspeccionar',
         objective: 'Revisar el repositorio',
+        role: 'researcher',
+        dependsOn: [],
         requiredCapabilities: ['repository_read'],
       },
       {
+        id: 'step-2',
         title: 'Verificar',
         objective: 'Ejecutar las pruebas aprobadas',
+        role: 'reviewer',
+        dependsOn: ['step-1'],
         requiredCapabilities: ['run_tests'],
       },
     ],
@@ -2375,9 +2841,13 @@ test('project orchestration service rejects non-pure Hermes JSON without repair'
 test('project orchestration service rejects a proposal using an unapproved capability', async () => {
   const response = JSON.stringify({
     summary: 'Intento fuera de permisos',
+    executionMode: 'delegated',
     steps: [{
+      id: 'step-1',
       title: 'Probar',
       objective: 'Ejecutar pruebas',
+      role: 'implementer',
+      dependsOn: [],
       requiredCapabilities: ['run_tests'],
     }],
     requiresHumanApproval: false,

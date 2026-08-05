@@ -7,7 +7,7 @@ import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
 import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
 import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
 import type { HermesExecutionResult, HermesQueryExecutor } from './hermesExecutor.js';
-import { executeHermesReasoningOnly } from './hermesReasoningExecutor.js';
+import { executeHermesSupervisor } from './hermesSupervisorExecutor.js';
 import { commitVerifiedProjectCodexWorkspace } from './projectCodexCommit.js';
 import { executeProjectCodexHandoff } from './projectCodexExecutor.js';
 import { buildProjectCodexHandoff } from './projectCodexHandoff.js';
@@ -117,7 +117,7 @@ export async function executeProjectTaskWorkflow(
 
   let hermesResult: HermesExecutionResult;
   await observe(dependencies, 'hermes');
-  const executeHermes = dependencies.executeHermes ?? executeHermesReasoningOnly;
+  const executeHermes = dependencies.executeHermes ?? executeHermesSupervisor;
   const retryableHermesErrors = new Set(['timeout', 'execution_failed', 'empty_response']);
   for (let attempt = 0; ; attempt += 1) {
     try {

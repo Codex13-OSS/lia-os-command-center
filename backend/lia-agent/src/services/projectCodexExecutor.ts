@@ -13,6 +13,17 @@ import {
   resolveProjectCodexWorkspace,
   type ProjectCodexDependencyHydrator,
 } from "./projectCodexWorkspace.js";
+import {
+  buildLiaCodexExecArgs,
+  DEEPSEEK_API_KEY_ENV,
+  loadLiaCodexDeepSeekSecret,
+  normalizeLiaCodexProviderMode,
+  resolveLiaCodexProviderMode,
+  runLiaCodexProviderAttempts,
+  type LiaCodexDeepSeekSecretLoader,
+  type LiaCodexProvider,
+  type LiaCodexProviderMode,
+} from "./projectCodexProvider.js";
 
 export { PROJECT_CODEX_WORKTREE_ROOT } from "./projectCodexWorkspace.js";
 export const PROJECT_CODEX_MAX_PROMPT_CHARS = 16_000;
@@ -26,6 +37,8 @@ export interface ProjectCodexProcessRequest {
   shell: false;
   timeoutMs: number;
   maxOutputBytes: number;
+  /** Optional explicit child environment; defaults to inheriting the parent process env. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export type ProjectCodexProcessResult =
@@ -43,6 +56,15 @@ export interface ProjectCodexExecutorDependencies {
   ensureWorktreeRoot?: () => Promise<void>;
   hydrateDependencies?: ProjectCodexDependencyHydrator;
   timeoutMs?: number;
+  /** Explicit routing override; defaults to LIA_CODEX_PROVIDER_MODE (auto). */
+  providerMode?: LiaCodexProviderMode;
+  /**
+   * Execution-time DeepSeek secret loader. Defaults to the secure loader that
+   * checks process.env and then the protected env file; only invoked when the
+   * executor is about to run DeepSeek. Injected in tests so no real secret is
+   * ever required.
+   */
+  deepSeekSecretLoader?: LiaCodexDeepSeekSecretLoader;
 }
 
 function appendBounded(current: Buffer, chunk: Buffer, limit: number): Buffer {
@@ -55,6 +77,7 @@ export const runProjectCodexProcess: ProjectCodexProcessRunner = (request) =>
     const child = spawn(request.file, [...request.args], {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      ...(request.env === undefined ? {} : { env: request.env }),
     });
     let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
     let stderr: Buffer<ArrayBufferLike> = Buffer.alloc(0);
@@ -128,10 +151,55 @@ export function sanitizeProjectCodexResult(value: string): string {
     .split(/\r?\n/)
     .filter((line) => !/^\s*(?:stderr:|stdout:|env(?:ironment)?:|command:|cmd:|\$\s|>\s*(?:git|npm|node|codex)\b)/i.test(line))
     .join("\n")
-    .replace(/(^|[\s(])\/(?:[^\s)]+\/)*[^\s),.;]*/g, "$1[ruta omitida]")
+    // Redact absolute Unix paths even when immediately preceded by common
+    // punctuation (whitespace, "(", "=", quotes, brackets, separators).
+    // ":" is intentionally excluded so prose URLs like https://example.com
+    // survive; only absolute filesystem paths are removed.
+    .replace(/(^|[\s(=,;<>\[\]{}"'!?])\/(?:[^\s)]+\/)*[^\s),.;]*/g, "$1[ruta omitida]")
     .trim().replace(/\n{3,}/g, "\n\n");
   return normalized.slice(0, PROJECT_CODEX_MAX_RESULT_CHARS)
     || "Análisis completado sin observaciones adicionales.";
+}
+
+interface LiaCodexProviderAttemptContext {
+  sandbox: "read-only" | "workspace-write";
+  cwd: string;
+  prompt: string;
+}
+
+/**
+ * Runs one Codex provider attempt. DeepSeek loads its secret here, at
+ * execution time only, and receives it through the child process environment
+ * without mutating the global process.env or placing the value in argv.
+ */
+async function runLiaCodexProviderAttempt(
+  provider: LiaCodexProvider,
+  context: LiaCodexProviderAttemptContext,
+  dependencies: {
+    codexRunner: ProjectCodexProcessRunner;
+    deepSeekSecretLoader: LiaCodexDeepSeekSecretLoader;
+    processOptions: Pick<ProjectCodexProcessRequest, "shell" | "timeoutMs" | "maxOutputBytes">;
+  },
+): Promise<ProjectCodexProcessResult> {
+  let env: NodeJS.ProcessEnv | undefined;
+  if (provider === "deepseek") {
+    const secret = await dependencies.deepSeekSecretLoader();
+    if (secret === undefined || secret.trim() === "") {
+      return { success: false, reason: "failed", stdout: "", stderr: "" };
+    }
+    env = { ...process.env, [DEEPSEEK_API_KEY_ENV]: secret };
+  }
+  return dependencies.codexRunner({
+    file: "codex",
+    args: buildLiaCodexExecArgs({
+      provider,
+      sandbox: context.sandbox,
+      cwd: context.cwd,
+      prompt: context.prompt,
+    }),
+    ...dependencies.processOptions,
+    ...(env === undefined ? {} : { env }),
+  });
 }
 
 function failed(
@@ -154,13 +222,27 @@ export async function executeProjectCodexHandoff(
   if (!handoff.effectiveCapabilities.includes("repository_read")) {
     return failed(executionId, "missing_repository_read");
   }
+  // Capability-boundary invariant: effectiveCapabilities MUST remain a subset
+  // of the LÍA-approved ceiling. A violation means the binding set contains a
+  // capability LÍA never authorized, so this is an authorization failure, not
+  // a missing read. Fail closed with the existing capability-authorization
+  // error contract (missing_isolated_worktree_write) rather than the
+  // misleading missing_repository_read.
   if (handoff.effectiveCapabilities.some((capability) => !handoff.approvedCapabilities.includes(capability))) {
-    return failed(executionId, "missing_repository_read");
+    return failed(executionId, "missing_isolated_worktree_write");
   }
 
   const prompt = buildPrompt(handoff);
   if (prompt.length > PROJECT_CODEX_MAX_PROMPT_CHARS) {
     return failed(executionId, "prompt_too_large");
+  }
+  let providerMode: LiaCodexProviderMode;
+  try {
+    providerMode = dependencies.providerMode === undefined
+      ? resolveLiaCodexProviderMode()
+      : normalizeLiaCodexProviderMode(dependencies.providerMode);
+  } catch {
+    return failed(executionId, "codex_execution_failed");
   }
   const workspace = resolveProjectCodexWorkspace(executionId);
   if (!workspace.success) {
@@ -169,27 +251,26 @@ export async function executeProjectCodexHandoff(
   const { worktreePath, branch } = workspace;
   const gitRunner = dependencies.gitRunner ?? runProjectCodexProcess;
   const codexRunner = dependencies.codexRunner ?? runProjectCodexProcess;
+  const deepSeekSecretLoader = dependencies.deepSeekSecretLoader ?? loadLiaCodexDeepSeekSecret;
   const timeoutMs = dependencies.timeoutMs ?? PROJECT_CODEX_TIMEOUT_MS;
   const processOptions = { shell: false as const, timeoutMs, maxOutputBytes: PROJECT_CODEX_MAX_OUTPUT_BYTES };
   const mayWrite = handoff.effectiveCapabilities.includes("isolated_worktree_write");
   if (!mayWrite) {
     try {
-      const executed = await codexRunner({
-        file: "codex",
-        args: [
-          "-a", "never", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-          "-s", "read-only", "-C", handoff.repositoryRoot, prompt,
-        ],
-        ...processOptions,
-      });
-      return executed.success
+      const executed = await runLiaCodexProviderAttempts(providerMode, (provider) =>
+        runLiaCodexProviderAttempt(provider, {
+          sandbox: "read-only",
+          cwd: handoff.repositoryRoot,
+          prompt,
+        }, { codexRunner, deepSeekSecretLoader, processOptions }));
+      return executed.result.success
         ? {
             success: true, executionId, status: "completed",
             summary: "Codex analysis completed.",
-            resultText: sanitizeProjectCodexResult(executed.stdout),
+            resultText: sanitizeProjectCodexResult(executed.result.stdout),
             outcome: "analysis_completed",
           }
-        : failed(executionId, executed.reason === "timeout" ? "timeout" : "codex_execution_failed");
+        : failed(executionId, executed.result.reason === "timeout" ? "timeout" : "codex_execution_failed");
     } catch {
       return failed(executionId, "codex_execution_failed");
     }
@@ -219,22 +300,20 @@ export async function executeProjectCodexHandoff(
         worktreeRoot: worktreePath,
       });
       stage = "execute";
-      const executed = await codexRunner({
-        file: "codex",
-        args: [
-          "-a", "never", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-          "-s", "workspace-write", "-C", worktreePath, prompt,
-        ],
-        ...processOptions,
-      });
-      result = executed.success
+      const executed = await runLiaCodexProviderAttempts(providerMode, (provider) =>
+        runLiaCodexProviderAttempt(provider, {
+          sandbox: "workspace-write",
+          cwd: worktreePath,
+          prompt,
+        }, { codexRunner, deepSeekSecretLoader, processOptions }));
+      result = executed.result.success
         ? {
             success: true, executionId, status: "completed",
             summary: "Codex execution completed in an isolated worktree.",
-            resultText: sanitizeProjectCodexResult(executed.stdout),
+            resultText: sanitizeProjectCodexResult(executed.result.stdout),
             outcome: "modification_completed",
           }
-        : failed(executionId, executed.reason === "timeout" ? "timeout" : "codex_execution_failed");
+        : failed(executionId, executed.result.reason === "timeout" ? "timeout" : "codex_execution_failed");
     }
   } catch {
     result = failed(executionId, stage === "execute" ? "codex_execution_failed" : "worktree_create_failed");

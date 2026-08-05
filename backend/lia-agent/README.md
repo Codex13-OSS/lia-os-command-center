@@ -72,6 +72,7 @@ npm run legacy:start
 - `LIA_AGENT_PORT`: puerto de escucha. Por defecto `3014`; valores invalidos se rechazan.
 - `LIA_AGENT_CORS_ORIGINS`: allowlist separada por comas. Por defecto no habilita CORS externo.
 - `LIA_AGENT_LOG_LEVEL`: `silent`, `error`, `warn` o `info`.
+- `LIA_PROJECT_TASK_SQLITE_PATH`: ruta absoluta opcional a la base SQLite de tareas de proyecto. Vacía mantiene el store en memoria.
 - `LIA_HERMES_ROOT`: ruta absoluta opcional al checkout de Hermes. Vacía mantiene la integración sin configurar.
 
 No se leen archivos `.env` y no se imprime el entorno completo.

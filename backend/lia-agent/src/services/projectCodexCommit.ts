@@ -130,15 +130,23 @@ function parseNulSeparatedPaths(output: string): string[] | undefined {
   return paths;
 }
 
+/**
+ * Commit a verified isolated workspace locally.
+ *
+ * Authorization: local_commit is granted ONLY from the BINDING effective
+ * capability set passed here. The LÍA-approved ceiling (approvedCapabilities)
+ * is never consulted and never authorizes a commit; callers must pass exactly
+ * the handoff's effectiveCapabilities.
+ */
 export async function commitVerifiedProjectCodexWorkspace(
   repositoryRoot: string,
   executionId: string,
-  approvedCapabilities: readonly ProjectTaskRequestedCapability[],
+  effectiveCapabilities: readonly ProjectTaskRequestedCapability[],
   verificationResult: ProjectCodexVerificationResult,
   dependencies: ProjectCodexCommitDependencies = {},
 ): Promise<ProjectCodexCommitResult> {
   void repositoryRoot;
-  if (!approvedCapabilities.includes("local_commit")) return failed(executionId, "local_commit_not_approved");
+  if (!effectiveCapabilities.includes("local_commit")) return failed(executionId, "local_commit_not_approved");
   if (!verificationResult.success || verificationResult.status !== "verified" || verificationResult.executionId !== executionId) {
     return failed(executionId, "workspace_not_verified");
   }

@@ -5,7 +5,7 @@ import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
 import type { ProjectTaskExecutionResult } from '../contracts/projectTaskExecution.js';
 import type { HermesExecutionResult, HermesQueryExecutor } from './hermesExecutor.js';
-import { executeHermesReasoningOnly } from './hermesReasoningExecutor.js';
+import { executeHermesSupervisor } from './hermesSupervisorExecutor.js';
 import { executeProjectCodexHandoff } from './projectCodexExecutor.js';
 import { buildProjectCodexHandoff } from './projectCodexHandoff.js';
 import { planProjectTask } from './projectExecutionPlanner.js';
@@ -44,7 +44,7 @@ export async function executeProjectTask(
 
   let hermesResult: HermesExecutionResult;
   try {
-    hermesResult = await (dependencies.executeHermes ?? executeHermesReasoningOnly)(config, prompt);
+    hermesResult = await (dependencies.executeHermes ?? executeHermesSupervisor)(config, prompt);
   } catch {
     return { ok: false, status: 'failed', error: 'execution_failed' };
   }

@@ -41,7 +41,11 @@ export const SAFE_TASK_ERROR_MESSAGES = {
   git_commit_failed: 'No se pudo crear el commit local.',
   git_revision_failed: 'No se pudo validar el commit local.',
   workflow_failed: 'La ejecución no pudo completarse.',
-} as const satisfies Record<ProjectTaskWorkflowError | 'workflow_failed', string>;
+  workflow_interrupted: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.',
+} as const satisfies Record<
+  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted',
+  string
+>;
 export type SafeTaskErrorCode = keyof typeof SAFE_TASK_ERROR_MESSAGES;
 type SafeTaskErrorDetails = {
   stage?: ProjectTaskWorkflowStage;
@@ -64,4 +68,13 @@ export interface ProjectTaskStore {
   transition(taskId: string, status: Exclude<ProjectTaskStage, 'accepted' | 'completed' | 'failed'>): void;
   complete(taskId: string, receipt: SafeTaskReceipt): void;
   fail(taskId: string, error: SafeTaskError): void;
+}
+
+/**
+ * Optional durable reconciliation capability. Stores that survive restarts
+ * expose it so the bootstrap can mark tasks interrupted by a service restart
+ * as failed before the server starts listening.
+ */
+export interface ProjectTaskReconciler {
+  reconcileInterruptedTasks(): number;
 }

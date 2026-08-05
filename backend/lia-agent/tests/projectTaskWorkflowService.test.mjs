@@ -33,10 +33,14 @@ const verificationRegistry = { resolve: () => ({ projectId: "approved-project", 
 const proposal = (overrides = {}) => ({
   summary: "Apply a contained change",
   steps: [{
+    id: "step-1",
     title: "Implement",
     objective: "Change only approved files",
+    role: "implementer",
+    dependsOn: [],
     requiredCapabilities: ["isolated_worktree_write"],
   }],
+  executionMode: "direct",
   requiresHumanApproval: false,
   blockedActions: [],
   ...overrides,
@@ -52,7 +56,7 @@ function harness(overrides = {}) {
         if (overrides.hermesThrow) throw new Error("PRIVATE");
         const data = JSON.parse(args[1].split("<PROJECT_TASK_DATA>\n")[1].split("\n</PROJECT_TASK_DATA>")[0]);
         return (overrides.hermesSequence?.shift() ?? overrides.hermes) ?? { ok: true, response: JSON.stringify(proposal({
-          steps: [{ title: "Implement", objective: "Change only approved files", requiredCapabilities: data.approvedCapabilities }],
+          steps: [{ id: "step-1", title: "Implement", objective: "Change only approved files", role: "implementer", dependsOn: [], requiredCapabilities: data.approvedCapabilities }],
         })) };
       },
       executeCodex: async (...args) => {
@@ -143,7 +147,7 @@ test("one transient Hermes failure is retried with the identical request and the
     fake.calls.hermes.push(args);
     if (attempt++ === 0) return { ok: false, error: "execution_failed" };
     const data = JSON.parse(args[1].split("<PROJECT_TASK_DATA>\n")[1].split("\n</PROJECT_TASK_DATA>")[0]);
-    return { ok: true, response: JSON.stringify(proposal({ steps: [{ title: "Implement", objective: "Change only approved files", requiredCapabilities: data.approvedCapabilities }] })) };
+    return { ok: true, response: JSON.stringify(proposal({ steps: [{ id: "step-1", title: "Implement", objective: "Change only approved files", role: "implementer", dependsOn: [], requiredCapabilities: data.approvedCapabilities }] })) };
   };
   void original;
   const result = await run(request(), fake);
@@ -219,7 +223,7 @@ test("two structurally invalid proposals fail closed after one repair", async ()
 
 test("capability escalation is rejected before Codex", async () => {
   const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
-    steps: [{ title: "Escalate", objective: "Run tests", requiredCapabilities: ["run_tests"] }],
+    steps: [{ id: "step-1", title: "Escalate", objective: "Run tests", role: "implementer", dependsOn: [], requiredCapabilities: ["run_tests"] }],
   })) } });
   const result = await run(request(), fake);
   assert.equal(result.stage, "hermes");
@@ -252,7 +256,7 @@ test("blocked actions never retry or reach Codex", async () => {
 test("repair prompt preserves the same task data and never expands approved capabilities", async () => {
   const fake = harness({ hermesSequence: [
     { ok: true, response: "not-json" }, { ok: true, response: JSON.stringify(proposal({
-      steps: [{ title: "Read", objective: "Inspect", requiredCapabilities: ["repository_read"] }],
+      steps: [{ id: "step-1", title: "Read", objective: "Inspect", role: "researcher", dependsOn: [], requiredCapabilities: ["repository_read"] }],
     })) },
   ] });
   await run(request(["repository_read"]), fake);
@@ -289,7 +293,7 @@ test("Codex success without run_tests is ready for review", async () => {
 test("all-capability ceiling with repository_read-only proposal succeeds as analyzed without verification or commit", async () => {
   const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
     summary: "Inspect only",
-    steps: [{ title: "Inspect", objective: "Report findings", requiredCapabilities: ["repository_read"] }],
+    steps: [{ id: "step-1", title: "Inspect", objective: "Report findings", role: "researcher", dependsOn: [], requiredCapabilities: ["repository_read"] }],
   })) }, codex: {
     success: true, executionId: "execution-123", status: "completed", summary: "Codex analysis completed.",
     resultText: "Useful repository analysis.", outcome: "analysis_completed",
@@ -342,6 +346,20 @@ test("verification success without local_commit returns verified", async () => {
     verification: { status: "verified", checksPassed: 2, totalChecks: 2 },
   });
   assert.equal(fake.calls.commit.length, 0);
+});
+
+test("approved ceiling with local_commit never commits unless the binding effective set includes it", async () => {
+  const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
+    steps: [{
+      id: "step-1", title: "Implement", objective: "Change only approved files",
+      role: "implementer", dependsOn: [], requiredCapabilities: ["isolated_worktree_write", "run_tests"],
+    }],
+  })) } });
+  const result = await run(request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]), fake);
+  assert.equal(result.status, "verified");
+  assert.equal(fake.calls.commit.length, 0);
+  assert.deepEqual(fake.calls.codex[0][0].effectiveCapabilities, ["isolated_worktree_write", "run_tests"]);
+  assert.equal(fake.calls.codex[0][0].approvedCapabilities.includes("local_commit"), true);
 });
 
 test("complete simulated LÍA -> Hermes -> Codex -> verification -> local commit flow", async () => {

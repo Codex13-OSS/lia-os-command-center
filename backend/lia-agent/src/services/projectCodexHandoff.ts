@@ -146,6 +146,18 @@ export function buildProjectCodexHandoff(
   const proposal: ProjectOrchestrationProposal = proposalValidation.proposal;
   const effectiveCapabilities = proposal.steps.flatMap((step) => step.requiredCapabilities)
     .filter((capability, index, all) => all.indexOf(capability) === index);
+  // Binding execution set invariant: effectiveCapabilities MUST remain a
+  // subset of approvedCapabilities. Validation already guarantees it; this
+  // check fails closed in case the invariant is ever violated.
+  if (effectiveCapabilities.some((capability) => !plan.approvedCapabilities.includes(capability))) {
+    return {
+      success: false,
+      errors: [{
+        path: "$.proposal.effectiveCapabilities",
+        message: "must be a subset of approvedCapabilities",
+      }],
+    };
+  }
   return {
     success: true,
     handoff: {

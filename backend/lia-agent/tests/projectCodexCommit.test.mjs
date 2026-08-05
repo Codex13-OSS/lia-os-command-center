@@ -50,7 +50,9 @@ function harness(results = []) {
 
 test("local_commit is required before any process runs", async () => {
   const fake = harness();
-  const result = await commitVerifiedProjectCodexWorkspace("/private/repo", executionId, ["repository_read"], verified, fake.dependencies);
+  // Even a rich binding set that lacks local_commit (write + run_tests present)
+  // must not authorize a commit: only local_commit itself in the binding set does.
+  const result = await commitVerifiedProjectCodexWorkspace("/private/repo", executionId, ["repository_read", "isolated_worktree_write", "run_tests"], verified, fake.dependencies);
   assert.equal(result.success, false);
   assert.equal(result.error, "local_commit_not_approved");
   assert.equal(fake.calls.length, 0);
