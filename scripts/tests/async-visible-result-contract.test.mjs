@@ -39,10 +39,14 @@ test('same-origin task sanitizer allowlists terminal diagnostics and strips inte
   const base = { ok: true, integration: 'project_task', taskId: '550e8400-e29b-41d4-a716-446655440000', status: 'failed', terminal: true };
   const safe = sanitizeProjectTaskPayload({ ...base, error: { stage: 'hermes', code: 'timeout', message: 'Hermes agotó el tiempo de respuesta.', path: '/private', command: 'rm', stderr: 'secret', stdout: 'secret', prompt: 'secret' } });
   assert.deepEqual(safe, { ...base, error: { stage: 'hermes', code: 'timeout', message: 'Hermes agotó el tiempo de respuesta.' } });
+  const interrupted = sanitizeProjectTaskPayload({ ...base, error: { code: 'workflow_interrupted', message: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.' } });
+  assert.deepEqual(interrupted, { ...base, error: { code: 'workflow_interrupted', message: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.' } });
   for (const mutation of [
     { stage: 'hermes', code: 'attacker_code', message: 'safe' },
     { stage: 'fake', code: 'timeout', message: 'Hermes agotó el tiempo de respuesta.' },
     { stage: 'hermes', code: 'timeout', message: 'attacker-controlled' },
+    { stage: 'commit', code: 'workflow_interrupted', message: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.' },
+    { code: 'workflow_interrupted', message: 'attacker-controlled' },
   ]) assert.equal(sanitizeProjectTaskPayload({ ...base, error: mutation }), null);
 });
 
@@ -53,6 +57,7 @@ test('frontend maps controlled Hermes failures and retains a generic unknown fal
     ['execution_failed', 'Hermes no pudo completar el razonamiento.'],
     ['invalid_hermes_json', 'Hermes devolvió una respuesta con formato inválido.'],
     ['invalid_hermes_proposal', 'Hermes produjo un plan que LÍA rechazó por seguridad o estructura.'],
+    ['workflow_interrupted', 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.'],
   ]) {
     assert.match(client, new RegExp(`${code}: '${message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
   }

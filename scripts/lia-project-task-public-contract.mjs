@@ -32,6 +32,7 @@ export const PROJECT_TASK_ERROR_MESSAGES = new Map([
   ['git_commit_failed', 'No se pudo crear el commit local.'],
   ['git_revision_failed', 'No se pudo validar el commit local.'],
   ['workflow_failed', 'La ejecución no pudo completarse.'],
+  ['workflow_interrupted', 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.'],
 ]);
 
 const safeTaskError = (error = 'backend_unavailable') => ({ ok: false, integration: 'project_task', error });
@@ -45,7 +46,8 @@ export function sanitizeProjectTaskPayload(payload) {
   if (!payload.terminal) return base;
   if (payload.status === 'failed') {
     const expectedMessage = PROJECT_TASK_ERROR_MESSAGES.get(payload.error?.code);
-    const legacyGeneric = payload.error?.code === 'workflow_failed' && payload.error?.stage === undefined;
+    if (payload.error?.code === 'workflow_interrupted' && payload.error?.stage !== undefined) return null;
+    const legacyGeneric = (payload.error?.code === 'workflow_failed' || payload.error?.code === 'workflow_interrupted') && payload.error?.stage === undefined;
     if (!expectedMessage || payload.error?.message !== expectedMessage || (!legacyGeneric && !PROJECT_TASK_FAILURE_STAGES.has(payload.error?.stage))) return null;
     return { ...base, error: { ...(legacyGeneric ? {} : { stage: payload.error.stage }), code: payload.error.code, message: expectedMessage, ...(typeof payload.error.projectId === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(payload.error.projectId) ? { projectId: payload.error.projectId } : {}), ...(typeof payload.error.executionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(payload.error.executionId) ? { executionId: payload.error.executionId } : {}) } };
   }

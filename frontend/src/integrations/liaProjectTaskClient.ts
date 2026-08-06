@@ -19,6 +19,7 @@ const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
   invalid_hermes_json: 'Hermes devolvió una respuesta con formato inválido.',
   invalid_hermes_proposal: 'Hermes produjo un plan que LÍA rechazó por seguridad o estructura.',
   human_approval_required: 'La tarea requiere aprobación antes de continuar.',
+  workflow_interrupted: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.',
 };
 const CAPABILITIES = ['repository_read', 'isolated_worktree_write', 'run_tests', 'local_commit'];
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
