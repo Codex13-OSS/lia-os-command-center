@@ -35,6 +35,22 @@ test('runtime exposes only exact async submit/status routes with short deadlines
   assert.doesNotMatch(source, /startsWith\('\/api\/lia-agent\/projects\/tasks'/);
 });
 
+test('runtime accepts the same real instruction size the backend accepts', async () => {
+  const [source, appSource] = await Promise.all([
+    readFile(runtimePath, 'utf8'),
+    readFile(new URL('../../backend/lia-agent/src/app.ts', import.meta.url), 'utf8'),
+  ]);
+  // Backend contract: instructions of up to 8_000 characters may be up to
+  // ~32 KiB in UTF-8, and express.json accepts 64kb bodies.
+  assert.match(appSource, /express\.json\(\{ limit: '64kb' \}\)/);
+  const maxRequestBytesMatch = source.match(/MAX_REQUEST_BYTES = (\d+) \* 1024/);
+  assert.ok(maxRequestBytesMatch, 'runtime defines MAX_REQUEST_BYTES in KiB');
+  assert.ok(
+    Number(maxRequestBytesMatch[1]) >= 64,
+    'runtime request body cap must not be smaller than the backend 64kb JSON limit',
+  );
+});
+
 test('same-origin task sanitizer allowlists terminal diagnostics and strips internal fields', () => {
   const base = { ok: true, integration: 'project_task', taskId: '550e8400-e29b-41d4-a716-446655440000', status: 'failed', terminal: true };
   const safe = sanitizeProjectTaskPayload({ ...base, error: { stage: 'hermes', code: 'timeout', message: 'Hermes agotó el tiempo de respuesta.', path: '/private', command: 'rm', stderr: 'secret', stdout: 'secret', prompt: 'secret' } });

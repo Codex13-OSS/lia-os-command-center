@@ -26,7 +26,11 @@ const SAME_ORIGIN_PROJECT_WORKFLOW_PATH = '/api/lia-agent/projects/tasks/workflo
 const PROJECT_TASKS_PATH = '/api/projects/tasks';
 const SAME_ORIGIN_PROJECT_TASKS_PATH = '/api/lia-agent/projects/tasks';
 const MAX_QUERY_CHARACTERS = 8_000;
-const MAX_REQUEST_BYTES = 16 * 1024;
+// Accept the same real instructions the frontend (8_000 characters, up to
+// ~32 KiB in UTF-8) and the backend (express.json 64kb) already accept. A
+// 16 KiB byte cap made the production runtime reject long multi-byte
+// instructions that work in dev and are valid for the backend.
+const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 96 * 1024;
 const QUERY_TIMEOUT_MS = 125_000;
 const PROJECT_WORKFLOW_TIMEOUT_MS = 20 * 60 * 1_000;
