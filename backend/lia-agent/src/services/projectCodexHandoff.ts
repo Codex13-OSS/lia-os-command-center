@@ -1,3 +1,4 @@
+import { deriveAutonomousV1CompletionCapabilities } from "../contracts/autonomousAuthority.js";
 import type {
   ProjectCodexHandoffBuildResult,
   ProjectCodexHandoffValidationError,
@@ -144,11 +145,40 @@ export function buildProjectCodexHandoff(
 
   const plan = planValidation.plan;
   const proposal: ProjectOrchestrationProposal = proposalValidation.proposal;
-  const effectiveCapabilities = proposal.steps.flatMap((step) => step.requiredCapabilities)
+  const proposedCapabilities = proposal.steps.flatMap((step) => step.requiredCapabilities)
     .filter((capability, index, all) => all.indexOf(capability) === index);
+  // The BINDING execution capability set is derived by the backend-owned
+  // completion policy. Hermes requiredCapabilities express only the minimum
+  // operational requirements of its steps; for completionMode="complete"
+  // modification work the backend adds the safe completion prerequisites
+  // (run_tests, local_commit, repository_read). The completionMode value
+  // itself is validated intent metadata and never grants authority on its own.
+  const completionPolicy = deriveAutonomousV1CompletionCapabilities(
+    proposal.completionMode,
+    proposedCapabilities,
+    plan.approvedCapabilities,
+  );
+  if (!completionPolicy.ok) {
+    const message = completionPolicy.reason === "unknown_completion_mode"
+      ? "unknown completionMode"
+      : completionPolicy.reason === "analyze_not_read_only"
+        ? "analyze completionMode must remain read-only"
+        : completionPolicy.reason === "local_commit_without_run_tests"
+          ? "local_commit requires run_tests"
+          : "complete completion prerequisites are not available within approvedCapabilities";
+    return {
+      success: false,
+      errors: [{
+        path: "$.proposal.completionMode",
+        message,
+      }],
+    };
+  }
+  const effectiveCapabilities = completionPolicy.capabilities;
   // Binding execution set invariant: effectiveCapabilities MUST remain a
-  // subset of approvedCapabilities. Validation already guarantees it; this
-  // check fails closed in case the invariant is ever violated.
+  // subset of approvedCapabilities. Validation and the completion policy
+  // already guarantee it; this check fails closed in case the invariant is
+  // ever violated.
   if (effectiveCapabilities.some((capability) => !plan.approvedCapabilities.includes(capability))) {
     return {
       success: false,

@@ -1,7 +1,9 @@
 import {
   AUTONOMOUS_V1_CEILING,
+  AUTONOMOUS_V1_COMPLETION_MODES,
   AUTONOMOUS_V1_FORBIDDEN_CAPABILITIES,
 } from '../contracts/autonomousAuthority.js';
+import type { AutonomousV1CompletionMode } from '../contracts/autonomousAuthority.js';
 import type {
   ProjectOrchestrationExecutionMode,
   ProjectOrchestrationProposal,
@@ -16,9 +18,10 @@ import type {
 } from "../contracts/projectExecutor.js";
 import type { ProjectExecutionPlan } from "../contracts/projectExecutionPlan.js";
 
-const TOP_LEVEL_FIELDS = ["summary", "steps", "executionMode", "requiresHumanApproval", "blockedActions"] as const;
+const TOP_LEVEL_FIELDS = ["summary", "steps", "executionMode", "completionMode", "requiresHumanApproval", "blockedActions"] as const;
 const STEP_FIELDS = ["id", "title", "objective", "role", "dependsOn", "requiredCapabilities"] as const;
 const EXECUTION_MODES = new Set<ProjectOrchestrationExecutionMode>(["direct", "delegated"]);
+const COMPLETION_MODES = new Set<AutonomousV1CompletionMode>([...AUTONOMOUS_V1_COMPLETION_MODES]);
 const STEP_ROLES = new Set<ProjectOrchestrationStepRole>([
   "architect",
   "implementer",
@@ -117,6 +120,20 @@ export function validateProjectOrchestrationProposal(
   );
   if (!executionModeIsValid) {
     errors.push({ path: "$.executionMode", message: "must be 'direct' or 'delegated'" });
+  }
+
+  // completionMode is validated intent metadata only. Missing intent fails
+  // closed to the legacy non-final behavior; unknown values are rejected.
+  let completionMode: AutonomousV1CompletionMode = "ready_for_review";
+  if (value.completionMode !== undefined) {
+    if (
+      typeof value.completionMode !== "string"
+      || !COMPLETION_MODES.has(value.completionMode as AutonomousV1CompletionMode)
+    ) {
+      errors.push({ path: "$.completionMode", message: "must be one of: analyze, ready_for_review, complete" });
+    } else {
+      completionMode = value.completionMode as AutonomousV1CompletionMode;
+    }
   }
 
   const steps: ParsedStep[] = [];
@@ -242,6 +259,23 @@ export function validateProjectOrchestrationProposal(
     }
   }
 
+  // completionMode=analyze runtime semantics: the proposal must stay genuinely
+  // read-only. Intent metadata never grants authority; this constraint keeps
+  // analyze unable to smuggle write, run_tests or local_commit capability.
+  if (completionMode === "analyze") {
+    for (const { rawIndex, step } of steps) {
+      const nonReadOnly = step.requiredCapabilities.find(
+        (capability) => capability !== "repository_read",
+      );
+      if (nonReadOnly !== undefined) {
+        errors.push({
+          path: `$.steps[${rawIndex}].requiredCapabilities`,
+          message: "analyze completionMode must not require isolated_worktree_write, run_tests or local_commit",
+        });
+      }
+    }
+  }
+
   const blockedActions: ProjectTaskBlockedCapability[] = [];
   if (!Array.isArray(value.blockedActions)) {
     errors.push({ path: "$.blockedActions", message: "must be an array" });
@@ -271,6 +305,7 @@ export function validateProjectOrchestrationProposal(
       summary,
       steps: steps.map(({ step }) => step),
       executionMode: executionMode as ProjectOrchestrationExecutionMode,
+      completionMode,
       requiresHumanApproval: value.requiresHumanApproval as boolean,
       blockedActions,
     },

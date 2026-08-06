@@ -2109,7 +2109,8 @@ const orchestrationStep = (overrides = {}) => ({
 
 const orchestrationProposal = (overrides = {}) => ({
   summary: "Propuesta segura",
-  steps: [orchestrationStep()],
+      completionMode: "ready_for_review",
+      steps: [orchestrationStep()],
   executionMode: "direct",
   requiresHumanApproval: false,
   blockedActions: [],
@@ -2708,10 +2709,11 @@ test("id, role, dependsOn and executionMode never become execution authority", (
 test("project orchestration prompt includes the supervisor schema", () => {
   const prompt = buildProjectOrchestrationPrompt(orchestrationPlan());
   assert.match(prompt, /"executionMode":"direct"/);
-  assert.match(prompt, /"role":"orchestrator"/);
+  assert.match(prompt, /"completionMode":"complete"/);
+  assert.match(prompt, /"role":"(?:architect|implementer|reviewer|researcher|orchestrator)"/);
   assert.match(prompt, /"dependsOn":\[\]/);
   assert.match(prompt, /"id":"step-1"/);
-  assert.match(prompt, /"requiredCapabilities":\["repository_read"\]/);
+  assert.match(prompt, /"requiredCapabilities":\["repository_read","isolated_worktree_write"\]/);
   assert.match(prompt, /Valores permitidos para executionMode/);
   assert.match(prompt, /Valores permitidos para role/);
   assert.match(prompt, /La metadata jamás concede capacidades ni autoridad/);
@@ -2725,7 +2727,7 @@ test("project orchestration prompt includes the supervisor schema", () => {
 test("project orchestration repair prompt includes the supervisor schema", () => {
   const prompt = buildProjectOrchestrationRepairPrompt(orchestrationPlan());
   assert.match(prompt, /"executionMode":"direct"/);
-  assert.match(prompt, /"role":"orchestrator"/);
+  assert.match(prompt, /"role":"(?:architect|implementer|reviewer|researcher|orchestrator)"/);
   assert.match(prompt, /"dependsOn":\[\]/);
   assert.match(prompt, /"id":"step-1"/);
   assert.match(prompt, /"requiredCapabilities":\["repository_read"\]/);
@@ -2860,6 +2862,7 @@ test('project orchestration service completes a valid simulated flow without lea
   const proposal = {
     summary: 'Inspección y verificación seguras',
     executionMode: 'delegated',
+    completionMode: "ready_for_review",
     steps: [
       {
         id: 'step-1',
@@ -3308,3 +3311,395 @@ test('GET project task execution returns 405 with Allow POST', async () => {
     assert.equal((await response.json()).error, 'method_not_allowed');
   });
 });
+
+
+// AUTONOMOUS_COMPLETION_V1_REGRESSION_BLOCK
+test("Autonomous Completion V1 exposes exactly analyze, ready_for_review and complete", async () => {
+  const authority = await import("../dist/contracts/autonomousAuthority.js");
+
+  assert.deepEqual(
+    [...authority.AUTONOMOUS_V1_COMPLETION_MODES],
+    ["analyze", "ready_for_review", "complete"],
+  );
+});
+
+test("analyze completion derives read-only authority only", async () => {
+  const {
+    deriveAutonomousV1CompletionCapabilities,
+  } = await import("../dist/contracts/autonomousAuthority.js");
+
+  const result = deriveAutonomousV1CompletionCapabilities(
+    "analyze",
+    ["repository_read"],
+    ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.capabilities, ["repository_read"]);
+});
+
+test("analyze completion rejects write authority", async () => {
+  const {
+    deriveAutonomousV1CompletionCapabilities,
+  } = await import("../dist/contracts/autonomousAuthority.js");
+
+  const result = deriveAutonomousV1CompletionCapabilities(
+    "analyze",
+    ["repository_read", "isolated_worktree_write"],
+    ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+  );
+
+  assert.equal(result.ok, false);
+});
+
+test("ready_for_review preserves write-only execution without verification or commit expansion", async () => {
+  const {
+    deriveAutonomousV1CompletionCapabilities,
+  } = await import("../dist/contracts/autonomousAuthority.js");
+
+  const result = deriveAutonomousV1CompletionCapabilities(
+    "ready_for_review",
+    ["repository_read", "isolated_worktree_write"],
+    ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.capabilities,
+    ["repository_read", "isolated_worktree_write"],
+  );
+});
+
+test("complete write completion adds backend-owned verification and local commit authority", async () => {
+  const {
+    deriveAutonomousV1CompletionCapabilities,
+  } = await import("../dist/contracts/autonomousAuthority.js");
+
+  const result = deriveAutonomousV1CompletionCapabilities(
+    "complete",
+    ["repository_read", "isolated_worktree_write"],
+    ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.capabilities,
+    [
+      "repository_read",
+      "isolated_worktree_write",
+      "run_tests",
+      "local_commit",
+    ],
+  );
+});
+
+test("complete does not manufacture a write operation from a read-only proposal", async () => {
+  const {
+    deriveAutonomousV1CompletionCapabilities,
+  } = await import("../dist/contracts/autonomousAuthority.js");
+
+  const result = deriveAutonomousV1CompletionCapabilities(
+    "complete",
+    ["repository_read"],
+    ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.capabilities, ["repository_read"]);
+});
+
+test("completion policy can never produce dangerous autonomous capabilities", async () => {
+  const {
+    deriveAutonomousV1CompletionCapabilities,
+  } = await import("../dist/contracts/autonomousAuthority.js");
+
+  const dangerous = new Set([
+    "push",
+    "merge",
+    "deploy",
+    "production_write",
+    "database_write",
+    "secret_access",
+  ]);
+
+  const cases = [
+    {
+      mode: "analyze",
+      proposed: ["repository_read"],
+    },
+    {
+      mode: "ready_for_review",
+      proposed: ["repository_read", "isolated_worktree_write"],
+    },
+    {
+      mode: "complete",
+      proposed: ["repository_read", "isolated_worktree_write"],
+    },
+  ];
+
+  for (const { mode, proposed } of cases) {
+    const result = deriveAutonomousV1CompletionCapabilities(
+      mode,
+      proposed,
+      ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+    );
+
+    assert.equal(result.ok, true);
+
+    for (const capability of result.capabilities) {
+      assert.equal(dangerous.has(capability), false);
+    }
+  }
+
+  const rejectedAnalyzeWrite = deriveAutonomousV1CompletionCapabilities(
+    "analyze",
+    ["repository_read", "isolated_worktree_write"],
+    ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+  );
+
+  assert.deepEqual(rejectedAnalyzeWrite, {
+    ok: false,
+    reason: "analyze_not_read_only",
+  });
+});
+
+test("completion policy fails closed when complete prerequisites are outside backend ceiling", async () => {
+  const {
+    deriveAutonomousV1CompletionCapabilities,
+  } = await import("../dist/contracts/autonomousAuthority.js");
+
+  const result = deriveAutonomousV1CompletionCapabilities(
+    "complete",
+    ["repository_read", "isolated_worktree_write"],
+    ["repository_read", "isolated_worktree_write"],
+  );
+
+  assert.equal(result.ok, false);
+});
+
+test("orchestration validation rejects analyze proposal containing write capability", async () => {
+  const {
+    validateProjectOrchestrationProposal,
+  } = await import("../dist/services/projectOrchestrationValidation.js");
+
+  const plan = {
+    projectId: "lia-hermes",
+    projectDisplayName: "LÍA",
+    repositoryRoot: "/tmp/repo",
+    instruction: "Analyze",
+    priority: "normal",
+    approvedCapabilities: [
+      "repository_read",
+      "isolated_worktree_write",
+      "run_tests",
+      "local_commit",
+    ],
+    orchestrator: "hermes",
+    executor: "codex",
+    workspaceIsolation: "isolated_worktree_only",
+    requiresHumanApprovalForBlockedActions: true,
+    productionAccess: false,
+    databaseWriteAccess: false,
+    secretAccess: false,
+  };
+
+  const result = validateProjectOrchestrationProposal({
+    summary: "Unsafe analyze",
+    steps: [{
+      id: "step-1",
+      title: "Write",
+      objective: "Write",
+      role: "implementer",
+      dependsOn: [],
+      requiredCapabilities: [
+        "repository_read",
+        "isolated_worktree_write",
+      ],
+    }],
+    executionMode: "direct",
+    completionMode: "analyze",
+    requiresHumanApproval: false,
+    blockedActions: [],
+  }, plan);
+
+  assert.equal(result.success, false);
+});
+
+test("handoff complete mode derives binding completion capabilities from backend policy", async () => {
+  const {
+    buildProjectCodexHandoff,
+  } = await import("../dist/services/projectCodexHandoff.js");
+
+  const plan = {
+    projectId: "lia-hermes",
+    projectDisplayName: "LÍA",
+    repositoryRoot: "/tmp/repo",
+    instruction: "Create the requested change",
+    priority: "normal",
+    approvedCapabilities: [
+      "repository_read",
+      "isolated_worktree_write",
+      "run_tests",
+      "local_commit",
+    ],
+    orchestrator: "hermes",
+    executor: "codex",
+    workspaceIsolation: "isolated_worktree_only",
+    requiresHumanApprovalForBlockedActions: true,
+    productionAccess: false,
+    databaseWriteAccess: false,
+    secretAccess: false,
+  };
+
+  const result = buildProjectCodexHandoff(plan, {
+    summary: "Implement",
+    steps: [{
+      id: "step-1",
+      title: "Implement",
+      objective: "Create the requested modification",
+      role: "implementer",
+      dependsOn: [],
+      requiredCapabilities: [
+        "repository_read",
+        "isolated_worktree_write",
+      ],
+    }],
+    executionMode: "direct",
+    completionMode: "complete",
+    requiresHumanApproval: false,
+    blockedActions: [],
+  });
+
+  assert.equal(result.success, true);
+
+  if (result.success) {
+    assert.deepEqual(
+      result.handoff.effectiveCapabilities,
+      [
+        "repository_read",
+        "isolated_worktree_write",
+        "run_tests",
+        "local_commit",
+      ],
+    );
+  }
+});
+
+test("handoff ready_for_review does not receive run_tests or local_commit automatically", async () => {
+  const {
+    buildProjectCodexHandoff,
+  } = await import("../dist/services/projectCodexHandoff.js");
+
+  const plan = {
+    projectId: "lia-hermes",
+    projectDisplayName: "LÍA",
+    repositoryRoot: "/tmp/repo",
+    instruction: "Prepare a draft",
+    priority: "normal",
+    approvedCapabilities: [
+      "repository_read",
+      "isolated_worktree_write",
+      "run_tests",
+      "local_commit",
+    ],
+    orchestrator: "hermes",
+    executor: "codex",
+    workspaceIsolation: "isolated_worktree_only",
+    requiresHumanApprovalForBlockedActions: true,
+    productionAccess: false,
+    databaseWriteAccess: false,
+    secretAccess: false,
+  };
+
+  const result = buildProjectCodexHandoff(plan, {
+    summary: "Draft",
+    steps: [{
+      id: "step-1",
+      title: "Draft",
+      objective: "Prepare a provisional modification",
+      role: "implementer",
+      dependsOn: [],
+      requiredCapabilities: [
+        "repository_read",
+        "isolated_worktree_write",
+      ],
+    }],
+    executionMode: "direct",
+    completionMode: "ready_for_review",
+    requiresHumanApproval: false,
+    blockedActions: [],
+  });
+
+  assert.equal(result.success, true);
+
+  if (result.success) {
+    assert.deepEqual(
+      result.handoff.effectiveCapabilities,
+      ["repository_read", "isolated_worktree_write"],
+    );
+  }
+});
+
+test("normal orchestration prompt explicitly prefers complete for ordinary implementation requests", async () => {
+  const {
+    buildProjectOrchestrationPrompt,
+  } = await import("../dist/services/projectOrchestrationPrompt.js");
+
+  const prompt = buildProjectOrchestrationPrompt({
+    projectId: "lia-hermes",
+    projectDisplayName: "LÍA",
+    repositoryRoot: "/tmp/repo",
+    instruction: "Corrige el problema y déjalo terminado.",
+    priority: "normal",
+    approvedCapabilities: [
+      "repository_read",
+      "isolated_worktree_write",
+      "run_tests",
+      "local_commit",
+    ],
+    orchestrator: "hermes",
+    executor: "codex",
+    workspaceIsolation: "isolated_worktree_only",
+    requiresHumanApprovalForBlockedActions: true,
+    productionAccess: false,
+    databaseWriteAccess: false,
+    secretAccess: false,
+  });
+
+  assert.match(prompt, /completionMode="complete"/);
+  assert.match(prompt, /PREFIERE completionMode="complete"/);
+  assert.match(prompt, /borrador\/solo revisión\/no final/);
+});
+
+test("repair prompt preserves completion-mode classification contract", async () => {
+  const {
+    buildProjectOrchestrationRepairPrompt,
+  } = await import("../dist/services/projectOrchestrationPrompt.js");
+
+  const prompt = buildProjectOrchestrationRepairPrompt({
+    projectId: "lia-hermes",
+    projectDisplayName: "LÍA",
+    repositoryRoot: "/tmp/repo",
+    instruction: "Implementa y termina el cambio.",
+    priority: "normal",
+    approvedCapabilities: [
+      "repository_read",
+      "isolated_worktree_write",
+      "run_tests",
+      "local_commit",
+    ],
+    orchestrator: "hermes",
+    executor: "codex",
+    workspaceIsolation: "isolated_worktree_only",
+    requiresHumanApprovalForBlockedActions: true,
+    productionAccess: false,
+    databaseWriteAccess: false,
+    secretAccess: false,
+  });
+
+  assert.match(prompt, /completionMode/);
+  assert.match(prompt, /"analyze"/);
+  assert.match(prompt, /"ready_for_review"/);
+  assert.match(prompt, /"complete"/);
+});
+

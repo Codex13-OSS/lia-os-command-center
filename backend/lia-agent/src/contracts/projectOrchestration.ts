@@ -1,3 +1,4 @@
+import type { AutonomousV1CompletionMode } from "./autonomousAuthority.js";
 import type {
   ProjectTaskBlockedCapability,
   ProjectTaskRequestedCapability,
@@ -60,6 +61,16 @@ export interface ProjectOrchestrationProposal {
    * ProjectOrchestrationExecutionMode).
    */
   executionMode: ProjectOrchestrationExecutionMode;
+  /**
+   * Completion intent metadata only. VALIDATED INTENT, never authority: the
+   * value itself does not grant, expand or derive capabilities. The LÍA
+   * backend-owned autonomous authority policy (see
+   * deriveAutonomousV1CompletionCapabilities) is the sole translator of a
+   * valid completion intent into the binding workflow capability set.
+   * Absent values fail closed to "ready_for_review" (the legacy non-final
+   * behavior); unknown values are rejected by validation.
+   */
+  completionMode: AutonomousV1CompletionMode;
   requiresHumanApproval: boolean;
   blockedActions: ProjectTaskBlockedCapability[];
 }
