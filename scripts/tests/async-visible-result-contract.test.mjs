@@ -7,6 +7,21 @@ const runtimePath = new URL('../lia-production-same-origin-runtime-server.mjs', 
 const clientPath = new URL('../../frontend/src/integrations/liaProjectTaskClient.ts', import.meta.url);
 const componentPath = new URL('../../frontend/src/components/projects-r3/ProjectsShellR3.tsx', import.meta.url);
 const taskRoutePath = new URL('../../backend/lia-agent/src/routes/projectTasks.ts', import.meta.url);
+const viteConfigPath = new URL('../../frontend/vite.config.ts', import.meta.url);
+
+test('vite dev proxy translates lia-agent prefixes to the internal backend contract', async () => {
+  const source = await readFile(viteConfigPath, 'utf8');
+  assert.match(source, /LIA_AGENT_BACKEND_TARGET = 'http:\/\/127\.0\.0\.1:3014'/);
+  assert.doesNotMatch(source, /13004/);
+  assert.match(source, /path === '\/api\/lia-agent\/query'/);
+  assert.match(source, /'\/api\/hermes\/query'/);
+  assert.match(source, /path === '\/api\/lia-agent\/projects\/tasks'/);
+  assert.match(source, /path\.startsWith\('\/api\/lia-agent\/projects\/tasks\/'\)/);
+  assert.match(source, /path\.replace\(\/\^\\\/api\\\/lia-agent\/, '\/api'\)/);
+  assert.match(source, /rewrite: translateLiaAgentPath/);
+  assert.match(source, /server:\s*\{\s*proxy: liaProxy/s);
+  assert.match(source, /preview:\s*\{\s*host: '0\.0\.0\.0',\s*port: 5199,\s*strictPort: true,\s*proxy: liaProxy/s);
+});
 
 test('runtime exposes only exact async submit/status routes with short deadlines and sanitization', async () => {
   const [source, client] = await Promise.all([readFile(runtimePath, 'utf8'), readFile(clientPath, 'utf8')]);
@@ -62,9 +77,13 @@ test('frontend creates new persisted tasks, recovers reloads, retries idempotent
   assert.match(component, /No fue posible preparar o enviar la tarea\./);
   assert.doesNotMatch(component, /No fue posible iniciar la recuperación de la tarea\./);
   assert.match(component, /LÍA · Hermes · Codex conectados/);
-  assert.match(component, /Recuperando ejecución…/);
-  assert.match(component, /LÍA está lista para recibir una tarea\./);
-  assert.match(component, /WORKFLOW_LABELS = \['Hermes', 'Codex', 'Verificación', 'Resultado'\]/);
+  assert.match(component, /LÍA está recuperando el último estado confirmado de la tarea\./);
+  assert.match(component, /eyebrow: 'LÍA ESTÁ LISTA'/);
+  assert.match(component, /label: 'Preparando'/);
+  assert.match(component, /label: 'Hermes'/);
+  assert.match(component, /label: 'Ejecutando'/);
+  assert.match(component, /label: 'Verificando'/);
+  assert.match(component, /label: 'Guardando'/);
   assert.match(component, /stage === 'accepted' \|\| stage === 'planning'/);
   assert.match(component, /aria-current=\{step\.state === 'active' \? 'step' : undefined\}/);
   assert.match(component, /Análisis completado/);
