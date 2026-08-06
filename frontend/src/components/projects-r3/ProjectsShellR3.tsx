@@ -22,31 +22,159 @@ const PROJECT_ID = 'lia-hermes';
 const POLL_INTERVAL_MS = 1500;
 const TEMPORARY_RETRY_MS = 2500;
 
-type WorkflowStepState = 'pending' | 'active' | 'completed' | 'failed';
-type WorkflowStep = { label: string; state: WorkflowStepState; stateLabel: string };
+type WorkflowStep = {
+  label: string;
+  description: string;
+  state: 'pending' | 'active' | 'completed' | 'failed';
+  stateLabel: string;
+};
 
-const WORKFLOW_LABELS = ['Hermes', 'Codex', 'Verificación', 'Resultado'] as const;
+const WORKFLOW_STEPS = [
+  { key: 'planning', label: 'Preparando', description: 'Validando tarea y proyecto' },
+  { key: 'hermes', label: 'Hermes', description: 'Analizando y organizando el trabajo' },
+  { key: 'codex', label: 'Ejecutando', description: 'Aplicando cambios en entorno aislado' },
+  { key: 'verification', label: 'Verificando', description: 'Comprobando el resultado' },
+  { key: 'commit', label: 'Guardando', description: 'Creando commit local verificado' },
+] as const;
 
 function getWorkflowSteps(stage: LiaProjectTaskStage | 'recovering' | null): WorkflowStep[] {
-  if (stage === 'failed') return WORKFLOW_LABELS.map((label) => ({ label, state: 'failed', stateLabel: 'Sin confirmar' }));
-  if (stage === 'recovering' || stage === null) return WORKFLOW_LABELS.map((label) => ({ label, state: 'pending', stateLabel: 'Pendiente' }));
+  if (stage === 'failed') {
+    return WORKFLOW_STEPS.map((step) => ({
+      label: step.label,
+      description: step.description,
+      state: 'failed',
+      stateLabel: 'No completado',
+    }));
+  }
 
-  const activeIndex = stage === 'accepted' || stage === 'planning' || stage === 'hermes' ? 0
-    : stage === 'codex' ? 1
-      : stage === 'verification' ? 2
-        : 3;
-  const activeLabel = stage === 'accepted' || stage === 'planning' ? 'Preparando'
-    : stage === 'commit' ? 'Guardando'
-      : stage === 'completed' ? 'Completado'
-        : 'En curso';
+  if (stage === null || stage === 'recovering') {
+    return WORKFLOW_STEPS.map((step) => ({
+      label: step.label,
+      description: step.description,
+      state: 'pending',
+      stateLabel: 'Pendiente',
+    }));
+  }
 
-  return WORKFLOW_LABELS.map((label, index) => {
-    if (stage === 'completed' || index < activeIndex) return { label, state: 'completed', stateLabel: 'Completado' };
-    if (index === activeIndex) return { label, state: 'active', stateLabel: activeLabel };
-    return { label, state: 'pending', stateLabel: 'Pendiente' };
+  if (stage === 'completed') {
+    return WORKFLOW_STEPS.map((step) => ({
+      label: step.label,
+      description: step.description,
+      state: 'completed',
+      stateLabel: 'Completado',
+    }));
+  }
+
+  const activeIndex =
+    stage === 'accepted' || stage === 'planning' ? 0
+      : stage === 'hermes' ? 1
+        : stage === 'codex' ? 2
+          : stage === 'verification' ? 3
+            : 4;
+
+  return WORKFLOW_STEPS.map((step, index) => {
+    if (index < activeIndex) {
+      return {
+        label: step.label,
+        description: step.description,
+        state: 'completed',
+        stateLabel: 'Completado',
+      };
+    }
+
+    if (index === activeIndex) {
+      return {
+        label: step.label,
+        description: step.description,
+        state: 'active',
+        stateLabel: 'En curso',
+      };
+    }
+
+    return {
+      label: step.label,
+      description: step.description,
+      state: 'pending',
+      stateLabel: 'Pendiente',
+    };
   });
 }
 
+function workflowHeadline(stage: LiaProjectTaskStage | 'recovering' | null): {
+  eyebrow: string;
+  title: string;
+  description: string;
+} {
+  if (stage === 'recovering') {
+    return {
+      eyebrow: 'RECUPERANDO TAREA',
+      title: 'Consultando la ejecución durable',
+      description: 'LÍA está recuperando el último estado confirmado de la tarea.',
+    };
+  }
+
+  if (stage === null) {
+    return {
+      eyebrow: 'LÍA ESTÁ LISTA',
+      title: 'Describe qué quieres lograr',
+      description: 'La ejecución aparecerá aquí usando únicamente estados reales del backend.',
+    };
+  }
+
+  if (stage === 'accepted' || stage === 'planning') {
+    return {
+      eyebrow: 'PREPARANDO',
+      title: 'Preparando la tarea',
+      description: 'LÍA está validando la instrucción y el proyecto.',
+    };
+  }
+
+  if (stage === 'hermes') {
+    return {
+      eyebrow: 'HERMES',
+      title: 'Analizando la instrucción',
+      description: 'Hermes está definiendo el plan mínimo necesario para completar la tarea.',
+    };
+  }
+
+  if (stage === 'codex') {
+    return {
+      eyebrow: 'EJECUTANDO',
+      title: 'Aplicando el cambio',
+      description: 'Codex está trabajando dentro de un entorno aislado.',
+    };
+  }
+
+  if (stage === 'verification') {
+    return {
+      eyebrow: 'VERIFICANDO',
+      title: 'Comprobando el resultado',
+      description: 'LÍA está ejecutando las verificaciones autorizadas.',
+    };
+  }
+
+  if (stage === 'commit') {
+    return {
+      eyebrow: 'GUARDANDO',
+      title: 'Guardando resultado verificado',
+      description: 'LÍA está creando el commit local después de la verificación.',
+    };
+  }
+
+  if (stage === 'completed') {
+    return {
+      eyebrow: 'COMPLETADO',
+      title: 'Resultado terminado',
+      description: 'La tarea terminó y el resultado final ya está disponible.',
+    };
+  }
+
+  return {
+    eyebrow: 'NO COMPLETADO',
+    title: 'La tarea no pudo completarse',
+    description: 'Consulta el diagnóstico seguro mostrado abajo.',
+  };
+}
 export function ProjectsShellR3(props: Props) {
   const [instruction, setInstruction] = useState('');
   const [priority, setPriority] = useState<LiaProjectTaskPriority>('normal');
@@ -58,14 +186,8 @@ export function ProjectsShellR3(props: Props) {
   const mountedRef = useRef(false);
   const pollRunRef = useRef(0);
   const sleepRef = useRef<{ run: number; timer: ReturnType<typeof setTimeout>; resolve: () => void } | null>(null);
-  const workflowSteps = receipt?.status === 'analyzed'
-    ? [
-        { label: 'Hermes', state: 'completed', stateLabel: 'Completado' },
-        { label: 'Codex', state: 'completed', stateLabel: 'Completado' },
-        { label: 'Verificación', state: 'completed', stateLabel: 'No requerida' },
-        { label: 'Resultado', state: 'completed', stateLabel: 'Completado' },
-      ] satisfies WorkflowStep[]
-    : getWorkflowSteps(stage);
+  const workflowSteps = getWorkflowSteps(stage);
+  const workflowStatus = workflowHeadline(stage);
 
   const cancelSleep = () => {
     const sleep = sleepRef.current;
@@ -211,16 +333,38 @@ export function ProjectsShellR3(props: Props) {
           </div>
         </form>
 
-        <section className="lia-projects-r3-workflow" aria-labelledby="lia-projects-workflow-title" aria-live="polite">
+        <section className={`lia-projects-r3-workflow${stage && stage !== 'completed' && stage !== 'failed' ? ' is-running' : ''}`} aria-labelledby="lia-projects-workflow-title" aria-live="polite">
           <div className="lia-projects-r3-workflow-head">
-            <h3 id="lia-projects-workflow-title">Flujo de ejecución</h3>
-            <p>{stage === 'recovering' ? 'Recuperando ejecución…' : stage === null ? 'LÍA está lista para recibir una tarea.' : stage === 'failed' ? 'La ejecución no pudo completarse.' : stage === 'completed' ? 'Ejecución completada.' : 'Seguimiento de la tarea en curso.'}</p>
-          </div>
-          <ol className="lia-projects-r3-stages">
-            {workflowSteps.map((step) => (
-              <li key={step.label} className={`is-${step.state}`} aria-current={step.state === 'active' ? 'step' : undefined} aria-label={`${step.label}: ${step.stateLabel}`}>
+            <div>
+              <span>{workflowStatus.eyebrow}</span>
+              <h3 id="lia-projects-workflow-title">{workflowStatus.title}</h3>
+              <p>{workflowStatus.description}</p>
+            </div>
+            {pending && stage !== 'recovering' && (
+              <div className="lia-projects-r3-live-indicator" aria-label="Ejecución activa">
                 <i aria-hidden="true" />
-                <span>{step.label}<small>{step.stateLabel}</small></span>
+                <span>En vivo</span>
+              </div>
+            )}
+          </div>
+
+          <ol className="lia-projects-r3-stages">
+            {workflowSteps.map((step, index) => (
+              <li
+                key={step.label}
+                className={`is-${step.state}`}
+                aria-current={step.state === 'active' ? 'step' : undefined}
+                aria-label={`${step.label}: ${step.stateLabel}`}
+              >
+                <div className="lia-projects-r3-stage-marker">
+                  <i aria-hidden="true" />
+                  <b>{index + 1}</b>
+                </div>
+                <div className="lia-projects-r3-stage-copy">
+                  <strong>{step.label}</strong>
+                  <small>{step.description}</small>
+                  <em>{step.stateLabel}</em>
+                </div>
               </li>
             ))}
           </ol>
@@ -228,16 +372,66 @@ export function ProjectsShellR3(props: Props) {
 
         {error && <div className="lia-projects-r3-error" role="alert">{error}</div>}
         {receipt && (
-          <article className="lia-projects-r3-receipt" aria-label="Resultado de la ejecución">
-            <h3>{receipt.status === 'analyzed' ? 'Análisis completado' : 'Tarea completada'}</h3>
-            <p>{receipt.resultText}</p>
-            <dl>
-              <div><dt>Status</dt><dd>{receipt.status}</dd></div>
-              <div><dt>Execution ID</dt><dd>{receipt.executionId}</dd></div>
-              {receipt.commit && <div><dt>Commit</dt><dd>{receipt.commit}</dd></div>}
-              {receipt.verification && <div><dt>Verificación</dt><dd>{receipt.verification.checksPassed}/{receipt.verification.totalChecks} verificaciones aprobadas</dd></div>}
-              {receipt.status === 'analyzed' && <div><dt>Verificación</dt><dd>No requerida</dd></div>}
-            </dl>
+          <article className={`lia-projects-r3-receipt is-${receipt.status}`} aria-label="Resultado de la ejecución">
+            <div className="lia-projects-r3-receipt-head">
+              <div>
+                <span>
+                  {receipt.status === 'committed'
+                    ? 'RESULTADO VERIFICADO'
+                    : receipt.status === 'verified'
+                      ? 'VERIFICADO'
+                      : receipt.status === 'ready_for_review'
+                        ? 'LISTO PARA REVISIÓN'
+                        : 'ANÁLISIS COMPLETADO'}
+                </span>
+                <h3>
+                  {receipt.status === 'committed'
+                    ? 'Tarea completada'
+                    : receipt.status === 'verified'
+                      ? 'Resultado verificado'
+                      : receipt.status === 'ready_for_review'
+                        ? 'Listo para revisión'
+                        : 'Análisis completado'}
+                </h3>
+              </div>
+              <i aria-hidden="true">✓</i>
+            </div>
+
+            <p className="lia-projects-r3-result-text">{receipt.resultText}</p>
+
+            <div className="lia-projects-r3-result-facts">
+              {receipt.verification && (
+                <div>
+                  <span>Verificación</span>
+                  <strong>{receipt.verification.checksPassed}/{receipt.verification.totalChecks}</strong>
+                  <small>comprobaciones aprobadas</small>
+                </div>
+              )}
+
+              {receipt.commit && (
+                <div>
+                  <span>Commit local</span>
+                  <strong>{receipt.commit.slice(0, 10)}</strong>
+                  <small>Cambio guardado localmente</small>
+                </div>
+              )}
+
+              {receipt.status === 'ready_for_review' && (
+                <div>
+                  <span>Estado</span>
+                  <strong>Revisión</strong>
+                  <small>El cambio no fue finalizado automáticamente</small>
+                </div>
+              )}
+
+              {receipt.status === 'analyzed' && (
+                <div>
+                  <span>Verificación</span>
+                  <strong>No requerida</strong>
+                  <small>La tarea fue únicamente de análisis</small>
+                </div>
+              )}
+            </div>
           </article>
         )}
       </section>

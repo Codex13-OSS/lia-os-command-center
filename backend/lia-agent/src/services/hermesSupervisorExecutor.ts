@@ -1,4 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import {
+  DEEPSEEK_API_KEY_ENV,
+  HERMES_DEEPSEEK_ENV_FILE,
+  HERMES_DEEPSEEK_MODEL,
+  HERMES_DEEPSEEK_PROVIDER,
+  isHermesQuotaUsageLimitFailure,
+  loadHermesDeepSeekSecret,
+} from './hermesDeepSeekFallback.js';
 import { join } from 'node:path';
 import type { LiaAgentConfig } from '../config.js';
 import type {
@@ -314,79 +322,177 @@ function appendBounded(current: string, chunk: Buffer): string {
 
 type SpawnProcess = typeof spawn;
 
+export type HermesSupervisorExecutorDependencies = {
+  deepSeekSecretLoader?: () => Promise<string | undefined>;
+};
+
+type HermesSupervisorAttempt =
+  | { kind: 'success'; response: string }
+  | { kind: 'failed'; stdout: string; stderr: string }
+  | { kind: 'empty'; stdout: string; stderr: string }
+  | { kind: 'timeout'; stdout: string; stderr: string };
+
+async function executeHermesSupervisorAttempt(
+  config: Parameters<HermesQueryExecutor>[0],
+  query: string,
+  provider: string,
+  model: string,
+  spawnProcess: SpawnProcess,
+  extraEnv: NodeJS.ProcessEnv = {},
+): Promise<HermesSupervisorAttempt> {
+  const invocation = buildHermesSupervisorInvocation(
+    { ...config, hermesProvider: provider, hermesModel: model },
+    query,
+  );
+
+  return new Promise((resolve) => {
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawnProcess(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
+        env: { ...invocation.env, ...extraEnv },
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch {
+      resolve({ kind: 'failed', stdout: '', stderr: '' });
+      return;
+    }
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const finish = (result: HermesSupervisorAttempt) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout = appendBounded(stdout, chunk);
+    });
+
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = appendBounded(stderr, chunk);
+    });
+
+    child.stdin.on('error', () => {
+      finish({ kind: 'failed', stdout, stderr });
+    });
+
+    child.on('error', () => {
+      finish({ kind: 'failed', stdout, stderr });
+    });
+
+    child.on('close', (code) => {
+      if (settled) return;
+
+      if (
+        stderr.includes(TOOL_SURFACE_VIOLATION_MARKER)
+        || stderr.includes(UNSAFE_DELEGATION_CONFIG_MARKER)
+      ) {
+        finish({ kind: 'failed', stdout, stderr });
+        return;
+      }
+
+      if (code !== 0) {
+        finish({ kind: 'failed', stdout, stderr });
+        return;
+      }
+
+      const response = cleanOutput(stdout || stderr);
+      if (response === '') {
+        finish({ kind: 'empty', stdout, stderr });
+        return;
+      }
+
+      if (isHermesQuotaUsageLimitFailure(stdout, stderr)) {
+        finish({ kind: 'failed', stdout, stderr });
+        return;
+      }
+
+      finish({ kind: 'success', response });
+    });
+
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      setTimeout(() => child.kill('SIGKILL'), 1_000).unref();
+      finish({ kind: 'timeout', stdout, stderr });
+    }, config.hermesTimeoutMs);
+
+    timer.unref();
+    child.stdin.end(invocation.input);
+  });
+}
+
 export function createHermesSupervisorExecutor(
   spawnProcess: SpawnProcess,
+  dependencies: HermesSupervisorExecutorDependencies = {},
 ): HermesQueryExecutor {
   return async (config, query) => {
     if (!config.hermesExecutionEnabled) {
       return { ok: false, error: 'execution_disabled' };
     }
 
-    const invocation = buildHermesSupervisorInvocation(config, query);
+    const primary = await executeHermesSupervisorAttempt(
+      config,
+      query,
+      config.hermesProvider,
+      config.hermesModel,
+      spawnProcess,
+    );
 
-    return new Promise((resolve) => {
-      let child: ChildProcessWithoutNullStreams;
-      try {
-        child = spawnProcess(invocation.command, invocation.args, {
-          cwd: invocation.cwd,
-          env: invocation.env,
-          shell: false,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      } catch {
-        resolve({ ok: false, error: 'execution_failed' });
-        return;
+    if (primary.kind === 'success') {
+      return { ok: true, response: primary.response };
+    }
+
+    if (primary.kind === 'timeout') {
+      return { ok: false, error: 'timeout' };
+    }
+
+    if (
+      primary.kind === 'failed'
+      && isHermesQuotaUsageLimitFailure(primary.stdout, primary.stderr)
+    ) {
+      const secret = await (
+        dependencies.deepSeekSecretLoader
+        ?? (() => loadHermesDeepSeekSecret(
+          process.env,
+          HERMES_DEEPSEEK_ENV_FILE,
+        ))
+      )();
+
+      if (!secret) {
+        return { ok: false, error: 'execution_failed' };
       }
 
-      let stdout = '';
-      let stderr = '';
-      let settled = false;
+      const fallback = await executeHermesSupervisorAttempt(
+        config,
+        query,
+        HERMES_DEEPSEEK_PROVIDER,
+        HERMES_DEEPSEEK_MODEL,
+        spawnProcess,
+        { [DEEPSEEK_API_KEY_ENV]: secret },
+      );
 
-      const finish = (result: HermesExecutionResult) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(result);
-      };
+      if (fallback.kind === 'success') {
+        return { ok: true, response: fallback.response };
+      }
 
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout = appendBounded(stdout, chunk);
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr = appendBounded(stderr, chunk);
-      });
-      child.stdin.on('error', () => {
-        finish({ ok: false, error: 'execution_failed' });
-      });
-      child.on('error', () => finish({ ok: false, error: 'execution_failed' }));
-      child.on('close', (code) => {
-        if (settled) return;
-        if (
-          code !== 0
-          || stderr.includes(TOOL_SURFACE_VIOLATION_MARKER)
-          || stderr.includes(UNSAFE_DELEGATION_CONFIG_MARKER)
-        ) {
-          finish({ ok: false, error: 'execution_failed' });
-          return;
-        }
+      if (fallback.kind === 'timeout') {
+        return { ok: false, error: 'timeout' };
+      }
 
-        const response = cleanOutput(stdout);
-        if (response === '') {
-          finish({ ok: false, error: 'empty_response' });
-          return;
-        }
-        finish({ ok: true, response });
-      });
+      return fallback.kind === 'empty'
+        ? { ok: false, error: 'empty_response' }
+        : { ok: false, error: 'execution_failed' };
+    }
 
-      const timer = setTimeout(() => {
-        child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), 1_000).unref();
-        finish({ ok: false, error: 'timeout' });
-      }, config.hermesTimeoutMs);
-      timer.unref();
-
-      child.stdin.end(invocation.input);
-    });
+    return primary.kind === 'empty'
+      ? { ok: false, error: 'empty_response' }
+      : { ok: false, error: 'execution_failed' };
   };
 }
 

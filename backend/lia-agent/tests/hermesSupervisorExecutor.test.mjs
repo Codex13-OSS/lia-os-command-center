@@ -909,3 +909,149 @@ test("Supervisor V1 fails closed when subagent_auto_approve is absent", async ()
 
   assert.equal(result.ok, false);
 });
+
+test("Supervisor falls back exactly once to DeepSeek on unmistakable OpenAI quota exhaustion", async () => {
+  const calls = [];
+  const stdinPayloads = [];
+  const quota =
+    "API call failed after 3 retries: HTTP 429: The usage limit has been reached";
+
+  const fallbackJson = JSON.stringify({
+    summary: "ok",
+    steps: [{
+      id: "step-1",
+      title: "Implementar",
+      objective: "Aplicar",
+      role: "implementer",
+      dependsOn: [],
+      requiredCapabilities: [
+        "repository_read",
+        "isolated_worktree_write",
+      ],
+    }],
+    executionMode: "direct",
+    completionMode: "complete",
+    requiresHumanApproval: false,
+    blockedActions: [],
+  });
+
+  const fakeSpawn = (...args) => {
+    const callIndex = calls.length;
+    calls.push(args);
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = new EventEmitter();
+    child.kill = () => {};
+
+    child.stdin.end = (payload) => {
+      stdinPayloads[callIndex] = String(payload ?? "");
+    };
+
+    process.nextTick(() => {
+      if (callIndex === 0) {
+        child.stdout.emit("data", Buffer.from(quota));
+        child.emit("close", 0);
+        return;
+      }
+
+      child.stdout.emit("data", Buffer.from(fallbackJson));
+      child.emit("close", 0);
+    });
+
+    return child;
+  };
+
+  let secretLoads = 0;
+
+  const execute = createHermesSupervisorExecutor(fakeSpawn, {
+    deepSeekSecretLoader: async () => {
+      secretLoads += 1;
+      return "test-secret-never-logged";
+    },
+  });
+
+  const result = await execute({
+    hermesExecutionEnabled: true,
+    hermesUser: "hermes-agent",
+    hermesUserHome: "/home/hermes-agent",
+    hermesHome: "/home/hermes-agent/.hermes",
+    hermesPath: "/usr/local/bin:/usr/bin:/bin",
+    hermesProvider: "openai-codex",
+    hermesModel: "gpt-5.6-terra",
+    hermesTimeoutMs: 120000,
+  }, "test");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(secretLoads, 1);
+
+  const firstInput = JSON.parse(stdinPayloads[0]);
+  const secondInput = JSON.parse(stdinPayloads[1]);
+
+  assert.equal(firstInput.provider, "openai-codex");
+  assert.equal(firstInput.model, "gpt-5.6-terra");
+  assert.equal(secondInput.provider, "deepseek");
+  assert.equal(secondInput.model, "deepseek-v4-flash");
+
+  assert.equal(calls[0][2].env.DEEPSEEK_API_KEY, undefined);
+  assert.equal(calls[1][2].env.DEEPSEEK_API_KEY, "test-secret-never-logged");
+
+  const everyArg = calls
+    .flatMap((call) => call[1] ?? [])
+    .map(String)
+    .join("\n");
+
+  assert.equal(everyArg.includes("test-secret-never-logged"), false);
+});
+
+test("Supervisor does not fall back on bare generic HTTP 429", async () => {
+  const calls = [];
+
+  const fakeSpawn = (...args) => {
+    calls.push(args);
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = new EventEmitter();
+    child.stdin.end = () => {};
+    child.kill = () => {};
+
+    process.nextTick(() => {
+      child.stderr.emit("data", Buffer.from("HTTP 429 Too Many Requests"));
+      child.emit("close", 1);
+    });
+
+    return child;
+  };
+
+  const { createHermesSupervisorExecutor } =
+    await import("../dist/services/hermesSupervisorExecutor.js");
+
+  let secretLoads = 0;
+
+  const execute = createHermesSupervisorExecutor(fakeSpawn, {
+    deepSeekSecretLoader: async () => {
+      secretLoads += 1;
+      return "must-not-be-used";
+    },
+  });
+
+  const result = await execute({
+    hermesExecutionEnabled: true,
+    hermesUser: "hermes-agent",
+    hermesUserHome: "/home/hermes-agent",
+    hermesHome: "/home/hermes-agent/.hermes",
+    hermesPath: "/usr/local/bin:/usr/bin:/bin",
+    hermesProvider: "openai-codex",
+    hermesModel: "gpt-5.6-terra",
+    hermesTimeoutMs: 120000,
+  }, "test");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "execution_failed");
+  assert.equal(calls.length, 1);
+  assert.equal(secretLoads, 0);
+});
