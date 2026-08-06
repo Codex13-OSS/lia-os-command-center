@@ -21,6 +21,7 @@ import {
   type ProjectTaskWorkflowExecutor,
 } from './routes/projectTaskWorkflow.js';
 import { createStatusRouter } from './routes/status.js';
+import { createSameOriginStatusRouter } from './routes/sameOriginStatus.js';
 import { createProjectTasksRouter, type ProjectTasksDependencies } from './routes/projectTasks.js';
 import { InMemoryProjectTaskStore } from './services/inMemoryProjectTaskStore.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
@@ -65,6 +66,7 @@ export function createApp(
   app.use(createHealthRouter());
   app.use(createAgendaRouter(dependencies.agendaReadSource));
   app.use(createStatusRouter());
+  app.use(createSameOriginStatusRouter());
   app.use(createHermesRouter(config));
   app.use(createHermesQueryRouter(config, {
     executeQuery: dependencies.hermesQueryExecutor,

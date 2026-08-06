@@ -116,3 +116,14 @@ test('async terminal receipt preserves only bounded analyzed result text', async
     assert.doesNotMatch(route, new RegExp(forbidden));
   }
 });
+
+test('real backend serves the same-origin status bridge path used by the UI', async () => {
+  const [route, appSource, client] = await Promise.all([
+    readFile(new URL('../../backend/lia-agent/src/routes/sameOriginStatus.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../backend/lia-agent/src/app.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../frontend/src/integrations/liaSameOriginStatusAdapterClient.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.match(route, /router\.route\('\/api\/lia-agent\/health'\)/);
+  assert.match(appSource, /createSameOriginStatusRouter/);
+  assert.match(client, /LIA_SAME_ORIGIN_STATUS_ADAPTER_PATH = '\/api\/lia-agent\/health'/);
+});
