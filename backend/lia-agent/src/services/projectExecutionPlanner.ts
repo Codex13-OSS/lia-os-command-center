@@ -1,3 +1,4 @@
+import { createAutonomousV1ApprovedCapabilities } from '../contracts/autonomousAuthority.js';
 import { createProjectTaskSafetyPolicy } from '../contracts/projectExecutor.js';
 import type { ProjectExecutionPlanningResult } from '../contracts/projectExecutionPlan.js';
 import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
@@ -31,7 +32,9 @@ export async function planProjectTask(
       repositoryRoot: resolution.target.repositoryRoot,
       instruction: validation.request.instruction,
       priority: validation.request.priority,
-      approvedCapabilities: [...validation.request.requestedCapabilities],
+      // Backend-owned Autonomous V1 ceiling only. requestedCapabilities is
+      // request metadata and never controls backend execution authority.
+      approvedCapabilities: createAutonomousV1ApprovedCapabilities(),
       orchestrator: policy.orchestrator,
       executor: policy.executor,
       workspaceIsolation: policy.workspaceIsolation,

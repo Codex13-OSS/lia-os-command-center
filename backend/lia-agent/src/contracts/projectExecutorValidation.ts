@@ -1,3 +1,4 @@
+import { AUTONOMOUS_V1_CEILING } from './autonomousAuthority.js';
 import type {
   ProjectTaskPriority,
   ProjectTaskRequest,
@@ -28,10 +29,7 @@ const PRIORITIES: readonly ProjectTaskPriority[] = [
 ];
 
 const ALLOWED_CAPABILITIES: readonly ProjectTaskRequestedCapability[] = [
-  'repository_read',
-  'isolated_worktree_write',
-  'run_tests',
-  'local_commit',
+  ...AUTONOMOUS_V1_CEILING,
 ];
 
 const SAFE_PROJECT_ID = /^[A-Za-z0-9._-]+$/;

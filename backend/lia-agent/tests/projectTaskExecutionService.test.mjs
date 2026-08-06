@@ -124,7 +124,7 @@ test("uses strict JSON parsing without repair and does not invoke Codex", async 
 
 test("rejects capability escalation before Codex", async () => {
   const escalated = proposal({
-    steps: [{ id: "step-1", title: "Escalate", objective: "Run tests", role: "implementer", dependsOn: [], requiredCapabilities: ["run_tests"] }],
+    steps: [{ id: "step-1", title: "Escalate", objective: "Push changes", role: "implementer", dependsOn: [], requiredCapabilities: ["push"] }],
   });
   const fake = harness({ hermesResult: { ok: true, response: JSON.stringify(escalated) } });
   const result = await executeProjectTask(config, request(), registry(), fake.dependencies);

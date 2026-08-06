@@ -1864,7 +1864,12 @@ test('project execution planner creates a safe internal plan from the authorized
       repositoryRoot: '/srv/projects/lia-agent',
       instruction: 'Implementa la siguiente fase',
       priority: 'high',
-      approvedCapabilities: ['repository_read', 'run_tests'],
+      approvedCapabilities: [
+        'repository_read',
+        'isolated_worktree_write',
+        'run_tests',
+        'local_commit',
+      ],
       orchestrator: 'hermes',
       executor: 'codex',
       workspaceIsolation: 'isolated_worktree_only',
@@ -1963,9 +1968,126 @@ test('project execution planner fails closed for registry errors and owns capabi
   assert.equal(second.ok, true);
   assert.deepEqual(second.plan.approvedCapabilities, [
     'repository_read',
+    'isolated_worktree_write',
     'run_tests',
+    'local_commit',
   ]);
 });
+
+const AUTONOMOUS_V1_CEILING = [
+  'repository_read',
+  'isolated_worktree_write',
+  'run_tests',
+  'local_commit',
+];
+
+test('Autonomous V1 approvedCapabilities is the exact backend ceiling regardless of requestedCapabilities', async () => {
+  const source = createStaticProjectRegistry([{
+    projectId: 'lia-agent',
+    displayName: 'LÍA Agent',
+    repositoryRoot: '/srv/projects/lia-agent',
+    enabled: true,
+  }]);
+
+  for (const requestedCapabilities of [[], ['repository_read'], AUTONOMOUS_V1_CEILING]) {
+    const result = await planProjectTask({
+      projectId: 'lia-agent',
+      instruction: 'Inspecciona el proyecto',
+      priority: 'normal',
+      requestedCapabilities,
+    }, source);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.plan.approvedCapabilities, AUTONOMOUS_V1_CEILING);
+  }
+});
+
+test('Autonomous V1 plan never contains forbidden capabilities', async () => {
+  const source = createStaticProjectRegistry([{
+    projectId: 'lia-agent',
+    displayName: 'LÍA Agent',
+    repositoryRoot: '/srv/projects/lia-agent',
+    enabled: true,
+  }]);
+
+  const result = await planProjectTask({
+    projectId: 'lia-agent',
+    instruction: 'Inspecciona el proyecto',
+    priority: 'normal',
+    requestedCapabilities: ['repository_read'],
+  }, source);
+
+  assert.equal(result.ok, true);
+  for (const forbidden of ['push', 'merge', 'deploy', 'production_write', 'database_write', 'secret_access']) {
+    assert.equal(result.plan.approvedCapabilities.includes(forbidden), false, forbidden);
+  }
+});
+
+test('request validation accepts requestedCapabilities as metadata and still rejects unknown capabilities', () => {
+  const valid = validateProjectTaskRequest({
+    projectId: 'lia-agent',
+    instruction: 'Inspecciona el proyecto',
+    priority: 'normal',
+    requestedCapabilities: [],
+  });
+  assert.equal(valid.success, true);
+  assert.deepEqual(valid.request.requestedCapabilities, []);
+
+  for (const unknown of ['push', 'deploy', 'production_write', 'database_write', 'secret_access', 'totally_unknown']) {
+    const result = validateProjectTaskRequest({
+      projectId: 'lia-agent',
+      instruction: 'Inspecciona el proyecto',
+      priority: 'normal',
+      requestedCapabilities: [unknown],
+    });
+    assert.equal(result.success, false, unknown);
+    assert.ok(result.errors.some((error) => error.path === 'requestedCapabilities.0'), unknown);
+  }
+});
+
+test('Hermes cannot introduce a capability outside the backend ceiling into the Codex handoff', () => {
+  const result = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: [...AUTONOMOUS_V1_CEILING] }),
+    orchestrationProposal({
+      steps: [orchestrationStep({ requiredCapabilities: ['push'] })],
+    }),
+  );
+  assert.equal(result.success, false);
+});
+
+test('effectiveCapabilities derive only from validated proposal requiredCapabilities', () => {
+  const handoff = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: [...AUTONOMOUS_V1_CEILING] }),
+    orchestrationProposal({
+      steps: [orchestrationStep({ requiredCapabilities: ['repository_read'] })],
+    }),
+  );
+  assert.equal(handoff.success, true);
+  assert.deepEqual(handoff.handoff.effectiveCapabilities, ['repository_read']);
+});
+
+test('read-only proposal binds only repository_read even under the full ceiling', () => {
+  const handoff = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: [...AUTONOMOUS_V1_CEILING] }),
+    orchestrationProposal({
+      steps: [orchestrationStep({ requiredCapabilities: ['repository_read'] })],
+    }),
+  );
+  assert.equal(handoff.success, true);
+  assert.deepEqual(handoff.handoff.effectiveCapabilities, ['repository_read']);
+});
+
+test('write proposal binds repository_read + isolated_worktree_write only', () => {
+  const handoff = buildProjectCodexHandoff(
+    codexHandoffPlan({ approvedCapabilities: [...AUTONOMOUS_V1_CEILING] }),
+    orchestrationProposal({
+      steps: [orchestrationStep({ requiredCapabilities: ['repository_read', 'isolated_worktree_write'] })],
+    }),
+  );
+  assert.equal(handoff.success, true);
+  assert.deepEqual(handoff.handoff.effectiveCapabilities, ['repository_read', 'isolated_worktree_write']);
+});
+
 const orchestrationPlan = (approvedCapabilities = ["repository_read", "run_tests"]) => ({
   projectId: "project-safe-1",
   projectDisplayName: "Proyecto Seguro",
@@ -2838,17 +2960,17 @@ test('project orchestration service rejects non-pure Hermes JSON without repair'
   }
 });
 
-test('project orchestration service rejects a proposal using an unapproved capability', async () => {
+test('project orchestration service rejects a proposal using a capability outside the backend ceiling', async () => {
   const response = JSON.stringify({
     summary: 'Intento fuera de permisos',
     executionMode: 'delegated',
     steps: [{
       id: 'step-1',
-      title: 'Probar',
-      objective: 'Ejecutar pruebas',
+      title: 'Publicar',
+      objective: 'Intentar una acción prohibida',
       role: 'implementer',
       dependsOn: [],
-      requiredCapabilities: ['run_tests'],
+      requiredCapabilities: ['push'],
     }],
     requiresHumanApproval: false,
     blockedActions: [],

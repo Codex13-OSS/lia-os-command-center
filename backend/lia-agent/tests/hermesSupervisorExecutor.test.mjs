@@ -627,10 +627,10 @@ test('capability escalation still fails before Codex', async () => {
     steps: [{
       id: 'step-1',
       title: 'Escalate',
-      objective: 'Run tests',
+      objective: 'Push changes',
       role: 'implementer',
       dependsOn: [],
-      requiredCapabilities: ['run_tests'],
+      requiredCapabilities: ['push'],
     }],
   });
   const fake = executionHarness({ ok: true, response: JSON.stringify(escalated) });
@@ -643,7 +643,7 @@ test('capability escalation still fails before Codex', async () => {
     summary: 'Escalate',
     steps: [
       { id: 'step-a', title: 'Read', objective: 'Read', role: 'researcher', dependsOn: [], requiredCapabilities: ['repository_read'] },
-      { id: 'step-b', title: 'Deploy', objective: 'Deploy', role: 'implementer', dependsOn: ['step-a'], requiredCapabilities: ['run_tests'] },
+      { id: 'step-b', title: 'Deploy', objective: 'Deploy', role: 'implementer', dependsOn: ['step-a'], requiredCapabilities: ['push'] },
     ],
     executionMode: 'delegated',
     requiresHumanApproval: false,

@@ -1,3 +1,8 @@
+import {
+  AUTONOMOUS_V1_CEILING,
+  AUTONOMOUS_V1_FORBIDDEN_CAPABILITIES,
+} from './autonomousAuthority.js';
+
 export type ProjectTaskPriority =
   | 'low'
   | 'normal'
@@ -39,19 +44,11 @@ export type ProjectTaskSafetyPolicy = {
 };
 
 const ALLOWED_CAPABILITIES: readonly ProjectTaskRequestedCapability[] = [
-  'repository_read',
-  'isolated_worktree_write',
-  'run_tests',
-  'local_commit',
+  ...AUTONOMOUS_V1_CEILING,
 ];
 
 const BLOCKED_CAPABILITIES: readonly ProjectTaskBlockedCapability[] = [
-  'push',
-  'merge',
-  'deploy',
-  'production_write',
-  'database_write',
-  'secret_access',
+  ...AUTONOMOUS_V1_FORBIDDEN_CAPABILITIES,
 ];
 
 export function createProjectTaskSafetyPolicy(): ProjectTaskSafetyPolicy {

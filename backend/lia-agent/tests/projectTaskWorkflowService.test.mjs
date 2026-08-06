@@ -118,8 +118,14 @@ test("optional observer reports only real public workflow boundaries", async () 
 });
 
 test("Hermes proposal with local_commit without run_tests fails after proposal validation", async () => {
-  const fake = harness();
-  const result = await run(request(["repository_read", "isolated_worktree_write", "local_commit"]), fake);
+  const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
+    steps: [{
+      id: "step-1", title: "Commit", objective: "Commit locally",
+      role: "implementer", dependsOn: [],
+      requiredCapabilities: ["repository_read", "isolated_worktree_write", "local_commit"],
+    }],
+  })) } });
+  const result = await run(request(), fake);
   assert.equal(result.stage, "hermes");
   assert.equal(result.error, "invalid_hermes_proposal");
   assert.equal(fake.calls.codex.length, 0);
@@ -146,8 +152,7 @@ test("one transient Hermes failure is retried with the identical request and the
   fake.dependencies.executeHermes = async (...args) => {
     fake.calls.hermes.push(args);
     if (attempt++ === 0) return { ok: false, error: "execution_failed" };
-    const data = JSON.parse(args[1].split("<PROJECT_TASK_DATA>\n")[1].split("\n</PROJECT_TASK_DATA>")[0]);
-    return { ok: true, response: JSON.stringify(proposal({ steps: [{ id: "step-1", title: "Implement", objective: "Change only approved files", role: "implementer", dependsOn: [], requiredCapabilities: data.approvedCapabilities }] })) };
+    return { ok: true, response: JSON.stringify(proposal()) };
   };
   void original;
   const result = await run(request(), fake);
@@ -223,7 +228,7 @@ test("two structurally invalid proposals fail closed after one repair", async ()
 
 test("capability escalation is rejected before Codex", async () => {
   const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
-    steps: [{ id: "step-1", title: "Escalate", objective: "Run tests", role: "implementer", dependsOn: [], requiredCapabilities: ["run_tests"] }],
+    steps: [{ id: "step-1", title: "Escalate", objective: "Push changes", role: "implementer", dependsOn: [], requiredCapabilities: ["push"] }],
   })) } });
   const result = await run(request(), fake);
   assert.equal(result.stage, "hermes");
@@ -262,9 +267,8 @@ test("repair prompt preserves the same task data and never expands approved capa
   await run(request(["repository_read"]), fake);
   const taskData = (prompt) => JSON.parse(prompt.split("<PROJECT_TASK_DATA>\n")[1].split("\n</PROJECT_TASK_DATA>")[0]);
   assert.deepEqual(taskData(fake.calls.hermes[1][1]), taskData(fake.calls.hermes[0][1]));
-  assert.deepEqual(taskData(fake.calls.hermes[1][1]).approvedCapabilities, ["repository_read"]);
-  assert.doesNotMatch(fake.calls.hermes[1][1], /isolated_worktree_write|run_tests|local_commit/);
-  assert.equal(fake.calls.codex[0][0].effectiveCapabilities.includes("repository_read"), true);
+  assert.deepEqual(taskData(fake.calls.hermes[1][1]).approvedCapabilities, ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]);
+  assert.deepEqual(fake.calls.codex[0][0].effectiveCapabilities, ["repository_read"]);
 });
 
 test("Codex safe failure is preserved", async () => {
@@ -280,7 +284,7 @@ test("Codex safe failure is preserved", async () => {
 });
 
 test("Codex success without run_tests is ready for review", async () => {
-  const fake = harness();
+  const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal()) } });
   const result = await run(request(), fake);
   assert.deepEqual(result, {
     ok: true, projectId: "approved-project", executionId: "execution-123",
@@ -337,7 +341,13 @@ test("verification failure retains execution and never commits", async () => {
 });
 
 test("verification success without local_commit returns verified", async () => {
-  const fake = harness();
+  const fake = harness({ hermes: { ok: true, response: JSON.stringify(proposal({
+    steps: [{
+      id: "step-1", title: "Implement", objective: "Change only approved files",
+      role: "implementer", dependsOn: [],
+      requiredCapabilities: ["repository_read", "isolated_worktree_write", "run_tests"],
+    }],
+  })) } });
   const result = await run(request(["repository_read", "isolated_worktree_write", "run_tests"]), fake);
   assert.deepEqual(result, {
     ok: true, projectId: "approved-project", executionId: "execution-123", status: "verified",
