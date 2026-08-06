@@ -29,7 +29,7 @@ export { PROJECT_CODEX_WORKTREE_ROOT } from "./projectCodexWorkspace.js";
 export const PROJECT_CODEX_MAX_PROMPT_CHARS = 16_000;
 export const PROJECT_CODEX_MAX_OUTPUT_BYTES = 64 * 1024;
 export const PROJECT_CODEX_MAX_RESULT_CHARS = 6_000;
-export const PROJECT_CODEX_TIMEOUT_MS = 10 * 60 * 1000;
+export const PROJECT_CODEX_TIMEOUT_MS = 20 * 60 * 1000;
 
 export interface ProjectCodexProcessRequest {
   file: "git" | "codex";
