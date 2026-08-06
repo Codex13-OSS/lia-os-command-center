@@ -29,6 +29,34 @@ existe en las dos capas:
   que sirve `frontend/dist` y traduce los mismos prefijos hacia el backend
   interno en `127.0.0.1:3014`.
 
+## Configuración del proyecto autónomo
+
+El flujo real requiere dos archivos de configuración estrictos (el backend los
+valida y falla cerrado ante cualquier campo faltante o extra):
+
+- `config/lia-hermes.projects.example.json` — registro de proyectos
+  (`LIA_PROJECT_REGISTRY_PATH`). Debe contener `lia-hermes` activo con su
+  `repositoryRoot`.
+- `config/lia-hermes.project-verification.example.json` — perfil de
+  verificación preautorizada (`LIA_PROJECT_VERIFICATION_PATH`). Ejecuta las
+  comprobaciones del repo desde el worktree aislado.
+
+Copiar las plantillas a la configuración de operación (p. ej.
+`/opt/lia-os-config/projects.json` y
+`/opt/lia-os-config/project-verification.json`) y ajustar `repositoryRoot` a
+la ruta real del repositorio. Validez verificable con:
+
+```bash
+cd backend/lia-agent && npm run build
+cd ../..
+node scripts/lia-project-runtime-config-template-self-check.mjs
+```
+
+El self-check usa los mismos parsers del backend TypeScript y confirma que una
+instrucción real de `lia-hermes` resuelve en la etapa de planificación con las
+capacidades aprobadas (`repository_read`, `isolated_worktree_write`,
+`run_tests`, `local_commit`).
+
 ## Verificación local del flujo
 
 ```bash
@@ -57,4 +85,5 @@ Pruebas:
 node --test scripts/tests/*.test.mjs
 cd backend/lia-agent && npm run self-check
 cd frontend && npm run build
+node scripts/lia-project-runtime-config-template-self-check.mjs
 ```

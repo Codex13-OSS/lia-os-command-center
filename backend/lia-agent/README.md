@@ -109,7 +109,16 @@ npm run dev:lia
 
 El registro debe contener el proyecto activo (p. ej. `lia-hermes` con
 `repositoryRoot` y `enabled: true`) y el perfil de verificación sus
-comprobaciones preautorizadas.
+comprobaciones preautorizadas. Plantillas validadas contra los parsers reales
+del backend en `config/lia-hermes.projects.example.json` y
+`config/lia-hermes.project-verification.example.json`; su validez se comprueba
+con:
+
+```bash
+cd backend/lia-agent && npm run build
+cd ../..
+node scripts/lia-project-runtime-config-template-self-check.mjs
+```
 
 ## Validacion local TypeScript
 

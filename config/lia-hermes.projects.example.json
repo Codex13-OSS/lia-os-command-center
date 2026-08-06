@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "projectId": "lia-hermes",
+      "displayName": "LÍA O.S. / Hermes",
+      "repositoryRoot": "/opt/executive-platform-demo",
+      "enabled": true
+    }
+  ]
+}
