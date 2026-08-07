@@ -917,3 +917,111 @@
     order: 2;
   }
 }
+
+/* =========================================================
+   LÍA MOBILE — Projects chat
+   ========================================================= */
+@media (max-width: 720px) {
+  .lia-dash-r3-shell.lia-projects-r3-shell {
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    overflow: hidden !important;
+    padding-bottom: 0 !important;
+  }
+
+  .lia-projects-r3-shell .lia-dash-r3-main {
+    height: calc(100dvh - 64px) !important;
+    min-height: 0 !important;
+    padding: 8px 10px calc(76px + env(safe-area-inset-bottom, 0px)) !important;
+    overflow: hidden !important;
+  }
+
+  .lia-projects-r3-title {
+    flex: 0 0 auto;
+    padding: 3px 2px 8px;
+  }
+
+  .lia-projects-r3-title h1 {
+    margin-top: 2px;
+    font-size: 22px;
+  }
+
+  .lia-projects-r3-title p {
+    display: none;
+  }
+
+  .lia-projects-r3-live-badge {
+    margin-top: 5px;
+    padding: 4px 8px;
+    font-size: 9px;
+  }
+
+  .lia-projects-r3-chat {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .lia-projects-r3-thread {
+    min-height: 0;
+    padding: 4px 2px 12px;
+    gap: 12px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .lia-projects-r3-welcome {
+    margin: 6px 0;
+    padding: 15px;
+    border-radius: 18px;
+  }
+
+  .lia-projects-r3-msg.is-user .lia-projects-r3-msg-bubble {
+    max-width: 88% !important;
+  }
+
+  .lia-projects-r3-msg.is-lia .lia-projects-r3-msg-bubble {
+    max-width: calc(100% - 42px);
+  }
+
+  .lia-projects-r3-stages {
+    grid-template-columns: 1fr !important;
+    gap: 6px;
+  }
+
+  .lia-projects-r3-composer {
+    flex: 0 0 auto;
+    margin-top: 5px;
+    padding: 8px;
+    border-radius: 20px;
+    background: rgba(7, 22, 37, .86);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .lia-projects-r3-composer-field {
+    align-items: flex-end;
+  }
+
+  .lia-projects-r3-composer textarea {
+    min-height: 40px;
+    max-height: 120px;
+    font-size: 16px;
+    line-height: 1.4;
+  }
+
+  .lia-projects-r3-composer-meta {
+    display: none;
+  }
+
+  .lia-projects-r3-attach,
+  .lia-projects-r3-send {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .lia-projects-r3-rail {
+    display: none !important;
+  }
+}

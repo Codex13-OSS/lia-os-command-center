@@ -90,6 +90,35 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
         <DashboardIconR3 name={isCompact ? 'chevron-derecho' : 'chevron-izquierdo'} />
       </button>
 
+
+      <nav className="lia-dash-r3-mobile-nav" aria-label="Navegación móvil">
+        {dashboardNavigationR3
+          .filter((item) => ['dashboard', 'agenda', 'projects', 'alerts'].includes(item.id))
+          .map((item) => (
+            <button
+              key={`mobile-${item.id}`}
+              type="button"
+              className={`lia-dash-r3-mobile-nav-item${item.id === props.activeSection ? ' is-active' : ''}`}
+              onClick={actions[item.id]}
+              aria-current={item.id === props.activeSection ? 'page' : undefined}
+              aria-label={item.label}
+            >
+              <DashboardIconR3 name={item.icon} />
+              <span>{item.label}</span>
+              {'badge' in item && <b>{item.badge}</b>}
+            </button>
+          ))}
+        <button
+          type="button"
+          className="lia-dash-r3-mobile-nav-item"
+          onClick={props.onLogout}
+          aria-label="Salir"
+        >
+          <DashboardIconR3 name="operador" />
+          <span>Más</span>
+        </button>
+      </nav>
+
       <div
         className={`lia-dash-r3-resize-handle${props.isResizing ? ' lia-dash-r3-resize-handle-active' : ''}`}
         onPointerDown={props.onResizeStart}

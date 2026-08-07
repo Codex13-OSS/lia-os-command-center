@@ -656,3 +656,280 @@
   .lia-mobility-r3-chart .lia-mobility-r3-chart-wave { opacity: .34; transform: scale(.8); }
   .lia-r3-reveal { transform: none; }
 }
+
+
+/* =========================================================
+   LÍA MOBILE — native phone layout
+   ========================================================= */
+
+.lia-dash-r3-mobile-nav {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .lia-dash-r3-shell {
+    --lia-dash-r3-sidebar-width: 0px !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr) !important;
+    width: 100% !important;
+    min-height: 100dvh !important;
+    height: auto !important;
+    padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px)) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  .lia-dash-r3-sidebar-shell {
+    position: fixed !important;
+    z-index: 60 !important;
+    inset: auto 0 0 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    pointer-events: none;
+  }
+
+  .lia-dash-r3-brand,
+  .lia-dash-r3-navigation,
+  .lia-dash-r3-operator-tile,
+  .lia-dash-r3-sidebar-toggle,
+  .lia-dash-r3-resize-handle {
+    display: none !important;
+  }
+
+  .lia-dash-r3-mobile-nav {
+    pointer-events: auto;
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+    margin: 0 max(8px, env(safe-area-inset-right, 0px))
+      max(8px, env(safe-area-inset-bottom, 0px))
+      max(8px, env(safe-area-inset-left, 0px));
+    padding: 7px 8px;
+    border: 1px solid rgba(160, 207, 238, .18);
+    border-radius: 24px;
+    background: rgba(6, 20, 34, .78);
+    box-shadow:
+      0 12px 34px rgba(0, 0, 0, .42),
+      inset 0 1px rgba(234, 248, 255, .08);
+    backdrop-filter: blur(24px) saturate(145%);
+    -webkit-backdrop-filter: blur(24px) saturate(145%);
+  }
+
+  .lia-dash-r3-mobile-nav-item {
+    position: relative;
+    min-width: 0;
+    min-height: 54px;
+    border: 0;
+    border-radius: 17px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    color: #8098aa;
+    background: transparent;
+    font: inherit;
+  }
+
+  .lia-dash-r3-mobile-nav-item svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .lia-dash-r3-mobile-nav-item span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 9px;
+    font-weight: 650;
+  }
+
+  .lia-dash-r3-mobile-nav-item b {
+    position: absolute;
+    top: 3px;
+    right: 16%;
+    min-width: 17px;
+    height: 17px;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    color: white;
+    background: #258fd0;
+    font-size: 9px;
+  }
+
+  .lia-dash-r3-mobile-nav-item.is-active {
+    color: #d9f2ff;
+    background: linear-gradient(145deg, rgba(27, 97, 145, .58), rgba(10, 45, 72, .82));
+    box-shadow:
+      inset 0 1px rgba(226, 247, 255, .12),
+      0 5px 16px rgba(15, 101, 158, .20);
+  }
+
+  .lia-dash-r3-header-shell {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 40 !important;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    min-width: 0 !important;
+    min-height: 64px !important;
+    padding:
+      max(8px, env(safe-area-inset-top, 0px))
+      12px
+      8px !important;
+    display: grid !important;
+    grid-template-columns: 42px minmax(126px, 1fr) auto !important;
+    gap: 8px !important;
+    align-items: center !important;
+    background: rgba(4, 15, 26, .74);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
+  }
+
+  .lia-dash-r3-search {
+    width: 42px !important;
+    min-width: 42px !important;
+    height: 42px !important;
+    padding: 0 !important;
+    order: 1;
+  }
+
+  .lia-dash-r3-search input,
+  .lia-dash-r3-search span {
+    display: none !important;
+  }
+
+  .lia-dash-r3-search button {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  .lia-dash-r3-focus {
+    display: none !important;
+  }
+
+  .lia-dash-r3-temporal-context {
+    order: 2;
+    min-width: 0 !important;
+    width: 100% !important;
+    padding: 6px 10px !important;
+  }
+
+  .lia-dash-r3-temporal-context span {
+    font-size: 8px !important;
+  }
+
+  .lia-dash-r3-temporal-context time {
+    font-size: clamp(18px, 6vw, 25px) !important;
+  }
+
+  .lia-dash-r3-header-controls {
+    order: 3;
+    min-width: 0;
+    gap: 4px !important;
+  }
+
+  .lia-dash-r3-header-controls button {
+    width: 38px !important;
+    height: 38px !important;
+  }
+
+  .lia-dash-r3-header-controls button:nth-child(2),
+  .lia-dash-r3-header-controls button:last-child {
+    display: none !important;
+  }
+
+  .lia-dash-r3-avatar {
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .lia-dash-r3-main {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding:
+      12px
+      12px
+      calc(18px + env(safe-area-inset-bottom, 0px)) !important;
+    overflow: visible !important;
+  }
+
+  .lia-dash-r3-rail-shell {
+    grid-column: 1 !important;
+    width: auto !important;
+    margin: 0 12px 18px !important;
+  }
+
+  .lia-dash-r3-metric-frames {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  .lia-dash-r3-metric-card {
+    min-height: 112px !important;
+    padding: 15px 16px !important;
+    grid-template-columns: 54px minmax(0, 1fr) !important;
+  }
+
+  .lia-dash-r3-map-frame {
+    min-height: 560px !important;
+    height: auto !important;
+  }
+
+  .lia-mobility-r3-meeting {
+    left: 14px !important;
+    right: 14px !important;
+    width: auto !important;
+    max-height: none !important;
+  }
+
+  .lia-mobility-r3-telemetry {
+    left: 12px !important;
+    right: 12px !important;
+    bottom: 12px !important;
+    width: auto !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .lia-mobility-r3-lower {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .lia-dash-r3-header-shell {
+    grid-template-columns: 38px minmax(112px, 1fr) auto !important;
+    padding-inline: 8px !important;
+  }
+
+  .lia-dash-r3-header-controls button {
+    width: 34px !important;
+    height: 34px !important;
+  }
+
+  .lia-dash-r3-avatar {
+    width: 36px !important;
+    height: 36px !important;
+  }
+
+  .lia-dash-r3-mobile-nav {
+    margin-inline: 6px;
+    padding-inline: 5px;
+  }
+
+  .lia-dash-r3-mobile-nav-item {
+    min-height: 51px;
+  }
+}
