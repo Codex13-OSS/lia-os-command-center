@@ -37,7 +37,28 @@ function createProjectTaskId(): string {
 }
 
 export function loadPersistedProjectTask(storage: Storage = localStorage): PersistedProjectTask | null {
-  try { const value: unknown = JSON.parse(storage.getItem(LIA_PROJECT_TASK_STORAGE_KEY) ?? 'null'); if (!isRecord(value) || !UUID.test(String(value.taskId)) || !isRecord(value.request) || !STAGES.has(value.lastStatus as LiaProjectTaskStage)) return null; return value as unknown as PersistedProjectTask; } catch { return null; }
+  try {
+    const value: unknown = JSON.parse(storage.getItem(LIA_PROJECT_TASK_STORAGE_KEY) ?? 'null');
+    if (
+      !isRecord(value) ||
+      !UUID.test(String(value.taskId)) ||
+      !isRecord(value.request) ||
+      typeof value.request.projectId !== 'string' ||
+      typeof value.request.instruction !== 'string' ||
+      !['low', 'normal', 'high', 'critical'].includes(String(value.request.priority)) ||
+      !Array.isArray(value.request.requestedCapabilities) ||
+      !value.request.requestedCapabilities.every((item) => typeof item === 'string') ||
+      typeof value.createdAt !== 'number' ||
+      !Number.isFinite(value.createdAt) ||
+      value.createdAt <= 0 ||
+      !STAGES.has(value.lastStatus as LiaProjectTaskStage)
+    ) {
+      return null;
+    }
+    return value as unknown as PersistedProjectTask;
+  } catch {
+    return null;
+  }
 }
 export function clearPersistedProjectTask(taskId: string, storage: Storage = localStorage): void {
   try {

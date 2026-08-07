@@ -146,8 +146,25 @@ function formatElapsed(fromMs: number, nowMs: number): string {
   return `${hours} h ${minutes % 60} min`;
 }
 
+function safeTaskDate(fromMs: number): Date | null {
+  if (!Number.isFinite(fromMs) || fromMs <= 0) return null;
+  const date = new Date(fromMs);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function formatClock(fromMs: number): string {
-  return new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit' }).format(new Date(fromMs));
+  const date = safeTaskDate(fromMs);
+  if (!date) return 'Hora no disponible';
+  try {
+    return new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit' }).format(date);
+  } catch {
+    return 'Hora no disponible';
+  }
+}
+
+function formatDateTimeAttribute(fromMs: number): string | undefined {
+  const date = safeTaskDate(fromMs);
+  return date ? date.toISOString() : undefined;
 }
 
 function ReceiptCard({ receipt }: { receipt: LiaProjectTaskReceipt }) {
@@ -232,7 +249,7 @@ function ConversationTurn({ run, now }: { run: ProjectRun; now: number }) {
             <span className={`lia-projects-r3-priority-chip is-${run.priority}`}>
               Prioridad {PRIORITY_LABELS[run.priority]}
             </span>
-            <time dateTime={new Date(run.createdAt).toISOString()}>{formatClock(run.createdAt)}</time>
+            <time dateTime={formatDateTimeAttribute(run.createdAt)}>{formatClock(run.createdAt)}</time>
           </footer>
         </div>
       </article>
