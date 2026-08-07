@@ -1,58 +1,131 @@
-.lia-projects-r3-shell .lia-dash-r3-main { overflow-y: auto; }
-.lia-projects-r3-title { padding: 8px 3px 16px; }
-.lia-projects-r3-title span, .lia-projects-r3-project-head span, .lia-projects-r3-rail span { color: #6faed8; font-size: 10px; font-weight: 750; letter-spacing: .11em; }
-.lia-projects-r3-title h1 { margin: 4px 0 2px; color: #edf7fd; font-size: 25px; }
-.lia-projects-r3-title p, .lia-projects-r3-project-head p { margin: 0; color: #8fa5b6; font-size: 12px; }
-.lia-projects-r3-title .lia-projects-r3-connected-badge { width: fit-content; margin: 8px 0 7px; padding: 5px 10px; color: #c9e9fb; border: 1px solid rgba(111,190,235,.28); border-radius: 999px; background: linear-gradient(135deg, rgba(31,91,132,.42), rgba(10,38,61,.64)); box-shadow: inset 0 1px rgba(235,248,255,.08), 0 6px 18px rgba(0,8,18,.18); font-size: 10.5px; font-weight: 650; letter-spacing: .025em; }
-.lia-projects-r3-project-card { padding: 22px; border: 1px solid rgba(140,190,223,.20); border-radius: 18px; background: var(--r3-instrument); box-shadow: 0 24px 52px rgba(0,3,9,.38), inset 0 1px rgba(224,242,254,.08); }
-.lia-projects-r3-project-head { display: flex; align-items: center; gap: 14px; padding-bottom: 20px; border-bottom: 1px solid rgba(93,145,184,.14); }
-.lia-projects-r3-project-head > div:nth-child(2) { min-width: 0; }
-.lia-projects-r3-project-head h2 { margin: 3px 0 4px; color: #edf6fc; font-size: 19px; }
-.lia-projects-r3-project-mark { width: 48px; height: 48px; display: grid; place-items: center; flex: 0 0 auto; color: #cceaff; border: 1px solid rgba(120,190,237,.28); border-radius: 14px; background: rgba(24,91,139,.28); font-size: 12px; font-weight: 800; }
-.lia-projects-r3-project-head > i { margin-left: auto; padding: 6px 10px; color: #9ee0bd; border-radius: 999px; background: rgba(40,126,89,.22); font-size: 10px; font-style: normal; }
-.lia-projects-r3-form { margin-top: 20px; }
-.lia-projects-r3-form > label { display: block; margin-bottom: 8px; color: #dcebf5; font-size: 13px; font-weight: 700; }
-.lia-projects-r3-form textarea, .lia-projects-r3-form select { color: #e5f0f7; border: 1px solid rgba(111,170,211,.22); border-radius: 12px; outline: none; background: rgba(5,18,31,.62); }
-.lia-projects-r3-form textarea { width: 100%; padding: 14px; resize: vertical; min-height: 125px; font: inherit; line-height: 1.5; }
-.lia-projects-r3-form textarea:focus, .lia-projects-r3-form select:focus { border-color: #55adf2; box-shadow: 0 0 0 3px rgba(85,173,242,.10); }
-.lia-projects-r3-form textarea::placeholder { color: #6f8799; }
-.lia-projects-r3-form-actions { margin-top: 12px; display: flex; align-items: end; justify-content: space-between; gap: 14px; }
-.lia-projects-r3-form-actions label { display: grid; gap: 6px; color: #91a8ba; font-size: 11px; }
-.lia-projects-r3-form select { min-width: 150px; height: 40px; padding: 0 10px; }
-.lia-projects-r3-form-actions button { min-width: 164px; height: 42px; padding: 0 18px; color: #f1f9ff; border: 1px solid rgba(131,204,251,.34); border-radius: 11px; background: linear-gradient(135deg, #217ebd, #155b91); box-shadow: 0 10px 24px rgba(14,90,145,.28); cursor: pointer; }
-.lia-projects-r3-form-actions button:disabled { opacity: .48; cursor: default; box-shadow: none; }
-.lia-projects-r3-workflow {
-  position: relative;
-  margin-top: 22px;
-  padding: 20px;
+/* ================================================================
+   LÍA O.S. — Proyectos como conversación operativa con LÍA.
+   Fondo oscuro elegante, acentos por proceso, compositor premium.
+   ================================================================ */
+
+.lia-projects-r3-shell {
+  --lia-proc-accepted: #22d3ee;
+  --lia-proc-planning: #a78bfa;
+  --lia-proc-hermes: #4cc3ff;
+  --lia-proc-codex: #f0a45c;
+  --lia-proc-verification: #2dd4bf;
+  --lia-proc-commit: #8b95f8;
+  --lia-proc-completed: #34d399;
+  --lia-proc-failed: #f87171;
+  --lia-proc-neutral: #7fb4d8;
+}
+
+/* El main ejecutivo se convierte en una superficie de chat fija:
+   el hilo hace scroll interno y el compositor queda siempre visible. */
+.lia-projects-r3-shell .lia-dash-r3-main {
   overflow: hidden;
-  border: 1px solid rgba(129,185,223,.18);
-  border-radius: 16px;
-  background:
-    linear-gradient(145deg, rgba(10,31,49,.80), rgba(6,22,36,.64)),
-    rgba(8,24,38,.72);
-  box-shadow:
-    inset 0 1px rgba(232,247,255,.06),
-    0 18px 44px rgba(0,7,15,.22);
-  backdrop-filter: blur(18px);
+  padding: 14px 20px 16px;
 }
 
-.lia-projects-r3-workflow.is-running {
-  border-color: rgba(104,184,235,.24);
+.lia-projects-r3-title {
+  flex: 0 0 auto;
+  padding: 6px 4px 14px;
 }
 
-.lia-projects-r3-workflow-head {
+.lia-projects-r3-title > div > span {
+  color: #6faed8;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.lia-projects-r3-title h1 {
+  margin: 4px 0 2px;
+  color: #edf7fd;
+  font-size: 26px;
+  letter-spacing: -.02em;
+}
+
+.lia-projects-r3-title p {
+  margin: 0;
+  color: #8fa5b6;
+  font-size: 12px;
+}
+
+.lia-projects-r3-live-badge {
+  width: fit-content;
+  margin: 9px 0 0;
+  padding: 5px 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #c9e9fb;
+  border: 1px solid rgba(111, 190, 235, .26);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(31, 91, 132, .38), rgba(10, 38, 61, .58));
+  box-shadow: inset 0 1px rgba(235, 248, 255, .07), 0 6px 18px rgba(0, 8, 18, .16);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: .03em;
+}
+
+.lia-projects-r3-live-badge i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4bd28b;
+  box-shadow: 0 0 10px rgba(75, 210, 139, .65);
+}
+
+.lia-projects-r3-chat {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.lia-projects-r3-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 4px 18px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(84, 149, 195, .4) transparent;
+}
+
+.lia-projects-r3-thread::-webkit-scrollbar {
+  width: 7px;
+}
+
+.lia-projects-r3-thread::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(84, 149, 195, .32);
+}
+
+/* Estado inicial: LÍA lista, sin ejecución. */
+.lia-projects-r3-welcome {
+  max-width: 620px;
+  margin: 12px auto 6px;
+  padding: 20px 22px;
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
+  gap: 14px;
+  border: 1px solid rgba(129, 185, 223, .14);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(10, 31, 49, .5), rgba(6, 20, 34, .42));
+  box-shadow: inset 0 1px rgba(232, 247, 255, .05);
 }
 
-.lia-projects-r3-workflow-head > div:first-child {
-  min-width: 0;
+.lia-projects-r3-welcome strong {
+  display: block;
+  margin-bottom: 5px;
+  color: #e9f5fd;
+  font-size: 13.5px;
 }
 
-.lia-projects-r3-workflow-head span {
+.lia-projects-r3-welcome-eyebrow {
   display: block;
   margin-bottom: 5px;
   color: #79bfe8;
@@ -61,264 +134,455 @@
   letter-spacing: .14em;
 }
 
-.lia-projects-r3-workflow-head h3 {
+.lia-projects-r3-welcome p {
   margin: 0;
-  color: #eef8fe;
-  font-size: 15px;
-  font-weight: 720;
-  letter-spacing: -.01em;
+  color: #8fa5b6;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
-.lia-projects-r3-workflow-head p {
-  max-width: 620px;
-  margin: 6px 0 0;
-  color: #91a9ba;
-  font-size: 11px;
+.lia-projects-r3-lia-avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #d9f1ff;
+  border: 1px solid rgba(122, 192, 240, .3);
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 25%, rgba(64, 148, 205, .65), rgba(12, 44, 72, .85));
+  box-shadow: 0 8px 20px rgba(0, 6, 14, .35), inset 0 1px rgba(226, 244, 255, .18);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+/* Burbujas de la conversación. */
+.lia-projects-r3-msg {
+  display: flex;
+  gap: 10px;
+  max-width: 760px;
+}
+
+.lia-projects-r3-msg.is-user {
+  align-self: flex-end;
+  justify-content: flex-end;
+}
+
+.lia-projects-r3-msg.is-user .lia-projects-r3-msg-bubble {
+  max-width: min(560px, 86%);
+  border-radius: 19px 19px 6px 19px;
+}
+
+.lia-projects-r3-msg.is-lia {
+  align-self: flex-start;
+  width: 100%;
+}
+
+.lia-projects-r3-msg.is-lia .lia-projects-r3-msg-bubble {
+  flex: 1;
+  min-width: 0;
+  border-radius: 6px 19px 19px 19px;
+}
+
+.lia-projects-r3-msg-bubble {
+  position: relative;
+  padding: 13px 16px;
+  border: 1px solid rgba(126, 180, 216, .14);
+  background: linear-gradient(150deg, rgba(10, 29, 48, .66), rgba(6, 19, 33, .58));
+  box-shadow: 0 16px 38px rgba(0, 4, 11, .28), inset 0 1px rgba(231, 246, 255, .06);
+  backdrop-filter: blur(18px) saturate(132%);
+}
+
+.lia-projects-r3-msg.is-user .lia-projects-r3-msg-bubble {
+  color: #eff8fe;
+  border-color: rgba(93, 179, 235, .26);
+  background: linear-gradient(145deg, rgba(33, 115, 172, .78), rgba(18, 76, 118, .74));
+  box-shadow: 0 14px 32px rgba(0, 5, 13, .32), inset 0 1px rgba(231, 246, 255, .16);
+}
+
+.lia-projects-r3-msg-bubble > p {
+  margin: 0;
+  font-size: 13.5px;
   line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.lia-projects-r3-live-indicator {
+/* Acento por proceso (paleta diferenciada, no multicolor infantil). */
+.lia-projects-r3-msg.is-accepted { --lia-proc: var(--lia-proc-accepted); }
+.lia-projects-r3-msg.is-planning { --lia-proc: var(--lia-proc-planning); }
+.lia-projects-r3-msg.is-hermes { --lia-proc: var(--lia-proc-hermes); }
+.lia-projects-r3-msg.is-codex { --lia-proc: var(--lia-proc-codex); }
+.lia-projects-r3-msg.is-verification { --lia-proc: var(--lia-proc-verification); }
+.lia-projects-r3-msg.is-commit { --lia-proc: var(--lia-proc-commit); }
+.lia-projects-r3-msg.is-completed { --lia-proc: var(--lia-proc-completed); }
+.lia-projects-r3-msg.is-failed { --lia-proc: var(--lia-proc-failed); }
+.lia-projects-r3-msg.is-neutral { --lia-proc: var(--lia-proc-neutral); }
+
+.lia-projects-r3-msg.is-lia .lia-projects-r3-msg-bubble {
+  border-top-color: color-mix(in srgb, var(--lia-proc) 34%, transparent);
+  box-shadow:
+    0 16px 38px rgba(0, 4, 11, .28),
+    inset 0 1px rgba(231, 246, 255, .06),
+    0 0 26px color-mix(in srgb, var(--lia-proc) 7%, transparent);
+}
+
+.lia-projects-r3-msg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.lia-projects-r3-msg-head > strong {
+  color: #dcebf5;
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.lia-projects-r3-live-chip {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  flex: 0 0 auto;
-  padding: 6px 9px;
-  color: #bfe8ff;
-  border: 1px solid rgba(99,183,236,.22);
+  padding: 5px 10px;
+  color: color-mix(in srgb, var(--lia-proc) 78%, #dff3ff);
+  border: 1px solid color-mix(in srgb, var(--lia-proc) 30%, transparent);
   border-radius: 999px;
-  background: rgba(40,116,166,.14);
-  font-size: 9.5px;
-  font-weight: 750;
+  background: color-mix(in srgb, var(--lia-proc) 10%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
 }
 
-.lia-projects-r3-live-indicator i {
+.lia-projects-r3-live-chip i {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 0 0 rgba(137,213,255,.24);
-  animation: lia-projects-r3-live-pulse 1.8s ease-out infinite;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--lia-proc) 40%, transparent);
+  animation: lia-projects-r3-live-pulse 1.7s ease-out infinite;
 }
 
+.lia-projects-r3-status-copy h3 {
+  margin: 0;
+  color: #f0f8fe;
+  font-size: 15.5px;
+  font-weight: 720;
+  letter-spacing: -.01em;
+}
+
+.lia-projects-r3-status-copy p {
+  margin: 5px 0 0;
+  color: #93a9ba;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* Progresión por pasos, cada uno con su acento. */
 .lia-projects-r3-stages {
-  margin: 19px 0 0;
-  padding: 18px 0 0;
-  display: grid;
-  grid-template-columns: repeat(5,minmax(0,1fr));
+  margin: 15px 0 0;
+  padding: 14px 0 0;
   list-style: none;
-  border-top: 1px solid rgba(105,154,188,.12);
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid rgba(105, 154, 188, .12);
 }
 
 .lia-projects-r3-stages li {
-  position: relative;
-  min-width: 0;
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding-right: 10px;
-  color: #687f91;
-}
-
-.lia-projects-r3-stages li::after {
-  content: '';
-  position: absolute;
-  z-index: 0;
-  top: 10px;
-  left: 20px;
-  right: -1px;
-  height: 1px;
-  background: rgba(91,145,181,.18);
-}
-
-.lia-projects-r3-stages li:last-child::after {
-  content: none;
-}
-
-.lia-projects-r3-stage-marker {
-  position: relative;
-  z-index: 1;
-  width: 21px;
-  height: 21px;
-  flex: 0 0 auto;
-}
-
-.lia-projects-r3-stage-marker i {
-  position: absolute;
-  inset: 2px;
-  border: 1px solid #4c6679;
-  border-radius: 50%;
-  background: #0a1b29;
-}
-
-.lia-projects-r3-stage-marker b {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: #73899a;
-  font-size: 8px;
-  font-weight: 800;
-}
-
-.lia-projects-r3-stage-copy {
+  align-items: center;
+  gap: 11px;
   min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.lia-projects-r3-stage-copy strong {
-  overflow: hidden;
-  color: inherit;
-  font-size: 10.5px;
-  font-weight: 750;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lia-projects-r3-stage-copy small {
-  min-height: 27px;
-  color: #667f91;
-  font-size: 9px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.lia-projects-r3-stage-copy em {
   color: #647b8c;
-  font-size: 8.5px;
-  font-style: normal;
-  font-weight: 700;
+}
+
+.lia-projects-r3-step-planning { --lia-proc: var(--lia-proc-planning); }
+.lia-projects-r3-step-hermes { --lia-proc: var(--lia-proc-hermes); }
+.lia-projects-r3-step-codex { --lia-proc: var(--lia-proc-codex); }
+.lia-projects-r3-step-verification { --lia-proc: var(--lia-proc-verification); }
+.lia-projects-r3-step-commit { --lia-proc: var(--lia-proc-commit); }
+
+.lia-projects-r3-stage-dot {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1px solid rgba(113, 152, 178, .5);
+  background: #0a1b29;
+  transition: background .3s ease, border-color .3s ease, box-shadow .3s ease;
 }
 
 .lia-projects-r3-stages li.is-active {
-  color: #d6f0ff;
+  color: #dff1fc;
 }
 
-.lia-projects-r3-stages li.is-active .lia-projects-r3-stage-marker i {
-  border-color: #70bce9;
-  background: rgba(39,111,157,.32);
-  box-shadow: 0 0 0 4px rgba(80,168,224,.08);
+.lia-projects-r3-stages li.is-active .lia-projects-r3-stage-dot {
+  border-color: var(--lia-proc);
+  background: var(--lia-proc);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--lia-proc) 13%, transparent),
+    0 0 16px color-mix(in srgb, var(--lia-proc) 45%, transparent);
   animation: lia-projects-r3-stage-pulse 1.9s ease-in-out infinite;
 }
 
-.lia-projects-r3-stages li.is-active .lia-projects-r3-stage-marker b {
-  color: #e0f5ff;
-}
-
-.lia-projects-r3-stages li.is-active .lia-projects-r3-stage-copy small,
-.lia-projects-r3-stages li.is-active .lia-projects-r3-stage-copy em {
-  color: #90bed8;
-}
-
 .lia-projects-r3-stages li.is-completed {
-  color: #b5dec8;
+  color: color-mix(in srgb, var(--lia-proc) 72%, #cfe7dd);
 }
 
-.lia-projects-r3-stages li.is-completed::after {
-  background: rgba(81,180,129,.30);
-}
-
-.lia-projects-r3-stages li.is-completed .lia-projects-r3-stage-marker i {
-  border-color: rgba(90,199,143,.72);
-  background: rgba(48,132,92,.44);
-}
-
-.lia-projects-r3-stages li.is-completed .lia-projects-r3-stage-marker b {
-  color: #d9f2e4;
-}
-
-.lia-projects-r3-stages li.is-completed .lia-projects-r3-stage-copy small,
-.lia-projects-r3-stages li.is-completed .lia-projects-r3-stage-copy em {
-  color: #789f89;
+.lia-projects-r3-stages li.is-completed .lia-projects-r3-stage-dot {
+  border-color: var(--lia-proc);
+  background: var(--lia-proc);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--lia-proc) 30%, transparent);
 }
 
 .lia-projects-r3-stages li.is-failed {
   color: #e0aaa7;
 }
 
-.lia-projects-r3-stages li.is-failed .lia-projects-r3-stage-marker i {
-  border-color: #b46d6a;
-  background: rgba(112,38,39,.30);
+.lia-projects-r3-stages li.is-failed .lia-projects-r3-stage-dot {
+  border-color: var(--lia-proc-failed);
+  background: var(--lia-proc-failed);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--lia-proc-failed) 35%, transparent);
 }
 
-.lia-projects-r3-error {
-  margin-top: 18px;
-  padding: 13px 15px;
-  color: #f2c6c3;
-  border: 1px solid rgba(224,105,101,.22);
+.lia-projects-r3-stage-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.lia-projects-r3-stage-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.lia-projects-r3-stage-copy small {
+  color: #647b8c;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.lia-projects-r3-progress {
+  height: 3px;
+  margin-top: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(105, 154, 188, .16);
+}
+
+.lia-projects-r3-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--lia-proc), color-mix(in srgb, var(--lia-proc) 55%, #ffffff 10%));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--lia-proc) 45%, transparent);
+  transition: width .6s cubic-bezier(.22, .8, .25, 1);
+}
+
+/* Meta del mensaje del usuario. */
+.lia-projects-r3-msg-bubble footer {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.lia-projects-r3-msg-bubble footer time {
+  color: rgba(226, 242, 253, .55);
+  font-size: 9.5px;
+}
+
+.lia-projects-r3-priority-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #bfe6ff;
+  border: 1px solid rgba(122, 190, 233, .22);
+  background: rgba(8, 29, 48, .4);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.lia-projects-r3-priority-chip.is-low { color: #a9d6f2; }
+.lia-projects-r3-priority-chip.is-normal { color: #c9e9fb; }
+.lia-projects-r3-priority-chip.is-high { color: #f5d9a8; border-color: rgba(240, 164, 92, .3); }
+.lia-projects-r3-priority-chip.is-critical { color: #f6b7b2; border-color: rgba(248, 113, 113, .34); }
+
+/* Avisos y errores. */
+.lia-projects-r3-notice {
+  max-width: 620px;
+  align-self: center;
+  padding: 9px 13px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #f0d6a4;
+  border: 1px solid rgba(216, 162, 77, .24);
   border-radius: 12px;
-  background: rgba(112,38,39,.18);
+  background: rgba(103, 69, 22, .22);
   font-size: 11.5px;
   line-height: 1.5;
 }
 
+.lia-projects-r3-notice span {
+  font-weight: 800;
+}
+
+.lia-projects-r3-error {
+  margin-top: 12px;
+  padding: 11px 13px;
+  color: #f6c4c1;
+  border: 1px solid rgba(224, 105, 101, .24);
+  border-radius: 12px;
+  background: rgba(112, 38, 39, .2);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+/* Solicitud de información (estructura lista para human-in-the-loop futuro). */
+.lia-projects-r3-info-request {
+  margin-top: 13px;
+  padding: 13px 14px;
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  border: 1px solid rgba(122, 190, 233, .22);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(24, 71, 105, .3), rgba(10, 34, 54, .28));
+}
+
+.lia-projects-r3-info-request-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #bfe6ff;
+  border: 1px solid rgba(122, 190, 233, .3);
+  border-radius: 50%;
+  background: rgba(30, 91, 135, .3);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.lia-projects-r3-info-request strong {
+  display: block;
+  color: #e4f2fb;
+  font-size: 12.5px;
+}
+
+.lia-projects-r3-info-request p {
+  margin: 3px 0 0;
+  color: #9fb4c3;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.lia-projects-r3-info-request small {
+  display: block;
+  margin-top: 6px;
+  color: #6f9fc0;
+  font-size: 9.5px;
+  letter-spacing: .03em;
+}
+
+/* Resultado final. */
 .lia-projects-r3-receipt {
-  margin-top: 18px;
-  padding: 19px;
-  border: 1px solid rgba(91,201,142,.20);
+  margin-top: 14px;
+  padding: 15px 16px;
+  border: 1px solid rgba(91, 201, 142, .22);
   border-radius: 15px;
   background:
-    linear-gradient(145deg, rgba(21,71,53,.24), rgba(11,39,33,.18)),
-    rgba(7,27,24,.26);
-  box-shadow: inset 0 1px rgba(224,255,239,.05);
+    linear-gradient(145deg, rgba(21, 71, 53, .26), rgba(11, 39, 33, .2)),
+    rgba(7, 27, 24, .24);
+  box-shadow: inset 0 1px rgba(224, 255, 239, .05), 0 12px 30px rgba(0, 8, 6, .18);
+}
+
+.lia-projects-r3-receipt.is-ready_for_review {
+  border-color: rgba(216, 162, 77, .28);
+  background:
+    linear-gradient(145deg, rgba(103, 69, 22, .2), rgba(66, 44, 14, .16)),
+    rgba(30, 22, 10, .2);
+}
+
+.lia-projects-r3-receipt.is-analyzed {
+  border-color: rgba(122, 190, 233, .22);
+  background:
+    linear-gradient(145deg, rgba(24, 71, 105, .22), rgba(10, 34, 54, .16)),
+    rgba(8, 25, 41, .2);
 }
 
 .lia-projects-r3-receipt-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
 }
 
 .lia-projects-r3-receipt-head span {
   display: block;
-  margin-bottom: 4px;
-  color: #79bf99;
+  margin-bottom: 3px;
+  color: #7fc9a0;
   font-size: 8.5px;
   font-weight: 800;
   letter-spacing: .14em;
 }
 
+.lia-projects-r3-receipt.is-ready_for_review .lia-projects-r3-receipt-head span { color: #d8b06a; }
+.lia-projects-r3-receipt.is-analyzed .lia-projects-r3-receipt-head span { color: #79bfe8; }
+
 .lia-projects-r3-receipt-head h3 {
   margin: 0;
-  color: #d9f2e4;
-  font-size: 15px;
+  color: #dff2e7;
+  font-size: 14.5px;
 }
 
-.lia-projects-r3-receipt-head > i {
-  width: 31px;
-  height: 31px;
+.lia-projects-r3-receipt.is-ready_for_review .lia-projects-r3-receipt-head h3 { color: #f0e2c4; }
+.lia-projects-r3-receipt.is-analyzed .lia-projects-r3-receipt-head h3 { color: #e0f1fb; }
+
+.lia-projects-r3-receipt-check {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
-  flex: 0 0 auto;
   color: #ccebd9;
-  border: 1px solid rgba(91,201,142,.28);
+  border: 1px solid rgba(91, 201, 142, .3);
   border-radius: 50%;
-  background: rgba(46,132,91,.24);
-  font-size: 14px;
-  font-style: normal;
+  background: rgba(46, 132, 91, .24);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .lia-projects-r3-result-text {
-  margin: 14px 0 0;
+  margin: 12px 0 0;
   color: #c7dcd2;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.65;
 }
 
 .lia-projects-r3-result-facts {
-  margin-top: 16px;
+  margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(auto-fit,minmax(160px,1fr));
-  gap: 9px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
 }
 
 .lia-projects-r3-result-facts > div {
   min-width: 0;
-  padding: 11px 12px;
-  border: 1px solid rgba(119,180,145,.11);
+  padding: 10px 12px;
+  border: 1px solid rgba(119, 180, 145, .12);
   border-radius: 11px;
-  background: rgba(9,31,26,.34);
+  background: rgba(9, 31, 26, .34);
 }
 
 .lia-projects-r3-result-facts span,
@@ -349,76 +613,307 @@
   line-height: 1.35;
 }
 
+/* Compositor premium. */
+.lia-projects-r3-composer {
+  flex: 0 0 auto;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid rgba(131, 194, 235, .18);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 88% -20%, rgba(56, 138, 196, .12), transparent 42%),
+    linear-gradient(150deg, rgba(11, 31, 50, .78), rgba(6, 19, 33, .7));
+  box-shadow: 0 20px 50px rgba(0, 4, 11, .4), inset 0 1px rgba(232, 247, 255, .08);
+  backdrop-filter: blur(22px) saturate(140%);
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.lia-projects-r3-composer:focus-within {
+  border-color: rgba(110, 194, 246, .42);
+  box-shadow:
+    0 22px 54px rgba(0, 4, 11, .44),
+    inset 0 1px rgba(232, 247, 255, .1),
+    0 0 0 4px rgba(85, 173, 242, .08);
+}
+
+.lia-projects-r3-composer-field {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+}
+
+.lia-projects-r3-attach {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #8fb2c9;
+  border: 1px solid rgba(131, 194, 235, .16);
+  border-radius: 12px;
+  background: rgba(10, 30, 48, .5);
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.lia-projects-r3-attach svg {
+  width: 16px;
+  height: 16px;
+}
+
+.lia-projects-r3-composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  max-height: 150px;
+  padding: 8px 2px;
+  resize: none;
+  overflow-y: auto;
+  color: #e9f4fb;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.lia-projects-r3-composer textarea::placeholder {
+  color: #718da2;
+}
+
+.lia-projects-r3-send {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #eff9ff;
+  border: 1px solid rgba(130, 202, 248, .26);
+  border-radius: 12px;
+  background: linear-gradient(145deg, #2a86c8, #175e92);
+  box-shadow: 0 10px 24px rgba(14, 90, 145, .32), inset 0 1px rgba(235, 248, 255, .22);
+  cursor: pointer;
+  transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
+}
+
+.lia-projects-r3-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 13px 28px rgba(14, 90, 145, .4), inset 0 1px rgba(235, 248, 255, .26);
+}
+
+.lia-projects-r3-send:disabled {
+  opacity: .42;
+  cursor: default;
+  box-shadow: none;
+}
+
+.lia-projects-r3-send svg {
+  width: 16px;
+  height: 16px;
+}
+
+.lia-projects-r3-send-busy {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(235, 248, 255, .35);
+  border-top-color: #eff9ff;
+  animation: lia-projects-r3-spin 1s linear infinite;
+}
+
+.lia-projects-r3-composer-meta {
+  margin-top: 8px;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lia-projects-r3-attach-note {
+  color: #637e92;
+  font-size: 9.5px;
+  letter-spacing: .03em;
+}
+
+.lia-projects-r3-priority {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(131, 194, 235, .12);
+  border-radius: 999px;
+  background: rgba(8, 25, 41, .5);
+}
+
+.lia-projects-r3-priority button {
+  padding: 4px 10px;
+  color: #7e98ab;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 650;
+  transition: color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+
+.lia-projects-r3-priority button:hover:not(:disabled) {
+  color: #c6ddec;
+}
+
+.lia-projects-r3-priority button.is-selected {
+  color: #dff2ff;
+  background: rgba(45, 132, 196, .3);
+  box-shadow: inset 0 0 0 1px rgba(110, 194, 246, .3), 0 4px 12px rgba(10, 72, 120, .22);
+}
+
+.lia-projects-r3-priority button:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.lia-projects-r3-composer-hint {
+  color: #5f7a8e;
+  font-size: 9px;
+  letter-spacing: .02em;
+}
+
+/* Rail de contexto. */
+.lia-projects-r3-rail {
+  padding: 18px;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.lia-projects-r3-rail section {
+  padding: 15px;
+  border-radius: 13px;
+  background: rgba(8, 25, 41, .58);
+  box-shadow: inset 0 1px rgba(255, 255, 255, .04);
+}
+
+.lia-projects-r3-rail span {
+  display: block;
+  color: #6faed8;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .11em;
+}
+
+.lia-projects-r3-rail strong,
+.lia-projects-r3-rail small {
+  display: block;
+}
+
+.lia-projects-r3-rail strong {
+  margin-top: 7px;
+  color: #e1eef7;
+  font-size: 13px;
+}
+
+.lia-projects-r3-rail small {
+  margin-top: 5px;
+  color: #849bad;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+/* Animaciones discretas. */
 @keyframes lia-projects-r3-live-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(137,213,255,.25); }
-  70% { box-shadow: 0 0 0 6px rgba(137,213,255,0); }
-  100% { box-shadow: 0 0 0 0 rgba(137,213,255,0); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--lia-proc, #7fd4ff) 35%, transparent); }
+  70% { box-shadow: 0 0 0 7px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 @keyframes lia-projects-r3-stage-pulse {
-  0%,100% { box-shadow: 0 0 0 4px rgba(80,168,224,.07); }
-  50% { box-shadow: 0 0 0 6px rgba(80,168,224,.13); }
+  0%, 100% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--lia-proc) 10%, transparent),
+      0 0 14px color-mix(in srgb, var(--lia-proc) 35%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px color-mix(in srgb, var(--lia-proc) 18%, transparent),
+      0 0 20px color-mix(in srgb, var(--lia-proc) 50%, transparent);
+  }
+}
+
+@keyframes lia-projects-r3-spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lia-projects-r3-live-indicator i,
-  .lia-projects-r3-stages li.is-active .lia-projects-r3-stage-marker i {
+  .lia-projects-r3-live-chip i,
+  .lia-projects-r3-stages li.is-active .lia-projects-r3-stage-dot,
+  .lia-projects-r3-send-busy {
     animation: none;
   }
 }
 
-.lia-projects-r3-rail { padding: 18px; gap: 12px; }
-.lia-projects-r3-rail section { padding: 15px; border-radius: 13px; background: rgba(8,25,41,.58); box-shadow: inset 0 1px rgba(255,255,255,.04); }
-.lia-projects-r3-rail strong, .lia-projects-r3-rail small { display: block; }
-.lia-projects-r3-rail strong { margin-top: 7px; color: #e1eef7; font-size: 13px; }
-.lia-projects-r3-rail small { margin-top: 5px; color: #849bad; font-size: 10.5px; line-height: 1.45; }
+/* Responsive: chat fijo en tablet y móvil; el rail auxiliar se oculta. */
+@media (max-width: 1120px) {
+  .lia-dash-r3-shell.lia-projects-r3-shell {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    grid-template-rows: 70px minmax(0, 1fr);
+  }
+
+  .lia-projects-r3-shell .lia-dash-r3-main {
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+  }
+
+  .lia-projects-r3-shell .lia-projects-r3-rail {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
-  .lia-projects-r3-stages { grid-template-columns: 1fr; gap: 11px; }
-  .lia-projects-r3-stages li { padding: 0; }
-  .lia-projects-r3-stages li::after { content: none; }
-  .lia-projects-r3-stage-copy small { min-height: 0; }
+  .lia-projects-r3-shell .lia-dash-r3-main {
+    padding: 12px 14px 12px;
+  }
 }
 
 @media (max-width: 720px) {
-  .lia-projects-r3-project-card { padding: 16px; }
-  .lia-projects-r3-form-actions { align-items: stretch; flex-direction: column; }
-  .lia-projects-r3-form select,
-  .lia-projects-r3-form-actions button { width: 100%; }
-  .lia-projects-r3-workflow { padding: 16px; }
-  .lia-projects-r3-workflow-head { flex-direction: column; }
-  .lia-projects-r3-result-facts { grid-template-columns: 1fr; }
-}
-/* Projects-only iPad layout correction.
-   Neutralizes the generic dashboard 850px main minimum without affecting
-   Dashboard, Agenda, Mobility or other ExecutiveShellR3 sections. */
-@media (max-width: 1120px) {
   .lia-projects-r3-shell .lia-dash-r3-main {
-    min-height: 0;
-    overflow: visible;
-  }
-
-  .lia-projects-r3-project-card {
-    align-self: stretch;
-  }
-}
-
-@media (min-width: 768px) and (max-width: 1180px) {
-  .lia-projects-r3-shell {
-    min-height: 100dvh;
-  }
-
-  .lia-projects-r3-shell .lia-dash-r3-main {
-    min-height: 0 !important;
-    height: auto;
-    overflow-y: visible;
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom, 0px));
   }
 
   .lia-projects-r3-title {
-    flex: 0 0 auto;
+    padding-bottom: 10px;
   }
 
-  .lia-projects-r3-project-card {
-    flex: 0 0 auto;
-    min-height: 0;
+  .lia-projects-r3-title h1 {
+    font-size: 23px;
+  }
+
+  .lia-projects-r3-msg.is-user .lia-projects-r3-msg-bubble {
+    max-width: 92%;
+  }
+
+  .lia-projects-r3-composer {
+    padding: 8px;
+    border-radius: 17px;
+  }
+
+  .lia-projects-r3-composer-meta {
+    justify-content: flex-start;
+  }
+
+  .lia-projects-r3-composer-hint {
+    display: none;
+  }
+
+  .lia-projects-r3-priority {
+    order: 1;
+  }
+
+  .lia-projects-r3-attach-note {
+    order: 2;
   }
 }
