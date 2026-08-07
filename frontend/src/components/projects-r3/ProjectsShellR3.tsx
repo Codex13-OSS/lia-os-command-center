@@ -1,17 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ExecutiveShellR3 } from '../executive-r3/ExecutiveShellR3';
-import { type LiaProjectTaskPriority } from '../../integrations/liaProjectTaskWorkflowClient';
 import {
-  clearPersistedProjectTask,
-  getProjectTaskStatus,
-  loadPersistedProjectTask,
-  persistProjectTaskStatus,
-  prepareProjectTask,
-  submitProjectTask,
-  type LiaProjectTaskReceipt,
-  type LiaProjectTaskStage,
-  type PersistedProjectTask,
-} from '../../integrations/liaProjectTaskClient';
+  type LiaProjectTaskPriority,
+} from '../../integrations/liaProjectTaskWorkflowClient';
+import { clearPersistedProjectTask, getProjectTaskStatus, loadPersistedProjectTask, persistProjectTaskStatus, prepareProjectTask, submitProjectTask, type LiaProjectTaskReceipt, type LiaProjectTaskStage, type PersistedProjectTask } from '../../integrations/liaProjectTaskClient';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import '../../styles/projectsExecutiveR3.css';
 
@@ -29,297 +21,173 @@ type Props = {
 const PROJECT_ID = 'lia-hermes';
 const POLL_INTERVAL_MS = 1500;
 const TEMPORARY_RETRY_MS = 2500;
-const COMPOSER_MAX_HEIGHT = 150;
 
-type ProjectStageKey = LiaProjectTaskStage | 'recovering';
-
-type StageMeta = {
-  human: string;
-  detail: string;
-};
-
-/** Textos humanos para cada estado público del flujo (sin jerga técnica). */
-const STAGE_META: Record<ProjectStageKey, StageMeta> = {
-  accepted: {
-    human: 'Recibí tu solicitud',
-    detail: 'Estoy validando tu instrucción y el proyecto antes de empezar.',
-  },
-  planning: {
-    human: 'Estoy organizando el trabajo',
-    detail: 'Preparo el plan mínimo y verifico el entorno aislado.',
-  },
-  hermes: {
-    human: 'Estoy analizando y decidiendo cómo hacerlo',
-    detail: 'Defino el enfoque y la secuencia de cambios necesarios.',
-  },
-  codex: {
-    human: 'Estoy trabajando en los archivos',
-    detail: 'Aplico los cambios dentro de un entorno aislado y seguro.',
-  },
-  verification: {
-    human: 'Estoy comprobando que todo funcione',
-    detail: 'Ejecuto las verificaciones autorizadas sobre el resultado.',
-  },
-  commit: {
-    human: 'Estoy guardando el resultado',
-    detail: 'Registro el cambio verificado de forma local.',
-  },
-  completed: {
-    human: 'Trabajo terminado',
-    detail: 'El resultado final ya está disponible abajo.',
-  },
-  failed: {
-    human: 'No pude completar esta parte',
-    detail: 'Algo no salió como esperaba; revisa el diagnóstico seguro.',
-  },
-  recovering: {
-    human: 'Estoy recuperando tu última tarea',
-    detail: 'LÍA está recuperando el último estado confirmado de la tarea.',
-  },
-};
-
-const IDLE_STAGE = {
-  eyebrow: 'LÍA ESTÁ LISTA',
-  human: 'Describe qué quieres lograr',
-  detail: 'La ejecución aparecerá aquí usando únicamente estados reales del backend.',
+type WorkflowStep = {
+  label: string;
+  description: string;
+  state: 'pending' | 'active' | 'completed' | 'failed';
+  stateLabel: string;
 };
 
 const WORKFLOW_STEPS = [
-  { technical: 'planning', label: 'Preparando', human: 'Organizando el trabajo' },
-  { technical: 'hermes', label: 'Hermes', human: 'Analizando el enfoque' },
-  { technical: 'codex', label: 'Ejecutando', human: 'Trabajando en los archivos' },
-  { technical: 'verification', label: 'Verificando', human: 'Comprobando que todo funcione' },
-  { technical: 'commit', label: 'Guardando', human: 'Guardando el resultado' },
+  { key: 'planning', label: 'Preparando', description: 'Validando tarea y proyecto' },
+  { key: 'hermes', label: 'Hermes', description: 'Analizando y organizando el trabajo' },
+  { key: 'codex', label: 'Ejecutando', description: 'Aplicando cambios en entorno aislado' },
+  { key: 'verification', label: 'Verificando', description: 'Comprobando el resultado' },
+  { key: 'commit', label: 'Guardando', description: 'Creando commit local verificado' },
 ] as const;
 
-type StepState = 'pending' | 'active' | 'completed' | 'failed';
+function getWorkflowSteps(stage: LiaProjectTaskStage | 'recovering' | null): WorkflowStep[] {
+  if (stage === 'failed') {
+    return WORKFLOW_STEPS.map((step) => ({
+      label: step.label,
+      description: step.description,
+      state: 'failed',
+      stateLabel: 'No completado',
+    }));
+  }
 
-function progressFor(stage: ProjectStageKey | null): StepState[] {
-  if (stage === 'failed') return WORKFLOW_STEPS.map(() => 'failed');
-  if (stage === null || stage === 'recovering') return WORKFLOW_STEPS.map(() => 'pending');
+  if (stage === null || stage === 'recovering') {
+    return WORKFLOW_STEPS.map((step) => ({
+      label: step.label,
+      description: step.description,
+      state: 'pending',
+      stateLabel: 'Pendiente',
+    }));
+  }
+
+  if (stage === 'completed') {
+    return WORKFLOW_STEPS.map((step) => ({
+      label: step.label,
+      description: step.description,
+      state: 'completed',
+      stateLabel: 'Completado',
+    }));
+  }
+
   const activeIndex =
     stage === 'accepted' || stage === 'planning' ? 0
       : stage === 'hermes' ? 1
         : stage === 'codex' ? 2
           : stage === 'verification' ? 3
             : 4;
-  return WORKFLOW_STEPS.map((_, index) => {
-    if (index < activeIndex) return 'completed';
-    if (index === activeIndex) return 'active';
-    return 'pending';
+
+  return WORKFLOW_STEPS.map((step, index) => {
+    if (index < activeIndex) {
+      return {
+        label: step.label,
+        description: step.description,
+        state: 'completed',
+        stateLabel: 'Completado',
+      };
+    }
+
+    if (index === activeIndex) {
+      return {
+        label: step.label,
+        description: step.description,
+        state: 'active',
+        stateLabel: 'En curso',
+      };
+    }
+
+    return {
+      label: step.label,
+      description: step.description,
+      state: 'pending',
+      stateLabel: 'Pendiente',
+    };
   });
 }
 
-type ProjectRun = {
-  taskId: string;
-  instruction: string;
-  priority: LiaProjectTaskPriority;
-  createdAt: number;
-  stage: ProjectStageKey | null;
-  pending: boolean;
-  error: string | null;
-  receipt: LiaProjectTaskReceipt | null;
-  /** Preparado para futura solicitud de información (human-in-the-loop). */
-  infoRequest: { prompt: string } | null;
-};
+function workflowHeadline(stage: LiaProjectTaskStage | 'recovering' | null): {
+  eyebrow: string;
+  title: string;
+  description: string;
+} {
+  if (stage === 'recovering') {
+    return {
+      eyebrow: 'RECUPERANDO TAREA',
+      title: 'Consultando la ejecución durable',
+      description: 'LÍA está recuperando el último estado confirmado de la tarea.',
+    };
+  }
 
-const PRIORITY_OPTIONS: ReadonlyArray<{ value: LiaProjectTaskPriority; label: string }> = [
-  { value: 'low', label: 'Baja' },
-  { value: 'normal', label: 'Normal' },
-  { value: 'high', label: 'Alta' },
-  { value: 'critical', label: 'Crítica' },
-];
+  if (stage === null) {
+    return {
+      eyebrow: 'LÍA ESTÁ LISTA',
+      title: 'Describe qué quieres lograr',
+      description: 'La ejecución aparecerá aquí usando únicamente estados reales del backend.',
+    };
+  }
 
-const PRIORITY_LABELS: Record<LiaProjectTaskPriority, string> = {
-  low: 'Baja',
-  normal: 'Normal',
-  high: 'Alta',
-  critical: 'Crítica',
-};
+  if (stage === 'accepted' || stage === 'planning') {
+    return {
+      eyebrow: 'PREPARANDO',
+      title: 'Preparando la tarea',
+      description: 'LÍA está validando la instrucción y el proyecto.',
+    };
+  }
 
-function formatElapsed(fromMs: number, nowMs: number): string {
-  const seconds = Math.max(0, Math.floor((nowMs - fromMs) / 1000));
-  if (seconds < 60) return `${seconds} s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours} h ${minutes % 60} min`;
+  if (stage === 'hermes') {
+    return {
+      eyebrow: 'HERMES',
+      title: 'Analizando la instrucción',
+      description: 'Hermes está definiendo el plan mínimo necesario para completar la tarea.',
+    };
+  }
+
+  if (stage === 'codex') {
+    return {
+      eyebrow: 'EJECUTANDO',
+      title: 'Aplicando el cambio',
+      description: 'Codex está trabajando dentro de un entorno aislado.',
+    };
+  }
+
+  if (stage === 'verification') {
+    return {
+      eyebrow: 'VERIFICANDO',
+      title: 'Comprobando el resultado',
+      description: 'LÍA está ejecutando las verificaciones autorizadas.',
+    };
+  }
+
+  if (stage === 'commit') {
+    return {
+      eyebrow: 'GUARDANDO',
+      title: 'Guardando resultado verificado',
+      description: 'LÍA está creando el commit local después de la verificación.',
+    };
+  }
+
+  if (stage === 'completed') {
+    return {
+      eyebrow: 'COMPLETADO',
+      title: 'Resultado terminado',
+      description: 'La tarea terminó y el resultado final ya está disponible.',
+    };
+  }
+
+  return {
+    eyebrow: 'NO COMPLETADO',
+    title: 'La tarea no pudo completarse',
+    description: 'Consulta el diagnóstico seguro mostrado abajo.',
+  };
 }
-
-function formatClock(fromMs: number): string {
-  return new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit' }).format(new Date(fromMs));
-}
-
-function ReceiptCard({ receipt }: { receipt: LiaProjectTaskReceipt }) {
-  const statusLabel = receipt.status === 'committed'
-    ? 'Trabajo terminado'
-    : receipt.status === 'verified'
-      ? 'Resultado verificado'
-      : receipt.status === 'ready_for_review'
-        ? 'Listo para revisión'
-        : 'Análisis completado';
-  const statusEyebrow = receipt.status === 'committed'
-    ? 'RESULTADO VERIFICADO'
-    : receipt.status === 'verified'
-      ? 'VERIFICADO'
-      : receipt.status === 'ready_for_review'
-        ? 'LISTO PARA REVISIÓN'
-        : 'ANÁLISIS COMPLETADO';
-
-  return (
-    <div className={`lia-projects-r3-receipt is-${receipt.status}`}>
-      <div className="lia-projects-r3-receipt-head">
-        <div>
-          <span>{statusEyebrow}</span>
-          <h3>{statusLabel}</h3>
-        </div>
-        <span className="lia-projects-r3-receipt-check" aria-hidden="true">✓</span>
-      </div>
-
-      <p className="lia-projects-r3-result-text">{receipt.resultText}</p>
-
-      <div className="lia-projects-r3-result-facts">
-        {receipt.verification && (
-          <div>
-            <span>Verificación</span>
-            <strong>{receipt.verification.checksPassed}/{receipt.verification.totalChecks}</strong>
-            <small>comprobaciones aprobadas</small>
-          </div>
-        )}
-
-        {receipt.commit && (
-          <div>
-            <span>Guardado local</span>
-            <strong>{receipt.commit.slice(0, 10)}</strong>
-            <small>Registro del cambio en el repositorio</small>
-          </div>
-        )}
-
-        {receipt.status === 'ready_for_review' && (
-          <div>
-            <span>Estado</span>
-            <strong>Revisión</strong>
-            <small>El cambio no fue finalizado automáticamente</small>
-          </div>
-        )}
-
-        {receipt.status === 'analyzed' && (
-          <div>
-            <span>Verificación</span>
-            <strong>No requerida</strong>
-            <small>La tarea fue únicamente de análisis</small>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ConversationTurn({ run, now }: { run: ProjectRun; now: number }) {
-  const meta = run.stage ? STAGE_META[run.stage] : null;
-  const progress = progressFor(run.stage);
-  const live = run.pending;
-  const activeStepIndex = progress.indexOf('active');
-  const completedCount = progress.filter((state) => state === 'completed').length;
-  const progressWidth = Math.round(((completedCount + (activeStepIndex >= 0 ? 1 : 0)) / WORKFLOW_STEPS.length) * 100);
-
-  return (
-    <>
-      <article className="lia-projects-r3-msg is-user">
-        <div className="lia-projects-r3-msg-bubble">
-          <p>{run.instruction}</p>
-          <footer>
-            <span className={`lia-projects-r3-priority-chip is-${run.priority}`}>
-              Prioridad {PRIORITY_LABELS[run.priority]}
-            </span>
-            <time dateTime={new Date(run.createdAt).toISOString()}>{formatClock(run.createdAt)}</time>
-          </footer>
-        </div>
-      </article>
-
-      <article className={`lia-projects-r3-msg is-lia${meta ? ` is-${run.stage}` : ' is-neutral'}`}>
-        <div className="lia-projects-r3-lia-avatar" aria-hidden="true">LÍA</div>
-        <div className="lia-projects-r3-msg-bubble">
-          <header className="lia-projects-r3-msg-head">
-            <strong>LÍA</strong>
-            {live && meta && (
-              <span className="lia-projects-r3-live-chip" role="status">
-                <i aria-hidden="true" />
-                {run.stage === 'recovering' ? 'Recuperando' : `En curso · hace ${formatElapsed(run.createdAt, now)}`}
-              </span>
-            )}
-          </header>
-
-          {meta && (
-            <div className="lia-projects-r3-status-copy">
-              <h3>{meta.human}</h3>
-              <p>{meta.detail}</p>
-            </div>
-          )}
-
-          {run.error && <div className="lia-projects-r3-error" role="alert">{run.error}</div>}
-
-          {run.infoRequest && (
-            <div className="lia-projects-r3-info-request" role="status">
-              <span className="lia-projects-r3-info-request-icon" aria-hidden="true">?</span>
-              <div>
-                <strong>LÍA necesita un dato</strong>
-                <p>{run.infoRequest.prompt}</p>
-                <small>Respóndele en el mensaje de abajo.</small>
-              </div>
-            </div>
-          )}
-
-          {!run.receipt && (
-            <ol className="lia-projects-r3-stages" aria-label="Progreso del trabajo">
-              {WORKFLOW_STEPS.map((base, index) => {
-                const step = { ...base, state: progress[index] };
-                return (
-                  <li
-                    key={step.technical}
-                    className={`is-${step.state} lia-projects-r3-step-${step.technical}`}
-                    aria-current={step.state === 'active' ? 'step' : undefined}
-                  >
-                    <span className="lia-projects-r3-stage-dot" aria-hidden="true" />
-                    <div className="lia-projects-r3-stage-copy">
-                      <strong>{step.human}</strong>
-                      <small>{step.label}</small>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-
-          {live && meta && (
-            <div className="lia-projects-r3-progress" aria-hidden="true">
-              <span style={{ width: `${progressWidth}%` }} />
-            </div>
-          )}
-
-          {run.receipt && <ReceiptCard receipt={run.receipt} />}
-        </div>
-      </article>
-    </>
-  );
-}
-
 export function ProjectsShellR3(props: Props) {
   const [instruction, setInstruction] = useState('');
   const [priority, setPriority] = useState<LiaProjectTaskPriority>('normal');
-  const [runs, setRuns] = useState<ProjectRun[]>([]);
-  const [activeRun, setActiveRun] = useState<ProjectRun | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<LiaProjectTaskReceipt | null>(null);
+  const [stage, setStage] = useState<LiaProjectTaskStage | 'recovering' | null>(null);
   const submittingRef = useRef(false);
   const mountedRef = useRef(false);
   const pollRunRef = useRef(0);
-  const activeRunRef = useRef<ProjectRun | null>(null);
-  const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const threadRef = useRef<HTMLDivElement | null>(null);
   const sleepRef = useRef<{ run: number; timer: ReturnType<typeof setTimeout>; resolve: () => void } | null>(null);
-
-  const composerBusy = activeRun?.pending === true;
+  const workflowSteps = getWorkflowSteps(stage);
+  const workflowStatus = workflowHeadline(stage);
 
   const cancelSleep = () => {
     const sleep = sleepRef.current;
@@ -329,72 +197,10 @@ export function ProjectsShellR3(props: Props) {
     sleep.resolve();
   };
 
-  const updateActive = (patch: Partial<ProjectRun>) => {
-    const current = activeRunRef.current;
-    if (!current) return;
-    const next = { ...current, ...patch };
-    activeRunRef.current = next;
-    setActiveRun(next);
-  };
-
-  const setReceipt = (receipt: LiaProjectTaskReceipt | null) => {
-    updateActive({ receipt });
-  };
-
-  const finishRun = (patch: Partial<ProjectRun>) => {
-    const current = activeRunRef.current;
-    if (!current) return;
-    const done = { ...current, ...patch, pending: false };
-    submittingRef.current = false;
-    activeRunRef.current = null;
-    setActiveRun(null);
-    setRuns((previous) => {
-      const index = previous.findIndex((run) => run.taskId === done.taskId);
-      if (index >= 0) {
-        const next = [...previous];
-        next[index] = done;
-        return next;
-      }
-      return [...previous, done];
-    });
-  };
-
-  const beginRun = (task: PersistedProjectTask) => {
-    const run: ProjectRun = {
-      taskId: task.taskId,
-      instruction: task.request.instruction,
-      priority: task.request.priority,
-      createdAt: task.createdAt,
-      stage: 'accepted',
-      pending: true,
-      error: null,
-      receipt: null,
-      infoRequest: null,
-    };
-    activeRunRef.current = run;
-    setActiveRun(run);
-  };
-
-  const beginRecoveredRun = (task: PersistedProjectTask) => {
-    const run: ProjectRun = {
-      taskId: task.taskId,
-      instruction: task.request.instruction,
-      priority: task.request.priority,
-      createdAt: task.createdAt,
-      stage: 'recovering',
-      pending: true,
-      error: null,
-      receipt: null,
-      infoRequest: null,
-    };
-    activeRunRef.current = run;
-    setActiveRun(run);
-  };
-
   const poll = async (task: PersistedProjectTask) => {
     const run = ++pollRunRef.current;
     cancelSleep();
-    if (mountedRef.current) updateActive({ pending: true });
+    if (mountedRef.current) setPending(true);
 
     const isCurrent = () => mountedRef.current && pollRunRef.current === run;
     const wait = (delay: number) => new Promise<void>((resolve) => {
@@ -411,25 +217,23 @@ export function ProjectsShellR3(props: Props) {
       const result = await getProjectTaskStatus(task.taskId);
       if (!isCurrent()) return;
       if (result.kind === 'active') {
-        updateActive({ stage: result.status, error: null, pending: true });
+        setStage(result.status);
+        setError(null);
         persistProjectTaskStatus(task, result.status);
         await wait(POLL_INTERVAL_MS);
         continue;
       }
       if (result.kind === 'temporary') {
+        // Keep the last authoritative stage and retry until the task becomes
+        // terminal or this cancelable polling run is superseded/unmounted.
         await wait(TEMPORARY_RETRY_MS);
         continue;
       }
-      if (result.kind === 'completed') {
-        clearPersistedProjectTask(task.taskId);
-        setReceipt(result.receipt);
-        finishRun({ stage: 'completed', error: null });
-      } else if (result.kind === 'failed') {
-        clearPersistedProjectTask(task.taskId);
-        finishRun({ stage: 'failed', error: result.message });
-      } else if (result.kind === 'unknown') { clearPersistedProjectTask(task.taskId); finishRun({ stage: null, error: 'No se pudo recuperar el estado de esta ejecución. El servicio pudo haberse reiniciado.' }); } else {
-        finishRun({ stage: null, error: result.message });
-      }
+      setPending(false); submittingRef.current = false;
+      if (result.kind === 'completed') { clearPersistedProjectTask(task.taskId); setStage('completed'); setReceipt(result.receipt); setError(null); }
+      else if (result.kind === 'failed') { clearPersistedProjectTask(task.taskId); setStage('failed'); setError(result.message); }
+      else if (result.kind === 'unknown') { clearPersistedProjectTask(task.taskId); setStage(null); setError('No se pudo recuperar el estado de esta ejecución. El servicio pudo haberse reiniciado.'); }
+      else setError(result.message);
       return;
     }
   };
@@ -437,64 +241,34 @@ export function ProjectsShellR3(props: Props) {
   useEffect(() => {
     mountedRef.current = true;
     const saved = loadPersistedProjectTask();
-    if (saved && saved.lastStatus !== 'completed' && saved.lastStatus !== 'failed') {
-      beginRecoveredRun(saved);
-      void poll(saved);
-    } else if (saved) {
-      clearPersistedProjectTask(saved.taskId);
-    }
+    if (saved && saved.lastStatus !== 'completed' && saved.lastStatus !== 'failed') { setStage('recovering'); void poll(saved); }
+    else if (saved) clearPersistedProjectTask(saved.taskId);
     return () => {
       mountedRef.current = false;
       pollRunRef.current += 1;
       cancelSleep();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!activeRun?.pending) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [activeRun?.pending]);
-
-  useEffect(() => {
-    const el = threadRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
-  }, [runs, activeRun, notice]);
-
-  const resizeComposer = () => {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
-  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (submittingRef.current || activeRun?.pending) return;
+    if (submittingRef.current) return;
     const cleanInstruction = instruction.trim();
     if (!cleanInstruction) {
-      setNotice('Escribe una instrucción concreta para LÍA.');
+      setError('Escribe una instrucción concreta para LÍA.');
       return;
     }
-    setNotice(null);
+
     submittingRef.current = true;
-    const task = prepareProjectTask({ projectId: PROJECT_ID, instruction: cleanInstruction, priority });
-    beginRun(task);
-    setInstruction('');
-    window.requestAnimationFrame(resizeComposer);
+    setPending(true);
+    setError(null);
+    setReceipt(null);
     try {
+      const task = prepareProjectTask({ projectId: PROJECT_ID, instruction: cleanInstruction, priority });
+      setStage('accepted');
       const submitted = await submitProjectTask(task);
       if (!mountedRef.current) return;
-      if (submitted === 'contract') {
-        clearPersistedProjectTask(task.taskId);
-        finishRun({ stage: null, error: 'No fue posible aceptar la tarea. Revisa la instrucción e inténtalo de nuevo.' });
-        submittingRef.current = false;
-        setInstruction(cleanInstruction);
-        return;
-      }
+      if (submitted === 'contract') { clearPersistedProjectTask(task.taskId); setError('No fue posible aceptar la tarea.'); submittingRef.current = false; setPending(false); return; }
       if (submitted === 'ambiguous') {
         await submitProjectTask(task); // Same persisted UUID; backend idempotency is authoritative.
         if (!mountedRef.current) return;
@@ -502,38 +276,21 @@ export function ProjectsShellR3(props: Props) {
       await poll(task);
     } catch {
       submittingRef.current = false;
-      if (mountedRef.current) {
-        finishRun({ stage: null, error: 'No fue posible preparar o enviar la tarea.' });
-        setInstruction(cleanInstruction);
-      }
+      if (mountedRef.current) { setPending(false); setError('No fue posible preparar o enviar la tarea.'); }
     }
   };
-
-  const handleInstructionChange = (value: string) => {
-    setInstruction(value);
-    window.requestAnimationFrame(resizeComposer);
-  };
-
-  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
-    }
-  };
-
-  const threadItems = [...runs, ...(activeRun ? [activeRun] : [])];
 
   const rail = (
     <aside className="lia-dash-r3-rail-shell lia-projects-r3-rail" aria-label="Contexto del proyecto">
       <section>
         <span>PROYECTO ACTIVO</span>
         <strong>LÍA O.S. / Hermes</strong>
-        <small>Proyecto conectado al ejecutor local</small>
+        <small>Orquestación Hermes · ejecución Codex</small>
       </section>
       <section>
         <span>ENTORNO</span>
-        <strong>Entorno aislado</strong>
-        <small>Cambios verificados y guardado local habilitados</small>
+        <strong>Worktree aislado</strong>
+        <small>Pruebas y commit local habilitados</small>
       </section>
     </aside>
   );
@@ -542,99 +299,141 @@ export function ProjectsShellR3(props: Props) {
     <ExecutiveShellR3 {...props} activeSection="projects" mainAriaLabel="Proyectos" mainClassName="lia-projects-r3-shell" rail={rail}>
       <header className="lia-projects-r3-title">
         <div>
-          <span>PROYECTOS</span>
-          <h1>Proyectos</h1>
-          <div className="lia-projects-r3-live-badge"><i aria-hidden="true" /> LÍA · Hermes · Codex conectados</div>
-          <p>Envía una instrucción y sigue el trabajo de LÍA en vivo</p>
+          <span>PROYECTOS</span><h1>Proyectos</h1>
+          <div className="lia-projects-r3-connected-badge">LÍA · Hermes · Codex conectados</div>
+          <p>Ejecución real y aislada con LÍA</p>
         </div>
       </header>
 
-      <section className="lia-projects-r3-chat" aria-label="Conversación con LÍA">
-        <div className="lia-projects-r3-thread" ref={threadRef} role="log" aria-live="polite">
-          {threadItems.length === 0 && !notice && (
-            <div className="lia-projects-r3-welcome">
-              <span className="lia-projects-r3-lia-avatar" aria-hidden="true">LÍA</span>
-              <div>
-                <span className="lia-projects-r3-welcome-eyebrow">{IDLE_STAGE.eyebrow}</span>
-                <strong>{IDLE_STAGE.human}</strong>
-                <p>Estoy lista para trabajar en tu proyecto. Escríbeme una instrucción y te iré contando qué estoy haciendo, en qué etapa voy y qué terminé haciendo.</p>
-              </div>
-            </div>
-          )}
-
-          {threadItems.map((run) => (
-            <ConversationTurn key={run.taskId} run={run} now={now} />
-          ))}
-
-          {notice && (
-            <div className="lia-projects-r3-notice" role="status">
-              <span aria-hidden="true">!</span>
-              <p>{notice}</p>
-            </div>
-          )}
+      <section className="lia-projects-r3-project-card">
+        <div className="lia-projects-r3-project-head">
+          <div className="lia-projects-r3-project-mark">LÍA</div>
+          <div><span>lia-hermes</span><h2>LÍA O.S. / Hermes</h2><p>Proyecto operativo conectado al ejecutor local</p></div>
+          <i>Activo</i>
         </div>
 
-        <form className="lia-projects-r3-composer" onSubmit={submit}>
-          <div className="lia-projects-r3-composer-field">
-            <button
-              type="button"
-              className="lia-projects-r3-attach"
-              disabled
-              aria-label="Adjuntos próximamente"
-              title="Adjuntos próximamente"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.82l8.49-8.48" />
-              </svg>
-            </button>
-
-            <textarea
-              ref={composerRef}
-              value={instruction}
-              onChange={(event) => handleInstructionChange(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              maxLength={8000}
-              rows={1}
-              placeholder={composerBusy ? 'LÍA está trabajando… puedes ir preparando tu siguiente instrucción' : 'Escribe una instrucción para LÍA…'}
-              aria-label="Escribe una instrucción para LÍA"
-            />
-
-            <button
-              type="submit"
-              className="lia-projects-r3-send"
-              disabled={composerBusy || !instruction.trim()}
-              aria-label={composerBusy ? 'LÍA está trabajando' : 'Enviar instrucción a LÍA'}
-            >
-              {composerBusy ? (
-                <span className="lia-projects-r3-send-busy" aria-hidden="true" />
-              ) : (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M12 19V5" />
-                  <path d="m5 12 7-7 7 7" />
-                </svg>
-              )}
-            </button>
-          </div>
-
-          <div className="lia-projects-r3-composer-meta">
-            <span className="lia-projects-r3-attach-note">Adjuntos próximamente</span>
-            <div className="lia-projects-r3-priority" role="group" aria-label="Prioridad de la instrucción">
-              {PRIORITY_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={priority === option.value ? 'is-selected' : undefined}
-                  aria-pressed={priority === option.value}
-                  disabled={composerBusy}
-                  onClick={() => setPriority(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <span className="lia-projects-r3-composer-hint">Enter envía · Shift+Enter nueva línea</span>
+        <form onSubmit={submit} className="lia-projects-r3-form">
+          <label htmlFor="lia-project-instruction">Nueva tarea</label>
+          <textarea
+            id="lia-project-instruction"
+            value={instruction}
+            onChange={(event) => setInstruction(event.target.value)}
+            disabled={pending}
+            maxLength={8000}
+            rows={6}
+            placeholder="Describe el cambio que LÍA debe analizar, ejecutar y verificar…"
+          />
+          <div className="lia-projects-r3-form-actions">
+            <label htmlFor="lia-project-priority">Prioridad
+              <select id="lia-project-priority" value={priority} disabled={pending} onChange={(event) => setPriority(event.target.value as LiaProjectTaskPriority)}>
+                <option value="low">Baja</option><option value="normal">Normal</option><option value="high">Alta</option><option value="critical">Crítica</option>
+              </select>
+            </label>
+            <button type="submit" disabled={pending || !instruction.trim()}>{pending ? 'Ejecución en curso…' : 'Ejecutar con LÍA'}</button>
           </div>
         </form>
+
+        <section className={`lia-projects-r3-workflow${stage && stage !== 'completed' && stage !== 'failed' ? ' is-running' : ''}`} aria-labelledby="lia-projects-workflow-title" aria-live="polite">
+          <div className="lia-projects-r3-workflow-head">
+            <div>
+              <span>{workflowStatus.eyebrow}</span>
+              <h3 id="lia-projects-workflow-title">{workflowStatus.title}</h3>
+              <p>{workflowStatus.description}</p>
+            </div>
+            {pending && stage !== 'recovering' && (
+              <div className="lia-projects-r3-live-indicator" aria-label="Ejecución activa">
+                <i aria-hidden="true" />
+                <span>En vivo</span>
+              </div>
+            )}
+          </div>
+
+          <ol className="lia-projects-r3-stages">
+            {workflowSteps.map((step, index) => (
+              <li
+                key={step.label}
+                className={`is-${step.state}`}
+                aria-current={step.state === 'active' ? 'step' : undefined}
+                aria-label={`${step.label}: ${step.stateLabel}`}
+              >
+                <div className="lia-projects-r3-stage-marker">
+                  <i aria-hidden="true" />
+                  <b>{index + 1}</b>
+                </div>
+                <div className="lia-projects-r3-stage-copy">
+                  <strong>{step.label}</strong>
+                  <small>{step.description}</small>
+                  <em>{step.stateLabel}</em>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        {error && <div className="lia-projects-r3-error" role="alert">{error}</div>}
+        {receipt && (
+          <article className={`lia-projects-r3-receipt is-${receipt.status}`} aria-label="Resultado de la ejecución">
+            <div className="lia-projects-r3-receipt-head">
+              <div>
+                <span>
+                  {receipt.status === 'committed'
+                    ? 'RESULTADO VERIFICADO'
+                    : receipt.status === 'verified'
+                      ? 'VERIFICADO'
+                      : receipt.status === 'ready_for_review'
+                        ? 'LISTO PARA REVISIÓN'
+                        : 'ANÁLISIS COMPLETADO'}
+                </span>
+                <h3>
+                  {receipt.status === 'committed'
+                    ? 'Tarea completada'
+                    : receipt.status === 'verified'
+                      ? 'Resultado verificado'
+                      : receipt.status === 'ready_for_review'
+                        ? 'Listo para revisión'
+                        : 'Análisis completado'}
+                </h3>
+              </div>
+              <i aria-hidden="true">✓</i>
+            </div>
+
+            <p className="lia-projects-r3-result-text">{receipt.resultText}</p>
+
+            <div className="lia-projects-r3-result-facts">
+              {receipt.verification && (
+                <div>
+                  <span>Verificación</span>
+                  <strong>{receipt.verification.checksPassed}/{receipt.verification.totalChecks}</strong>
+                  <small>comprobaciones aprobadas</small>
+                </div>
+              )}
+
+              {receipt.commit && (
+                <div>
+                  <span>Commit local</span>
+                  <strong>{receipt.commit.slice(0, 10)}</strong>
+                  <small>Cambio guardado localmente</small>
+                </div>
+              )}
+
+              {receipt.status === 'ready_for_review' && (
+                <div>
+                  <span>Estado</span>
+                  <strong>Revisión</strong>
+                  <small>El cambio no fue finalizado automáticamente</small>
+                </div>
+              )}
+
+              {receipt.status === 'analyzed' && (
+                <div>
+                  <span>Verificación</span>
+                  <strong>No requerida</strong>
+                  <small>La tarea fue únicamente de análisis</small>
+                </div>
+              )}
+            </div>
+          </article>
+        )}
       </section>
     </ExecutiveShellR3>
   );
