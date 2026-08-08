@@ -15,6 +15,10 @@ import {
   verifyProjectCodexWorkspace,
   type ProjectCodexVerificationResult,
 } from './projectCodexVerification.js';
+import {
+  verifyProjectVisualWorkspace,
+  type ProjectVisualVerificationResult,
+} from './projectVisualVerification.js';
 import { planProjectTask } from './projectExecutionPlanner.js';
 import {
   buildProjectOrchestrationPrompt,
@@ -24,6 +28,7 @@ import { validateProjectOrchestrationProposal } from './projectOrchestrationVali
 
 type CodexExecutor = (handoff: ProjectCodexHandoff) => Promise<ProjectCodexExecutionResult>;
 type VerificationExecutor = typeof verifyProjectCodexWorkspace;
+type VisualVerificationExecutor = typeof verifyProjectVisualWorkspace;
 type CommitExecutor = typeof commitVerifiedProjectCodexWorkspace;
 
 const MAX_RESULT_TEXT_CHARS = 6_000;
@@ -40,6 +45,7 @@ export interface ProjectTaskWorkflowDependencies {
   executeHermes?: HermesQueryExecutor;
   executeCodex?: CodexExecutor;
   executeVerification?: VerificationExecutor;
+  executeVisualVerification?: VisualVerificationExecutor;
   executeCommit?: CommitExecutor;
   /** Internal observability only. Receives no workflow internals. */
   onStage?: (stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => void | Promise<void>;
@@ -150,8 +156,14 @@ export async function executeProjectTaskWorkflow(
     await observeHermesProposal(dependencies, initialError === 'invalid_hermes_json'
       ? 'initial_invalid_json'
       : 'initial_invalid_structure');
+    const repairValidationErrors = initialError === 'invalid_hermes_json'
+      ? [{ path: '$', message: 'response must be valid JSON' }]
+      : validation !== undefined && !validation.success
+        ? validation.errors
+        : [];
+
     let repairPrompt: string;
-    try { repairPrompt = buildProjectOrchestrationRepairPrompt(plan); }
+    try { repairPrompt = buildProjectOrchestrationRepairPrompt(plan, repairValidationErrors); }
     catch { return failed('hermes', 'prompt_too_large', 'Hermes reasoning could not be prepared.', identifiers); }
     let repairedResult: HermesExecutionResult;
     try { repairedResult = await executeHermes(config, repairPrompt); }
@@ -259,10 +271,51 @@ export async function executeProjectTaskWorkflow(
     );
   }
 
+  let visualVerificationResult: ProjectVisualVerificationResult;
+  try {
+    visualVerificationResult = await (
+      dependencies.executeVisualVerification ?? verifyProjectVisualWorkspace
+    )(
+      plan.projectId,
+      codexResult.executionId,
+    );
+  } catch {
+    return failed(
+      'verification',
+      'verification_unavailable',
+      'Visual verification is not available for this project.',
+      executionIdentifiers,
+    );
+  }
+
+  if (!visualVerificationResult.success) {
+    return failed(
+      'verification',
+      visualVerificationResult.error === 'visual_check_failed'
+        ? 'check_failed'
+        : 'verification_unavailable',
+      visualVerificationResult.summary,
+      executionIdentifiers,
+    );
+  }
+
+  if (visualVerificationResult.executionId !== codexResult.executionId) {
+    return failed(
+      'verification',
+      'invalid_generated_path',
+      'The retained workspace could not be resolved safely.',
+      executionIdentifiers,
+    );
+  }
+
   const verification = {
     status: 'verified' as const,
-    checksPassed: verificationResult.checksPassed,
-    totalChecks: verificationResult.totalChecks,
+    checksPassed:
+      verificationResult.checksPassed
+      + visualVerificationResult.checksPassed,
+    totalChecks:
+      verificationResult.totalChecks
+      + visualVerificationResult.totalChecks,
   };
   if (!effectiveCapabilities.includes('local_commit')) {
     return {

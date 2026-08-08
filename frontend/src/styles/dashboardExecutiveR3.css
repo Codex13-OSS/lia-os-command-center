@@ -971,3 +971,22 @@
     padding-inline: 16px;
   }
 }
+
+/* lia-r3-mobile-nav-viewport-fix-v1
+   Phone authority: the R3 primary navigation belongs to the viewport,
+   never to the vertical content flow of the sidebar. */
+@media (max-width: 720px) {
+  .lia-dash-r3-mobile-nav {
+    position: fixed !important;
+    left: max(8px, env(safe-area-inset-left, 0px)) !important;
+    right: max(8px, env(safe-area-inset-right, 0px)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
+    width: auto !important;
+    margin: 0 !important;
+    z-index: 2147483000 !important;
+  }
+
+  .lia-dash-r3-main {
+    padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}

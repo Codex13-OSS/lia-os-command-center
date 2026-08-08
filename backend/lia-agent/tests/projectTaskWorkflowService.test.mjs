@@ -47,7 +47,7 @@ const proposal = (overrides = {}) => ({
 });
 
 function harness(overrides = {}) {
-  const calls = { hermes: [], codex: [], verification: [], commit: [], proposalAttempts: [] };
+  const calls = { hermes: [], codex: [], verification: [], visualVerification: [], commit: [], proposalAttempts: [] };
   return {
     calls,
     dependencies: {
@@ -73,6 +73,15 @@ function harness(overrides = {}) {
         return overrides.verification ?? {
           success: true, executionId: "execution-123", status: "verified",
           checksPassed: 2, totalChecks: 2, summary: "All checks passed.",
+        };
+      },
+      executeVisualVerification: async (...args) => {
+        calls.visualVerification.push(args);
+        if (overrides.visualVerificationThrow) throw new Error("PRIVATE");
+        return overrides.visualVerification ?? {
+          success: true, executionId: "execution-123", status: "visual_verified",
+          checksPassed: 0, totalChecks: 0,
+          summary: "Visual verification is not required for this project.",
         };
       },
       executeCommit: async (...args) => {
@@ -461,4 +470,121 @@ test("workflow adds no discard, push, merge, deploy, production, database, or sh
     "discardProjectCodexWorkspace", "child_process", "spawn(", "exec(", "push(", "merge(", "deploy(",
     "production_write", "database_write",
   ]) assert.equal(source.includes(forbidden), false, forbidden);
+});
+
+test("visual verification PASS allows local commit only after technical verification", async () => {
+  const fake = harness({
+    visualVerification: {
+      success: true,
+      executionId: "execution-123",
+      status: "visual_verified",
+      checksPassed: 24,
+      totalChecks: 24,
+      summary: "Deterministic browser visual verification passed.",
+    },
+  });
+
+  const result = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    fake,
+  );
+
+  assert.equal(result.status, "committed");
+  assert.equal(fake.calls.verification.length, 1);
+  assert.equal(fake.calls.visualVerification.length, 1);
+  assert.equal(fake.calls.commit.length, 1);
+
+  assert.equal(fake.calls.visualVerification[0][0], "approved-project");
+  assert.equal(fake.calls.visualVerification[0][1], "execution-123");
+});
+
+test("visual verification FAIL blocks local commit", async () => {
+  const fake = harness({
+    visualVerification: {
+      success: false,
+      executionId: "execution-123",
+      status: "visual_verification_failed",
+      error: "visual_check_failed",
+      failedCheckId: "iphone:single_primary_navigation",
+      checksPassed: 7,
+      totalChecks: 9,
+      summary: "Deterministic browser visual verification failed.",
+    },
+  });
+
+  const result = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    fake,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stage, "verification");
+  assert.equal(result.executionId, "execution-123");
+  assert.equal(fake.calls.verification.length, 1);
+  assert.equal(fake.calls.visualVerification.length, 1);
+  assert.equal(fake.calls.commit.length, 0);
+});
+
+test("visual verification unavailable fails closed and blocks local commit", async () => {
+  const fake = harness({
+    visualVerification: {
+      success: false,
+      executionId: "execution-123",
+      status: "visual_verification_failed",
+      error: "visual_verification_unavailable",
+      checksPassed: 0,
+      totalChecks: 0,
+      summary: "Visual verification is unavailable.",
+    },
+  });
+
+  const result = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    fake,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stage, "verification");
+  assert.equal(result.executionId, "execution-123");
+  assert.equal(fake.calls.visualVerification.length, 1);
+  assert.equal(fake.calls.commit.length, 0);
+});
+
+test("visual verifier exception fails closed and never reaches commit", async () => {
+  const fake = harness({ visualVerificationThrow: true });
+
+  const result = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    fake,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stage, "verification");
+  assert.equal(fake.calls.visualVerification.length, 1);
+  assert.equal(fake.calls.commit.length, 0);
+});
+
+test("visual verification cannot substitute technical verification", async () => {
+  const fake = harness({
+    verification: {
+      success: false,
+      executionId: "execution-123",
+      status: "verification_failed",
+      error: "check_failed",
+      failedCheckId: "frontend-build",
+      checksPassed: 1,
+      totalChecks: 2,
+      summary: "A technical check failed.",
+    },
+  });
+
+  const result = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    fake,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stage, "verification");
+  assert.equal(fake.calls.visualVerification.length, 0);
+  assert.equal(fake.calls.commit.length, 0);
 });

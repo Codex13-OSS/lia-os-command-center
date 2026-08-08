@@ -1,5 +1,6 @@
 import { dashboardNavigationR3 } from '../../data/dashboardShellR3Data';
 import { DashboardIconR3 } from './DashboardIconR3';
+import { createPortal } from 'react-dom';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { ExecutiveSectionR3 } from '../executive-r3/ExecutiveShellR3';
 
@@ -91,24 +92,27 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
       </button>
 
 
-      <nav className="lia-dash-r3-mobile-nav" aria-label="Navegación móvil">
-        {dashboardNavigationR3
-          .filter((item) => ['dashboard', 'agenda', 'projects', 'tracking', 'alerts'].includes(item.id))
-          .map((item) => (
-            <button
-              key={`mobile-${item.id}`}
-              type="button"
-              className={`lia-dash-r3-mobile-nav-item${item.id === props.activeSection ? ' is-active' : ''}`}
-              onClick={actions[item.id]}
-              aria-current={item.id === props.activeSection ? 'page' : undefined}
-              aria-label={item.label}
-            >
-              <DashboardIconR3 name={item.id === 'tracking' ? 'seguimiento' : item.icon} />
-              <span>{item.id === 'tracking' ? 'Seguimiento' : item.label}</span>
-              {'badge' in item && <b>{item.badge}</b>}
-            </button>
-          ))}
-      </nav>
+      {createPortal(
+        <nav className="lia-dash-r3-mobile-nav" aria-label="Navegación móvil">
+          {dashboardNavigationR3
+            .filter((item) => ['dashboard', 'agenda', 'projects', 'tracking', 'alerts'].includes(item.id))
+            .map((item) => (
+              <button
+                key={`mobile-${item.id}`}
+                type="button"
+                className={`lia-dash-r3-mobile-nav-item${item.id === props.activeSection ? ' is-active' : ''}`}
+                onClick={actions[item.id]}
+                aria-current={item.id === props.activeSection ? 'page' : undefined}
+                aria-label={item.label}
+              >
+                <DashboardIconR3 name={item.id === 'tracking' ? 'seguimiento' : item.icon} />
+                <span>{item.id === 'tracking' ? 'Seguimiento' : item.label}</span>
+                {'badge' in item && <b>{item.badge}</b>}
+              </button>
+            ))}
+        </nav>,
+        document.body,
+      )}
 
       <div
         className={`lia-dash-r3-resize-handle${props.isResizing ? ' lia-dash-r3-resize-handle-active' : ''}`}
