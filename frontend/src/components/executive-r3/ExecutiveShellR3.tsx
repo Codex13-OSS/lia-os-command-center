@@ -19,7 +19,7 @@ export function ExecutiveShellR3(props:Props){
  return <main className={`lia-dash-r3-shell is-${presentation}${resizing?' is-resizing lia-dash-r3-shell-resizing':''}${props.mainClassName?` ${props.mainClassName}`:''}`} style={{'--lia-dash-r3-sidebar-width':`${effective}px`} as CSSProperties}>
   <div className="lia-dash-r3-ambient" aria-hidden="true"><i className="lia-dash-r3-ambient-map"/><i className="lia-dash-r3-ambient-top"/><i className="lia-dash-r3-ambient-rail"/><i className="lia-dash-r3-ambient-grain"/></div>
   <DashboardSidebarR3 {...props} activeSection={props.activeSection} presentation={presentation} isResizing={resizing} onToggle={toggle} onResizeStart={down} onResize={move} onResizeEnd={up}/>
-  <DashboardHeaderR3 now={props.now??new Date()} conversationController={props.conversationController}/>
+  <DashboardHeaderR3 now={props.now??new Date()} conversationController={props.conversationController} onLogout={props.onLogout}/>
   {props.conversationController && <LiaConversationPanelR3 controller={props.conversationController}/>}<section className="lia-dash-r3-main" aria-label={props.mainAriaLabel}>{props.children}</section>{props.rail}
  </main>
 }

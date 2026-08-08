@@ -18,6 +18,7 @@ import { requestLiaHermesResponse } from './integrations/liaHermesChatClient';
 import { DashboardShellR3 } from './components/dashboard-r3/DashboardShellR3';
 import { AgendaShellR3 } from './components/agenda-r3/AgendaShellR3';
 import { ProjectsShellR3 } from './components/projects-r3/ProjectsShellR3';
+import { DashboardIconR3 } from './components/dashboard-r3/DashboardIconR3';
 import type { LiaConversationController } from './components/lia-r3/liaConversationController';
 import './styles/agendaExecutiveR3.css';
 
@@ -441,6 +442,24 @@ export default function App() {
     ['alerts', 'Alertas'],
   ] as const;
 
+  const mobileTabLabels: Record<View, string> = {
+    dashboard: 'Inicio',
+    agenda: 'Agenda',
+    projects: 'Proyectos',
+    tracking: 'Seguimiento',
+    documents: 'Documentos',
+    alerts: 'Alertas',
+  };
+
+  const mobileTabIcons: Record<View, 'inicio' | 'agenda' | 'procesos' | 'seguimiento' | 'documentos' | 'alertas'> = {
+    dashboard: 'inicio',
+    agenda: 'agenda',
+    projects: 'procesos',
+    tracking: 'seguimiento',
+    documents: 'documentos',
+    alerts: 'alertas',
+  };
+
   const handleMobileNavLink = (id: View) => {
     setMobileNavOpen(false);
 
@@ -472,6 +491,21 @@ export default function App() {
         <span />
         <strong>Menú</strong>
       </button>
+
+      <nav className="mobile-tabbar" aria-label="Navegación principal móvil">
+        {nav.map(([id]) => (
+          <button
+            key={`tab-${id}`}
+            type="button"
+            className={view === id ? 'mobile-tab active' : 'mobile-tab'}
+            onClick={() => handleMobileNavLink(id)}
+            aria-current={view === id ? 'page' : undefined}
+          >
+            <DashboardIconR3 name={mobileTabIcons[id]} />
+            <span>{mobileTabLabels[id]}</span>
+          </button>
+        ))}
+      </nav>
 
       {mobileNavOpen && (
         <div className="mobile-nav-layer" role="presentation">

@@ -3,7 +3,8 @@ import type { DashboardIconNameR3 } from '../../data/dashboardShellR3Data';
 type DashboardIconR3Props = {
   name: DashboardIconNameR3 | 'chevron-izquierdo' | 'chevron-derecho' | 'resize'
     | 'ruta' | 'origen' | 'destino' | 'centrar' | 'alternativa' | 'zoom-positivo'
-    | 'zoom-negativo' | 'trafico' | 'reloj' | 'automovil' | 'ubicacion' | 'puntualidad';
+    | 'zoom-negativo' | 'trafico' | 'reloj' | 'automovil' | 'ubicacion' | 'puntualidad'
+    | 'seguimiento';
   className?: string;
 };
 
@@ -44,6 +45,7 @@ const paths: Record<DashboardIconR3Props['name'], React.ReactNode> = {
   automovil: <><path d="m5 16 1.5-6h11l1.5 6M3 16h18v4H3zM6 20v2M18 20v2" /><circle cx="7" cy="17.8" r=".7" /><circle cx="17" cy="17.8" r=".7" /></>,
   ubicacion: <><path d="M12 21s6-5.4 6-11a6 6 0 0 0-12 0c0 5.6 6 11 6 11Z" /><circle cx="12" cy="10" r="2" /></>,
   puntualidad: <><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16.5 8" /></>,
+  seguimiento: <><path d="M4 6.5h9M4 12h9M4 17.5h6" /><path d="m15.5 16.5 2 2 4-4.5" /></>,
 };
 
 export function DashboardIconR3({ name, className }: DashboardIconR3Props) {

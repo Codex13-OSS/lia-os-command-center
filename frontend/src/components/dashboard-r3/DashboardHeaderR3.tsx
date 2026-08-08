@@ -6,9 +6,10 @@ import { DashboardIconR3 } from './DashboardIconR3';
 type Props = {
   now: Date;
   conversationController?: LiaConversationController;
+  onLogout?: () => void;
 };
 
-export function DashboardHeaderR3({ now, conversationController }: Props) {
+export function DashboardHeaderR3({ now, conversationController, onLogout }: Props) {
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     conversationController?.submit();
@@ -59,6 +60,11 @@ export function DashboardHeaderR3({ now, conversationController }: Props) {
         </button>
         <button type="button" aria-label="Mensajes"><DashboardIconR3 name="mensajes" /></button>
         <span className="lia-dash-r3-avatar">OL</span>
+        {onLogout && (
+          <button type="button" className="lia-dash-r3-header-logout" aria-label="Cerrar sesión" onClick={onLogout}>
+            <DashboardIconR3 name="cerrar-sesion" />
+          </button>
+        )}
         <button type="button" aria-label="Abrir menú de operador"><DashboardIconR3 name="flecha" /></button>
       </div>
     </header>

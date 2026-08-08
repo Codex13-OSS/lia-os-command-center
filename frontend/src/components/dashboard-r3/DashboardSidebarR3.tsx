@@ -93,7 +93,7 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
 
       <nav className="lia-dash-r3-mobile-nav" aria-label="Navegación móvil">
         {dashboardNavigationR3
-          .filter((item) => ['dashboard', 'agenda', 'projects', 'alerts'].includes(item.id))
+          .filter((item) => ['dashboard', 'agenda', 'projects', 'tracking', 'alerts'].includes(item.id))
           .map((item) => (
             <button
               key={`mobile-${item.id}`}
@@ -103,20 +103,11 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
               aria-current={item.id === props.activeSection ? 'page' : undefined}
               aria-label={item.label}
             >
-              <DashboardIconR3 name={item.icon} />
-              <span>{item.label}</span>
+              <DashboardIconR3 name={item.id === 'tracking' ? 'seguimiento' : item.icon} />
+              <span>{item.id === 'tracking' ? 'Seguimiento' : item.label}</span>
               {'badge' in item && <b>{item.badge}</b>}
             </button>
           ))}
-        <button
-          type="button"
-          className="lia-dash-r3-mobile-nav-item"
-          onClick={props.onLogout}
-          aria-label="Salir"
-        >
-          <DashboardIconR3 name="operador" />
-          <span>Más</span>
-        </button>
       </nav>
 
       <div
