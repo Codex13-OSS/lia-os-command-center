@@ -26,7 +26,7 @@ type Props = {
   conversationController?: LiaConversationController;
 };
 
-const PROJECT_ID = 'lia-hermes';
+const PROJECT_ID = 'lia-hermes-mobile-preview';
 const POLL_INTERVAL_MS = 1500;
 const TEMPORARY_RETRY_MS = 2500;
 const COMPOSER_MAX_HEIGHT = 150;
