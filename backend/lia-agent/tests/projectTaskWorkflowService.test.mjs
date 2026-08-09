@@ -572,6 +572,32 @@ test("visual verifier exception fails closed and never reaches commit", async ()
   assert.equal(fake.calls.commit.length, 0);
 });
 
+test("visual verification timeout maps to the visual timeout error and blocks local commit", async () => {
+  const fake = harness({
+    visualVerification: {
+      success: false,
+      executionId: "execution-123",
+      status: "visual_verification_failed",
+      error: "visual_check_timeout",
+      checksPassed: 0,
+      totalChecks: 0,
+      summary: "Deterministic browser visual verification timed out.",
+    },
+  });
+
+  const result = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    fake,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stage, "verification");
+  assert.equal(result.error, "visual_check_timeout");
+  assert.equal(result.executionId, "execution-123");
+  assert.equal(fake.calls.visualVerification.length, 1);
+  assert.equal(fake.calls.commit.length, 0);
+});
+
 test("visual verification cannot substitute technical verification", async () => {
   const fake = harness({
     verification: {
@@ -636,7 +662,7 @@ test("completedStages pinpoints the terminal failure without exposing internals"
     } }),
   );
   assert.equal(visualFailure.stage, "verification");
-  assert.equal(visualFailure.error, "check_failed");
+  assert.equal(visualFailure.error, "visual_check_failed");
   assert.deepEqual(visualFailure.completedStages, ["planning", "hermes", "codex", "verification"]);
 
   const commitFailure = await run(

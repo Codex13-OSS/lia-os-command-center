@@ -126,8 +126,9 @@ test('workflow route maps every specified workflow error deterministically', asy
       codex_execution_failed: 502, timeout: 504, worktree_cleanup_failed: 502,
     },
     verification: {
-      verification_unavailable: 503, invalid_generated_path: 500,
-      check_failed: 422, check_timeout: 504,
+      verification_unavailable: 503, visual_verification_unavailable: 503,
+      invalid_generated_path: 500, check_failed: 422, check_timeout: 504,
+      visual_check_failed: 422, visual_check_timeout: 504,
     },
     commit: {
       local_commit_not_approved: 403, workspace_not_verified: 409,

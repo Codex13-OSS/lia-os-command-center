@@ -49,7 +49,8 @@ const PROJECT_WORKFLOW_ERRORS = new Set([
   'execution_failed', 'empty_response', 'invalid_hermes_json', 'invalid_hermes_proposal',
   'human_approval_required', 'missing_repository_read', 'missing_isolated_worktree_write',
   'invalid_generated_path', 'worktree_create_failed', 'codex_execution_failed',
-  'worktree_cleanup_failed', 'verification_unavailable', 'check_failed', 'check_timeout',
+  'worktree_cleanup_failed', 'verification_unavailable', 'visual_verification_unavailable',
+  'check_failed', 'check_timeout', 'visual_check_failed', 'visual_check_timeout',
   'local_commit_not_approved', 'workspace_not_verified', 'nothing_to_commit',
   'git_status_failed', 'git_stage_failed', 'git_commit_failed', 'git_revision_failed',
 ]);

@@ -319,8 +319,10 @@ export async function executeProjectTaskWorkflow(
     return fail(
       'verification',
       visualVerificationResult.error === 'visual_check_failed'
-        ? 'check_failed'
-        : 'verification_unavailable',
+        ? 'visual_check_failed'
+        : visualVerificationResult.error === 'visual_check_timeout'
+          ? 'visual_check_timeout'
+          : 'visual_verification_unavailable',
       visualVerificationResult.summary,
       executionIdentifiers,
     );

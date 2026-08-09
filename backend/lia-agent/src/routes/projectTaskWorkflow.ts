@@ -55,9 +55,12 @@ const ERROR_STATUS: Readonly<Record<ProjectTaskWorkflowStage, Readonly<Record<st
   },
   verification: {
     verification_unavailable: 503,
+    visual_verification_unavailable: 503,
     invalid_generated_path: 500,
     check_failed: 422,
     check_timeout: 504,
+    visual_check_failed: 422,
+    visual_check_timeout: 504,
   },
   commit: {
     local_commit_not_approved: 403,

@@ -19,12 +19,18 @@ type ProjectVerificationError =
   | 'verification_unavailable'
   | 'invalid_generated_path';
 
+type ProjectVisualVerificationError =
+  | 'visual_check_failed'
+  | 'visual_check_timeout'
+  | 'visual_verification_unavailable';
+
 export type ProjectTaskWorkflowError =
   | 'invalid_task'
   | ProjectResolutionError
   | ProjectOrchestrationExecutionError
   | ProjectCodexExecutionError
   | ProjectVerificationError
+  | ProjectVisualVerificationError
   | ProjectCodexCommitError
   | 'local_commit_requires_run_tests'
   | 'invalid_hermes_json'

@@ -56,7 +56,7 @@ export type ProjectVisualVerificationResult =
       success: false;
       executionId: string;
       status: "visual_verification_failed";
-      error: "visual_verification_unavailable" | "visual_check_failed";
+      error: "visual_verification_unavailable" | "visual_check_failed" | "visual_check_timeout";
       failedCheckId?: string;
       checksPassed: number;
       totalChecks: number;
@@ -632,15 +632,18 @@ export const verifyProjectVisualWorkspace: ProjectVisualVerificationExecutor =
         totalChecks: allChecks.length,
         summary: "Deterministic browser visual verification passed.",
       };
-    } catch {
+    } catch (error) {
+      const timedOut = error instanceof Error && error.message === "visual_browser_timeout";
       return {
         success: false,
         executionId,
         status: "visual_verification_failed",
-        error: "visual_verification_unavailable",
+        error: timedOut ? "visual_check_timeout" : "visual_verification_unavailable",
         checksPassed: 0,
         totalChecks: 0,
-        summary: "Deterministic browser visual verification is unavailable.",
+        summary: timedOut
+          ? "Deterministic browser visual verification timed out."
+          : "Deterministic browser visual verification is unavailable.",
       };
     } finally {
       if (server) {

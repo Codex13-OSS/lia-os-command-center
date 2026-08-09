@@ -93,7 +93,7 @@ test("repository_read-only execution uses repository root and read-only sandbox 
     approvedCapabilities: ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
     effectiveCapabilities: ["repository_read"],
     proposal: { summary: "Inspect", steps: [{ title: "Inspect", objective: "Analyze only", requiredCapabilities: ["repository_read"] }] },
-  }), fake.dependencies);
+  }), { ...fake.dependencies, providerMode: "openai" });
   assert.equal(result.outcome, "analysis_completed");
   assert.equal(result.resultText, "Architecture is sound.");
   assert.equal(fake.gitCalls.length, 0);
@@ -145,7 +145,7 @@ test("execution result never exposes paths embedded after punctuation like =", a
 
 test("process invocations use fixed safe argv and shell false", async () => {
   const fake = harness();
-  await executeProjectCodexHandoff(handoff(), fake.dependencies);
+  await executeProjectCodexHandoff(handoff(), { ...fake.dependencies, providerMode: "openai" });
   for (const call of [...fake.gitCalls, ...fake.codexCalls]) assert.equal(call.shell, false);
   assert.deepEqual(fake.codexCalls[0].args.slice(0, -1), [
     "-a", "never", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
