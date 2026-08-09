@@ -20,7 +20,9 @@ const NON_LOCALHOST_GATE = 'ALLOW_PRODUCTION_SCAFFOLD_REHEARSAL_ONLY';
 const MESSAGING_FLAG = ['whats', 'appEnabled'].join('');
 const DEFAULT_INTERNAL_BACKEND_PORT = 3014;
 const HERMES_QUERY_PATH = '/api/hermes/query';
+const HERMES_STATUS_PATH = '/api/hermes/status';
 const SAME_ORIGIN_QUERY_PATH = '/api/lia-agent/query';
+const SAME_ORIGIN_HERMES_STATUS_PATH = '/api/lia-agent/hermes/status';
 const PROJECT_WORKFLOW_PATH = '/api/projects/tasks/workflow';
 const SAME_ORIGIN_PROJECT_WORKFLOW_PATH = '/api/lia-agent/projects/tasks/workflow';
 const PROJECT_TASKS_PATH = '/api/projects/tasks';
@@ -526,6 +528,77 @@ function sanitizeHermesPayload(payload) {
   return null;
 }
 
+function sanitizeHermesStatusPayload(payload) {
+  if (
+    payload?.ok === true
+    && payload?.service === 'lia-agent-backend'
+    && payload?.integration === 'hermes'
+    && payload?.mode === 'guarded_prompt_execution'
+    && typeof payload?.configured === 'boolean'
+    && typeof payload?.runtimeDetected === 'boolean'
+    && ['available', 'unavailable'].includes(payload?.state)
+    && Number.isSafeInteger(payload?.requiredMarkers)
+    && Number.isSafeInteger(payload?.detectedMarkers)
+    && typeof payload?.executionEnabled === 'boolean'
+    && typeof payload?.toolsEnabled === 'boolean'
+    && typeof payload?.memoryWriteEnabled === 'boolean'
+    && typeof payload?.handoffEnabled === 'boolean'
+    && typeof payload?.multiplexEnabled === 'boolean'
+    && payload?.isolationStrategy === 'one_process_per_tenant'
+  ) {
+    return {
+      ok: true,
+      integration: 'hermes',
+      mode: payload.mode,
+      configured: payload.configured,
+      runtimeDetected: payload.runtimeDetected,
+      state: payload.state,
+      executionEnabled: payload.executionEnabled,
+      toolsEnabled: payload.toolsEnabled,
+      memoryWriteEnabled: payload.memoryWriteEnabled,
+      handoffEnabled: payload.handoffEnabled,
+      multiplexEnabled: payload.multiplexEnabled,
+      isolationStrategy: payload.isolationStrategy,
+    };
+  }
+  return null;
+}
+
+async function proxyHermesStatus(response) {
+  const upstream = await requestLocal(
+    INTERNAL_BACKEND_PORT,
+    HERMES_STATUS_PATH,
+    {
+      method: 'GET',
+      timeout: 2200,
+      maxResponseBytes: MAX_RESPONSE_BYTES,
+      headers: { Accept: 'application/json' },
+    },
+  );
+
+  if (!upstream.ok) {
+    sendJson(response, 503, {
+      ok: false,
+      integration: 'hermes',
+      error: 'backend_unavailable',
+    });
+    return;
+  }
+
+  const sanitized = sanitizeHermesStatusPayload(parseJsonBody(upstream));
+
+  if (sanitized === null) {
+    sendJson(response, 502, {
+      ok: false,
+      integration: 'hermes',
+      error: 'invalid_backend_response',
+    });
+    return;
+  }
+
+  sendJson(response, 200, sanitized);
+}
+
 async function proxyHermesQuery(request, response) {
   const contentType = String(request.headers['content-type'] || '').toLowerCase();
 
@@ -762,6 +835,29 @@ function createRuntimeServer(distExists) {
       }
 
       sendJson(response, 200, await readControlledAdapter());
+      return;
+    }
+
+    if (requestUrl.pathname === SAME_ORIGIN_HERMES_STATUS_PATH) {
+      if (request.method !== 'GET') {
+        sendJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed',
+          allowedMethods: ['GET'],
+        });
+        return;
+      }
+
+      if (requestUrl.search !== '') {
+        sendJson(response, 400, {
+          ok: false,
+          integration: 'hermes',
+          error: 'invalid_request',
+        });
+        return;
+      }
+
+      await proxyHermesStatus(response);
       return;
     }
 
