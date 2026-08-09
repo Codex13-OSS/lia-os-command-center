@@ -178,6 +178,136 @@ test('fail marks the task terminal with error and persisted timestamps', async (
   });
 });
 
+test('complete persists the safe durable stage trace and reads it back', async () => {
+  await withTempStore({}, (store) => {
+    store.createOrGet(ID, 'fp-1', intent());
+    store.complete(ID, {
+      ...receipt,
+      stages: ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'],
+    });
+    assert.deepEqual(store.get(ID).receipt, {
+      ...receipt,
+      stages: ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'],
+    });
+  });
+});
+
+test('fail persists completedStages and reads them back', async () => {
+  await withTempStore({}, (store) => {
+    store.createOrGet(ID, 'fp-1', intent());
+    store.fail(ID, {
+      ...failure,
+      completedStages: ['planning', 'hermes', 'codex', 'verification'],
+    });
+    assert.deepEqual(store.get(ID).error, {
+      ...failure,
+      completedStages: ['planning', 'hermes', 'codex', 'verification'],
+    });
+  });
+});
+
+test('legacy terminal rows without stage traces remain readable', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-task-sqlite-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    initializeProjectTaskSqliteDatabaseV1(databasePath);
+    const database = new DatabaseSync(databasePath);
+    database.prepare(`
+      INSERT INTO project_tasks (task_id, fingerprint, intent_json, status, created_at, updated_at, terminal_at, receipt_json)
+      VALUES (?, ?, ?, 'completed', ?, ?, ?, ?)
+    `).run(ID, 'fp-legacy', JSON.stringify(intent()), 1000, 1000, 1000, JSON.stringify(receipt));
+    database.prepare(`
+      INSERT INTO project_tasks (task_id, fingerprint, intent_json, status, created_at, updated_at, terminal_at, error_json)
+      VALUES (?, ?, ?, 'failed', ?, ?, ?, ?)
+    `).run(ID2, 'fp-legacy-2', JSON.stringify(intent()), 1000, 1000, 1000, JSON.stringify(failure));
+    database.close();
+
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 0 });
+    try {
+      assert.deepEqual(store.get(ID).receipt, receipt);
+      assert.deepEqual(store.get(ID2).error, failure);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('fails closed when a stored receipt carries an invalid stage trace', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-task-sqlite-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    initializeProjectTaskSqliteDatabaseV1(databasePath);
+    const database = new DatabaseSync(databasePath);
+    const invalidTraces = [
+      ['planning', '/safe/repo'],
+      ['planning', 'commit'],
+      ['planning', 'hermes', 'codex', 'visualQa'],
+      [],
+      'planning',
+    ];
+    database.exec('PRAGMA ignore_check_constraints = ON');
+    invalidTraces.forEach((trace, index) => {
+      database.prepare(`
+        INSERT INTO project_tasks (task_id, fingerprint, intent_json, status, created_at, updated_at, terminal_at, receipt_json)
+        VALUES (?, ?, ?, 'completed', ?, ?, ?, ?)
+      `).run(
+        `550e8400-e29b-41d4-a716-44665544${String(index).padStart(4, '0')}`,
+        `fp-${index}`,
+        JSON.stringify(intent()),
+        0,
+        0,
+        0,
+        JSON.stringify({ ...receipt, stages: trace }),
+      );
+    });
+    database.close();
+
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 0 });
+    try {
+      for (let index = 0; index < invalidTraces.length; index += 1) {
+        assert.throws(
+          () => store.get(`550e8400-e29b-41d4-a716-44665544${String(index).padStart(4, '0')}`),
+          /corrupt_project_task_record/,
+        );
+      }
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('fails closed when a stored error carries invalid completedStages', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-task-sqlite-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    initializeProjectTaskSqliteDatabaseV1(databasePath);
+    const database = new DatabaseSync(databasePath);
+    database.exec('PRAGMA ignore_check_constraints = ON');
+    const traces = [['planning', 'PRIVATE'], ['commit', 'planning'], []];
+    const ids = [ID3, ID4, ID5];
+    traces.forEach((trace, index) => {
+      database.prepare(`
+        INSERT INTO project_tasks (task_id, fingerprint, intent_json, status, created_at, updated_at, terminal_at, error_json)
+        VALUES (?, ?, ?, 'failed', ?, ?, ?, ?)
+      `).run(ids[index], `fp-err-${index}`, JSON.stringify(intent()), 0, 0, 0, JSON.stringify({ ...failure, completedStages: trace }));
+    });
+    database.close();
+
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 0 });
+    try {
+      for (const id of ids) assert.throws(() => store.get(id), /corrupt_project_task_record/);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('maxActive rejects new tasks and never evicts active tasks', async () => {
   await withTempStore({ maxActive: 1, maxRecords: 10 }, (store) => {
     assert.equal(store.createOrGet(ID, 'fp-1', intent()).kind, 'created');

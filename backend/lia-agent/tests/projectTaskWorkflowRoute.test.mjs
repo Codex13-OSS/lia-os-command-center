@@ -201,6 +201,59 @@ test('workflow route strips malicious executor fields from success receipts', as
   });
 });
 
+const postWorkflow = async (executor) => {
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: registry,
+    projectTaskWorkflowExecutor: executor,
+  });
+  let outcome;
+  await withServer(app, async (baseUrl) => {
+    const response = await post(baseUrl, task());
+    outcome = { status: response.status, body: await response.json() };
+  });
+  return outcome;
+};
+
+test('workflow route publishes the validated stage trace and strips invalid traces', async () => {
+  const withStages = await postWorkflow(async () => ({
+    ...successBase, status: 'committed',
+    verification: { status: 'verified', checksPassed: 1, totalChecks: 1 },
+    commit: 'c'.repeat(40),
+    stages: ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'],
+  }));
+  assert.equal(withStages.status, 200);
+  assert.deepEqual(withStages.body.stages, ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit']);
+
+  const invalid = await postWorkflow(async () => ({
+    ...successBase, status: 'committed',
+    verification: { status: 'verified', checksPassed: 1, totalChecks: 1 },
+    commit: 'd'.repeat(40),
+    stages: ['planning', 'stdout', 'stderr', 'prompt'],
+  }));
+  assert.equal(invalid.status, 200);
+  assert.equal('stages' in invalid.body, false);
+  assert.equal(JSON.stringify(invalid.body).includes('stdout'), false);
+});
+
+test('workflow route publishes completedStages only when safe', async () => {
+  const safe = await postWorkflow(async () => ({
+    ok: false, status: 'failed', stage: 'verification', error: 'check_failed',
+    projectId: 'project-safe-1', summary: 'Safe summary.',
+    completedStages: ['planning', 'hermes', 'codex', 'verification'],
+  }));
+  assert.equal(safe.status, 422);
+  assert.deepEqual(safe.body.completedStages, ['planning', 'hermes', 'codex', 'verification']);
+
+  const invalid = await postWorkflow(async () => ({
+    ok: false, status: 'failed', stage: 'hermes', error: 'execution_failed',
+    projectId: 'project-safe-1', summary: 'Safe summary.',
+    completedStages: ['planning', '/secret', 'prompt'],
+  }));
+  assert.equal(invalid.status, 502);
+  assert.equal('completedStages' in invalid.body, false);
+  assert.equal(JSON.stringify(invalid.body).includes('/secret'), false);
+});
+
 test('workflow app wiring passes registry and optional verification registry to fake executor', async () => {
   for (const projectVerificationRegistry of [{ resolve: () => undefined }, undefined]) {
     const calls = [];

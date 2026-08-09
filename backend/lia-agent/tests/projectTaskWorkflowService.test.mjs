@@ -30,6 +30,9 @@ const registry = (overrides = {}) => ({
 });
 
 const verificationRegistry = { resolve: () => ({ projectId: "approved-project", checks: [] }) };
+const SAFE_STAGES = ["planning", "hermes", "codex", "verification", "visualQa", "commit"];
+const isCanonicalStagePrefix = (value) =>
+  Array.isArray(value) && value.length > 0 && value.every((item, index) => item === SAFE_STAGES[index]);
 const proposal = (overrides = {}) => ({
   summary: "Apply a contained change",
   steps: [{
@@ -289,6 +292,7 @@ test("Codex safe failure is preserved", async () => {
   assert.deepEqual(result, {
     ok: false, projectId: "approved-project", executionId: "execution-failed", status: "failed",
     stage: "codex", error: "codex_execution_failed", summary: "Codex execution did not complete.",
+    completedStages: ["planning", "hermes"],
   });
 });
 
@@ -298,6 +302,7 @@ test("Codex success without run_tests is ready for review", async () => {
   assert.deepEqual(result, {
     ok: true, projectId: "approved-project", executionId: "execution-123",
     status: "ready_for_review", executionSummary: "Codex completed safely.", resultText: "Useful completion result.",
+    stages: ["planning", "hermes", "codex"],
   });
   assert.equal(fake.calls.verification.length, 0);
   assert.equal(fake.calls.commit.length, 0);
@@ -315,6 +320,7 @@ test("all-capability ceiling with repository_read-only proposal succeeds as anal
   assert.deepEqual(result, {
     ok: true, projectId: "approved-project", executionId: "execution-123", status: "analyzed",
     executionSummary: "Codex analysis completed.", resultText: "Useful repository analysis.",
+    stages: ["planning", "hermes", "codex"],
   });
   assert.deepEqual(fake.calls.codex[0][0].effectiveCapabilities, ["repository_read"]);
   assert.equal(fake.calls.verification.length, 0);
@@ -363,6 +369,7 @@ test("verification success without local_commit returns verified", async () => {
     executionSummary: "Codex completed safely.",
     resultText: "Useful completion result.",
     verification: { status: "verified", checksPassed: 2, totalChecks: 2 },
+    stages: ["planning", "hermes", "codex", "verification", "visualQa"],
   });
   assert.equal(fake.calls.commit.length, 0);
 });
@@ -390,6 +397,7 @@ test("complete simulated LÍA -> Hermes -> Codex -> verification -> local commit
     resultText: "Final verified result: 2/2 checks passed and local commit 0123456789abcdef0123456789abcdef01234567 was created and validated.",
     verification: { status: "verified", checksPassed: 2, totalChecks: 2 },
     commit: "0123456789abcdef0123456789abcdef01234567",
+    stages: ["planning", "hermes", "codex", "verification", "visualQa", "commit"],
   });
   assert.equal(fake.calls.verification[0][0], "/registry/approved-project");
   assert.equal(fake.calls.verification[0][2], "execution-123");
@@ -587,4 +595,85 @@ test("visual verification cannot substitute technical verification", async () =>
   assert.equal(result.stage, "verification");
   assert.equal(fake.calls.visualVerification.length, 0);
   assert.equal(fake.calls.commit.length, 0);
+});
+
+test("durable stage trace distinguishes every workflow phase on success", async () => {
+  const committed = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    harness(),
+  );
+  assert.equal(committed.status, "committed");
+  assert.deepEqual(committed.stages, ["planning", "hermes", "codex", "verification", "visualQa", "commit"]);
+
+  const verified = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests"]),
+    harness({ hermes: { ok: true, response: JSON.stringify(proposal({
+      steps: [{ id: "step-1", title: "Implement", objective: "Change only approved files", role: "implementer", dependsOn: [], requiredCapabilities: ["isolated_worktree_write", "run_tests"] }],
+    })) } }),
+  );
+  assert.equal(verified.status, "verified");
+  assert.deepEqual(verified.stages, ["planning", "hermes", "codex", "verification", "visualQa"]);
+
+  const analyzed = await run(
+    request(["repository_read"]),
+    harness({
+      hermes: { ok: true, response: JSON.stringify(proposal({
+        steps: [{ id: "step-1", title: "Inspect", objective: "Report", role: "researcher", dependsOn: [], requiredCapabilities: ["repository_read"] }],
+      })) },
+    }),
+  );
+  assert.equal(analyzed.status, "analyzed");
+  assert.deepEqual(analyzed.stages, ["planning", "hermes", "codex"]);
+});
+
+test("completedStages pinpoints the terminal failure without exposing internals", async () => {
+  const visualFailure = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    harness({ visualVerification: {
+      success: false, executionId: "execution-123", status: "visual_verification_failed",
+      error: "visual_check_failed", failedCheckId: "iphone:readable_base_font",
+      checksPassed: 5, totalChecks: 6, summary: "Visual QA failed.",
+    } }),
+  );
+  assert.equal(visualFailure.stage, "verification");
+  assert.equal(visualFailure.error, "check_failed");
+  assert.deepEqual(visualFailure.completedStages, ["planning", "hermes", "codex", "verification"]);
+
+  const commitFailure = await run(
+    request(["repository_read", "isolated_worktree_write", "run_tests", "local_commit"]),
+    harness({ commit: {
+      success: false, executionId: "execution-123", status: "commit_failed",
+      error: "git_commit_failed", summary: "The local commit could not be created.",
+    } }),
+  );
+  assert.equal(commitFailure.stage, "commit");
+  assert.deepEqual(commitFailure.completedStages, ["planning", "hermes", "codex", "verification", "visualQa"]);
+
+  const hermesFailure = await run(request(), harness({ hermes: { ok: false, error: "execution_failed" } }));
+  assert.equal(hermesFailure.stage, "hermes");
+  assert.deepEqual(hermesFailure.completedStages, ["planning"]);
+
+  const planningFailure = await run(request(undefined, { projectId: "../escape" }), harness());
+  assert.equal(planningFailure.stage, "planning");
+  assert.equal(planningFailure.completedStages, undefined);
+});
+
+test("stage traces only ever contain the fixed safe phase vocabulary", async () => {
+  const results = [];
+  for (const capabilities of [
+    ["repository_read"],
+    ["repository_read", "isolated_worktree_write", "run_tests"],
+    ["repository_read", "isolated_worktree_write", "run_tests", "local_commit"],
+  ]) {
+    results.push(await run(request(capabilities), harness()));
+  }
+  results.push(await run(request(), harness({ hermes: { ok: false, error: "timeout" } })));
+  for (const result of results) {
+    const trace = result.ok ? result.stages : result.completedStages;
+    assert.equal(isCanonicalStagePrefix(trace), true);
+    const serialized = JSON.stringify(result);
+    for (const forbidden of ["/registry", "PRIVATE", "prompt", "stdout", "stderr", "commands"]) {
+      assert.equal(serialized.includes(forbidden), false, forbidden);
+    }
+  }
 });

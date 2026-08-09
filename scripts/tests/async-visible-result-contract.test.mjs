@@ -66,6 +66,51 @@ test('same-origin task sanitizer allowlists terminal diagnostics and strips inte
   ]) assert.equal(sanitizeProjectTaskPayload({ ...base, error: mutation }), null);
 });
 
+test('same-origin task sanitizer allowlists only the fixed stage vocabulary', () => {
+  const taskId = '550e8400-e29b-41d4-a716-446655440000';
+  const receiptBase = {
+    ok: true, integration: 'project_task', taskId, status: 'completed', terminal: true,
+    receipt: {
+      executionId: 'exec-1', status: 'committed', resultText: 'Cambio completado.',
+      verification: { status: 'verified', checksPassed: 2, totalChecks: 3 },
+      commit: 'a'.repeat(40),
+    },
+  };
+  const withStages = sanitizeProjectTaskPayload({
+    ...receiptBase,
+    receipt: { ...receiptBase.receipt, stages: ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'] },
+  });
+  assert.deepEqual(withStages.receipt.stages, ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit']);
+  for (const trace of [
+    ['planning', '/private', 'prompt'],
+    ['planning', 'commit'],
+    [],
+    'planning',
+    ['planning', 'hermes', 'codex', 'visualQa'],
+  ]) {
+    assert.equal(sanitizeProjectTaskPayload({
+      ...receiptBase,
+      receipt: { ...receiptBase.receipt, stages: trace },
+    }), null, JSON.stringify(trace));
+  }
+
+  const failedBase = {
+    ok: true, integration: 'project_task', taskId, status: 'failed', terminal: true,
+    error: { stage: 'commit', code: 'git_commit_failed', message: 'No se pudo crear el commit local.' },
+  };
+  const withCompleted = sanitizeProjectTaskPayload({
+    ...failedBase,
+    error: { ...failedBase.error, completedStages: ['planning', 'hermes', 'codex', 'verification', 'visualQa'] },
+  });
+  assert.deepEqual(withCompleted.error.completedStages, ['planning', 'hermes', 'codex', 'verification', 'visualQa']);
+  for (const trace of [['planning', 'secret'], ['verification', 'planning'], []]) {
+    assert.equal(sanitizeProjectTaskPayload({
+      ...failedBase,
+      error: { ...failedBase.error, completedStages: trace },
+    }), null, JSON.stringify(trace));
+  }
+});
+
 test('frontend maps controlled Hermes failures and retains a generic unknown fallback', async () => {
   const client = await readFile(new URL('../../frontend/src/integrations/liaProjectTaskClient.ts', import.meta.url), 'utf8');
   for (const [code, message] of [

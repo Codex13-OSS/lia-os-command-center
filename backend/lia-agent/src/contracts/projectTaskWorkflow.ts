@@ -2,6 +2,7 @@ import type { ProjectCodexCommitError } from './projectCodexCommit.js';
 import type { ProjectCodexExecutionError } from './projectCodexExecution.js';
 import type { ProjectResolutionResult } from './projectRegistry.js';
 import type { ProjectOrchestrationExecutionError } from './projectOrchestrationExecution.js';
+import type { SafeTaskStage } from './projectTask.js';
 
 export type ProjectTaskWorkflowStage =
   | 'planning'
@@ -45,6 +46,8 @@ export type ProjectTaskWorkflowResult =
         totalChecks: number;
       };
       commit?: string;
+      /** Completed workflow phases in canonical order. Never includes internal data. */
+      stages?: readonly SafeTaskStage[];
     }
   | {
       ok: false;
@@ -54,4 +57,6 @@ export type ProjectTaskWorkflowResult =
       stage: ProjectTaskWorkflowStage;
       error: ProjectTaskWorkflowError;
       summary: string;
+      /** Phases completed before the terminal failure. Never includes internal data. */
+      completedStages?: readonly SafeTaskStage[];
     };

@@ -3,6 +3,7 @@ import type { LiaAgentConfig } from '../config.js';
 import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
 import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
+import { isSafeTaskStages } from '../contracts/projectTask.js';
 import type {
   ProjectTaskWorkflowResult,
   ProjectTaskWorkflowStage,
@@ -131,6 +132,9 @@ export function createProjectTaskWorkflowRouter(
         ...(typeof result.projectId === 'string' ? { projectId: result.projectId } : {}),
         ...(typeof result.executionId === 'string' ? { executionId: result.executionId } : {}),
         ...(typeof result.summary === 'string' ? { summary: result.summary } : {}),
+        ...(result.completedStages !== undefined && isSafeTaskStages(result.completedStages)
+          ? { completedStages: [...result.completedStages] }
+          : {}),
       });
       return;
     }
@@ -162,6 +166,7 @@ export function createProjectTaskWorkflowRouter(
       status: result.status,
       executionSummary: result.executionSummary,
       resultText: result.resultText,
+      ...(result.stages !== undefined && isSafeTaskStages(result.stages) ? { stages: [...result.stages] } : {}),
     };
 
     if (result.status === 'ready_for_review' || result.status === 'analyzed') {

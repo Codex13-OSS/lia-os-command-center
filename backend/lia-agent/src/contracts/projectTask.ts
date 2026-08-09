@@ -3,12 +3,43 @@ import type { ProjectTaskWorkflowError, ProjectTaskWorkflowStage } from './proje
 
 export const PROJECT_TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export type ProjectTaskStage = 'accepted' | 'planning' | 'hermes' | 'codex' | 'verification' | 'commit' | 'completed' | 'failed';
+
+/**
+ * Safe, durable trace of the autonomous workflow phases that completed.
+ *
+ * Only fixed public phase names are allowed; the trace never carries prompts,
+ * commands, output, paths, subagent identifiers, sessions, credentials or
+ * secrets. The values follow canonical workflow order so an operator can
+ * distinguish, without reading internal logs: planning, Hermes Supervisor,
+ * Codex, technical verification, Visual QA and the local commit.
+ */
+export const SAFE_TASK_STAGES = [
+  'planning',
+  'hermes',
+  'codex',
+  'verification',
+  'visualQa',
+  'commit',
+] as const;
+export type SafeTaskStage = (typeof SAFE_TASK_STAGES)[number];
+
+/** Validates a durable stage trace: a non-empty canonical-order prefix of SAFE_TASK_STAGES. */
+export function isSafeTaskStages(value: unknown): value is readonly SafeTaskStage[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== SAFE_TASK_STAGES[index]) return false;
+  }
+  return true;
+}
+
 export type SafeTaskReceipt = {
   executionId: string;
   status: 'analyzed' | 'ready_for_review' | 'verified' | 'committed';
   resultText: string;
   verification?: { status: 'verified'; checksPassed: number; totalChecks: number };
   commit?: string;
+  /** Completed workflow phases in canonical order (present for new tasks; absent for legacy receipts). */
+  stages?: readonly SafeTaskStage[];
 };
 export const SAFE_TASK_ERROR_MESSAGES = {
   invalid_task: 'La tarea no es válida.',
@@ -51,6 +82,8 @@ type SafeTaskErrorDetails = {
   stage?: ProjectTaskWorkflowStage;
   projectId?: string;
   executionId?: string;
+  /** Phases completed before the terminal failure, in canonical order (absent for legacy errors). */
+  completedStages?: readonly SafeTaskStage[];
 };
 export type SafeTaskError = ({
   [Code in SafeTaskErrorCode]: { code: Code; message: (typeof SAFE_TASK_ERROR_MESSAGES)[Code] }

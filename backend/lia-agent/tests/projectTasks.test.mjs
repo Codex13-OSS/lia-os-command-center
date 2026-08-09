@@ -98,3 +98,84 @@ test('store capacity never evicts active tasks and terminal TTL uses injected cl
   store.complete(ID, { executionId: 'x', status: 'ready_for_review', resultText: 'Done.' }); now = 10; assert.equal(store.get(ID), undefined);
   assert.equal(store.createOrGet('550e8400-e29b-41d4-a716-446655440001', 'two', intent).kind, 'created');
 });
+
+test('durable receipt publishes the safe stage trace for the operator', async () => {
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: registry,
+    projectTaskStore: new InMemoryProjectTaskStore(),
+    projectTasksWorkflowExecutor: async () => ({
+      ...success,
+      stages: ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'],
+    }),
+  });
+  await server(app, async (base) => {
+    await post(base, request()); await new Promise(setImmediate);
+    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+    assert.deepEqual(body.receipt.stages, ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit']);
+  });
+});
+
+test('terminal failure publishes completedStages and omits invalid ones', async () => {
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: registry,
+    projectTasksWorkflowExecutor: async () => ({
+      ok: false, status: 'failed', stage: 'commit', error: 'git_commit_failed',
+      summary: 'PRIVATE', projectId: 'safe',
+      completedStages: ['planning', 'hermes', 'codex', 'verification', 'visualQa'],
+    }),
+  });
+  await server(app, async (base) => {
+    await post(base, request()); await new Promise(setImmediate);
+    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+    assert.deepEqual(body.error, {
+      stage: 'commit', code: 'git_commit_failed',
+      message: 'No se pudo crear el commit local.',
+      projectId: 'safe',
+      completedStages: ['planning', 'hermes', 'codex', 'verification', 'visualQa'],
+    });
+  });
+});
+
+test('adversarial stage traces never reach the durable receipt', async () => {
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: registry,
+    projectTaskStore: new InMemoryProjectTaskStore(),
+    projectTasksWorkflowExecutor: async () => ({
+      ...success,
+      stages: ['planning', '/safe/repo', 'prompt', 'execution-123'],
+    }),
+  });
+  await server(app, async (base) => {
+    await post(base, request()); await new Promise(setImmediate);
+    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+    assert.deepEqual(body.error, { code: 'workflow_failed', message: 'La ejecución no pudo completarse.' });
+    const publicResponse = JSON.stringify(body);
+    for (const privateValue of ['/safe/repo', 'prompt', 'execution-123', 'stdout', 'stderr']) {
+      assert.equal(publicResponse.includes(privateValue), false);
+    }
+  });
+});
+
+test('adversarial completedStages are stripped from the durable failure', async () => {
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: registry,
+    projectTasksWorkflowExecutor: async () => ({
+      ok: false, status: 'failed', stage: 'hermes', error: 'execution_failed',
+      summary: 'PRIVATE', projectId: 'safe',
+      completedStages: ['planning', 'prompt', '/safe/repo'],
+    }),
+  });
+  await server(app, async (base) => {
+    await post(base, request()); await new Promise(setImmediate);
+    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+    assert.deepEqual(body.error, {
+      stage: 'hermes', code: 'execution_failed',
+      message: 'Hermes no pudo completar el razonamiento.',
+      projectId: 'safe',
+    });
+    const publicResponse = JSON.stringify(body);
+    for (const privateValue of ['prompt', '/safe/repo', 'PRIVATE']) {
+      assert.equal(publicResponse.includes(privateValue), false);
+    }
+  });
+});

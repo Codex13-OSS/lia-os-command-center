@@ -3,7 +3,7 @@ import { Router } from 'express';
 import type { LiaAgentConfig } from '../config.js';
 import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
 import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
-import { PROJECT_TASK_ID, SAFE_TASK_ERROR_MESSAGES, type ProjectTaskStage, type ProjectTaskStore, type SafeTaskError, type SafeTaskReceipt } from '../contracts/projectTask.js';
+import { PROJECT_TASK_ID, SAFE_TASK_ERROR_MESSAGES, isSafeTaskStages, type ProjectTaskStage, type ProjectTaskStore, type SafeTaskError, type SafeTaskReceipt } from '../contracts/projectTask.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
 import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
 import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
@@ -21,7 +21,9 @@ const safeReceipt = (result: Extract<ProjectTaskWorkflowResult, { ok: true }>): 
   if (typeof result.resultText !== 'string' || result.resultText.length < 1 || result.resultText.length > 6000) return undefined;
   if ((result.status === 'verified' || result.status === 'committed') && (!result.verification || !Number.isSafeInteger(result.verification.checksPassed) || !Number.isSafeInteger(result.verification.totalChecks) || result.verification.checksPassed < 0 || result.verification.totalChecks < result.verification.checksPassed)) return undefined;
   if (result.status === 'committed' && (!result.commit || !/^[0-9a-fA-F]{40,64}$/.test(result.commit))) return undefined;
+  if (result.stages !== undefined && !isSafeTaskStages(result.stages)) return undefined;
   return ({ executionId: result.executionId, status: result.status, resultText: result.resultText,
+  ...(result.stages !== undefined ? { stages: [...result.stages] } : {}),
   ...(result.verification ? { verification: { status: 'verified', checksPassed: result.verification.checksPassed, totalChecks: result.verification.totalChecks } } : {}),
   ...(result.commit ? { commit: result.commit } : {}),
   });
@@ -36,6 +38,7 @@ const safeFailure = (result: Extract<ProjectTaskWorkflowResult, { ok: false }>):
     message: SAFE_TASK_ERROR_MESSAGES[result.error],
     ...(result.projectId && /^[A-Za-z0-9._-]{1,120}$/.test(result.projectId) ? { projectId: result.projectId } : {}),
     ...(result.executionId && /^[A-Za-z0-9_-]{1,128}$/.test(result.executionId) ? { executionId: result.executionId } : {}),
+    ...(result.completedStages !== undefined && isSafeTaskStages(result.completedStages) ? { completedStages: [...result.completedStages] } : {}),
   } as SafeTaskError;
 };
 

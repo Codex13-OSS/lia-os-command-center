@@ -12,7 +12,7 @@ import type {
   SafeTaskError,
   SafeTaskReceipt,
 } from '../contracts/projectTask.js';
-import { SAFE_TASK_ERROR_MESSAGES } from '../contracts/projectTask.js';
+import { isSafeTaskStages, SAFE_TASK_ERROR_MESSAGES } from '../contracts/projectTask.js';
 import {
   PROJECT_TASK_SQLITE_ERRORS,
   PROJECT_TASK_SQLITE_SCHEMA_VERSION,
@@ -73,6 +73,7 @@ function isSafeTaskReceipt(value: unknown): value is SafeTaskReceipt {
   }
 
   if (value.commit !== undefined && typeof value.commit !== 'string') return false;
+  if (value.stages !== undefined && !isSafeTaskStages(value.stages)) return false;
   return true;
 }
 
@@ -83,6 +84,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
   if (value.stage !== undefined && (typeof value.stage !== 'string' || !ERROR_STAGES.has(value.stage))) return false;
   if (value.projectId !== undefined && typeof value.projectId !== 'string') return false;
   if (value.executionId !== undefined && typeof value.executionId !== 'string') return false;
+  if (value.completedStages !== undefined && !isSafeTaskStages(value.completedStages)) return false;
   return true;
 }
 

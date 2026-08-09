@@ -1,6 +1,8 @@
 export const PROJECT_TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const PROJECT_TASK_STAGES = new Set(['accepted', 'planning', 'hermes', 'codex', 'verification', 'commit', 'completed', 'failed']);
 export const PROJECT_TASK_FAILURE_STAGES = new Set(['planning', 'hermes', 'approval', 'codex', 'verification', 'commit']);
+export const PROJECT_TASK_SAFE_STAGES = ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'];
+const isSafeTaskStages = (value) => Array.isArray(value) && value.length > 0 && value.every((item, index) => item === PROJECT_TASK_SAFE_STAGES[index]);
 export const PROJECT_TASK_ERROR_MESSAGES = new Map([
   ['invalid_task', 'La tarea no es válida.'],
   ['project_not_found', 'El proyecto solicitado no existe.'],
@@ -49,11 +51,16 @@ export function sanitizeProjectTaskPayload(payload) {
     if (payload.error?.code === 'workflow_interrupted' && payload.error?.stage !== undefined) return null;
     const legacyGeneric = (payload.error?.code === 'workflow_failed' || payload.error?.code === 'workflow_interrupted') && payload.error?.stage === undefined;
     if (!expectedMessage || payload.error?.message !== expectedMessage || (!legacyGeneric && !PROJECT_TASK_FAILURE_STAGES.has(payload.error?.stage))) return null;
-    return { ...base, error: { ...(legacyGeneric ? {} : { stage: payload.error.stage }), code: payload.error.code, message: expectedMessage, ...(typeof payload.error.projectId === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(payload.error.projectId) ? { projectId: payload.error.projectId } : {}), ...(typeof payload.error.executionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(payload.error.executionId) ? { executionId: payload.error.executionId } : {}) } };
+    if (payload.error.completedStages !== undefined && !isSafeTaskStages(payload.error.completedStages)) return null;
+    return { ...base, error: { ...(legacyGeneric ? {} : { stage: payload.error.stage }), code: payload.error.code, message: expectedMessage, ...(typeof payload.error.projectId === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(payload.error.projectId) ? { projectId: payload.error.projectId } : {}), ...(typeof payload.error.executionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(payload.error.executionId) ? { executionId: payload.error.executionId } : {}), ...(payload.error.completedStages !== undefined ? { completedStages: payload.error.completedStages } : {}) } };
   }
   const r = payload.receipt;
   if (payload.status !== 'completed' || typeof r?.executionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(r.executionId) || !['analyzed', 'ready_for_review', 'verified', 'committed'].includes(r.status) || typeof r.resultText !== 'string' || r.resultText.length < 1 || r.resultText.length > 6000) return null;
   const receipt = { executionId: r.executionId, status: r.status, resultText: r.resultText };
+  if (r.stages !== undefined) {
+    if (!isSafeTaskStages(r.stages)) return null;
+    receipt.stages = r.stages;
+  }
   if (r.verification !== undefined) {
     if (r.verification.status !== 'verified' || !Number.isSafeInteger(r.verification.checksPassed) || !Number.isSafeInteger(r.verification.totalChecks) || r.verification.checksPassed < 0 || r.verification.totalChecks < r.verification.checksPassed) return null;
     receipt.verification = { status: 'verified', checksPassed: r.verification.checksPassed, totalChecks: r.verification.totalChecks };

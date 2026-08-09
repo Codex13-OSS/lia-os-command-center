@@ -4,6 +4,7 @@ import type { ProjectCodexExecutionResult } from '../contracts/projectCodexExecu
 import type { ProjectCodexHandoff } from '../contracts/projectCodexHandoff.js';
 import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
+import type { SafeTaskStage } from '../contracts/projectTask.js';
 import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
 import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
 import type { HermesExecutionResult, HermesQueryExecutor } from './hermesExecutor.js';
@@ -90,7 +91,16 @@ const failed = (
   error: Extract<ProjectTaskWorkflowResult, { ok: false }>['error'],
   summary: string,
   identifiers: { projectId?: string; executionId?: string } = {},
-): ProjectTaskWorkflowResult => ({ ok: false, status: 'failed', stage, error, summary, ...identifiers });
+  completedStages: readonly SafeTaskStage[] = [],
+): ProjectTaskWorkflowResult => ({
+  ok: false,
+  status: 'failed',
+  stage,
+  error,
+  summary,
+  ...identifiers,
+  ...(completedStages.length > 0 ? { completedStages: [...completedStages] } : {}),
+});
 
 export async function executeProjectTaskWorkflow(
   config: LiaAgentConfig,
@@ -99,19 +109,31 @@ export async function executeProjectTaskWorkflow(
   verificationRegistry?: ProjectVerificationRegistry,
   dependencies: ProjectTaskWorkflowDependencies = {},
 ): Promise<ProjectTaskWorkflowResult> {
+  const completedStages: SafeTaskStage[] = [];
+  const markStage = (stage: SafeTaskStage): void => {
+    completedStages[completedStages.length] = stage;
+  };
+  const fail = (
+    stage: Extract<ProjectTaskWorkflowResult, { ok: false }>['stage'],
+    error: Extract<ProjectTaskWorkflowResult, { ok: false }>['error'],
+    summary: string,
+    identifiers: { projectId?: string; executionId?: string } = {},
+  ): ProjectTaskWorkflowResult => failed(stage, error, summary, identifiers, completedStages);
+
   await observe(dependencies, 'planning');
   const planning = await planProjectTask(request, projectRegistrySource);
   if (!planning.ok) {
-    return failed('planning', planning.error, 'Project task planning failed.');
+    return fail('planning', planning.error, 'Project task planning failed.');
   }
 
   const { plan } = planning;
+  markStage('planning');
   const identifiers = { projectId: plan.projectId };
   let prompt: string;
   try {
     prompt = buildProjectOrchestrationPrompt(plan);
   } catch (error) {
-    return failed(
+    return fail(
       'hermes',
       error instanceof Error && error.message === 'project_orchestration_prompt_too_large'
         ? 'prompt_too_large'
@@ -134,7 +156,7 @@ export async function executeProjectTaskWorkflow(
     if (hermesResult.ok || attempt === 1 || !retryableHermesErrors.has(hermesResult.error)) break;
   }
   if (!hermesResult.ok) {
-    return failed('hermes', hermesResult.error, 'Hermes reasoning did not complete.', identifiers);
+    return fail('hermes', hermesResult.error, 'Hermes reasoning did not complete.', identifiers);
   }
 
   let parsed: unknown;
@@ -147,7 +169,7 @@ export async function executeProjectTaskWorkflow(
     : undefined;
   if (validation !== undefined && !validation.success) {
     if (containsNonRetryableHermesAuthorityRequest(parsed, plan.approvedCapabilities)) {
-      return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+      return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
     }
     initialError = 'invalid_hermes_proposal';
   }
@@ -164,55 +186,57 @@ export async function executeProjectTaskWorkflow(
 
     let repairPrompt: string;
     try { repairPrompt = buildProjectOrchestrationRepairPrompt(plan, repairValidationErrors); }
-    catch { return failed('hermes', 'prompt_too_large', 'Hermes reasoning could not be prepared.', identifiers); }
+    catch { return fail('hermes', 'prompt_too_large', 'Hermes reasoning could not be prepared.', identifiers); }
     let repairedResult: HermesExecutionResult;
     try { repairedResult = await executeHermes(config, repairPrompt); }
     catch { repairedResult = { ok: false, error: 'execution_failed' }; }
     if (!repairedResult.ok) {
-      return failed('hermes', repairedResult.error, 'Hermes reasoning did not complete.', identifiers);
+      return fail('hermes', repairedResult.error, 'Hermes reasoning did not complete.', identifiers);
     }
     try { parsed = JSON.parse(repairedResult.response); }
     catch {
       await observeHermesProposal(dependencies, 'repair_invalid_json');
-      return failed('hermes', 'invalid_hermes_json', 'Hermes returned invalid JSON.', identifiers);
+      return fail('hermes', 'invalid_hermes_json', 'Hermes returned invalid JSON.', identifiers);
     }
     validation = validateProjectOrchestrationProposal(parsed, plan);
     if (!validation.success) {
       await observeHermesProposal(dependencies, 'repair_invalid_structure');
-      return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+      return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
     }
     await observeHermesProposal(dependencies, 'repair_succeeded');
   }
 
   if (validation === undefined || !validation.success) {
-    return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+    return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
   }
   if (validation.proposal.requiresHumanApproval || validation.proposal.blockedActions.length > 0) {
-    return failed('approval', 'human_approval_required', 'Human approval is required.', identifiers);
+    return fail('approval', 'human_approval_required', 'Human approval is required.', identifiers);
   }
 
   const handoffResult = buildProjectCodexHandoff(plan, validation.proposal);
   if (!handoffResult.success) {
-    return failed('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+    return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
   }
   const effectiveCapabilities = handoffResult.handoff.effectiveCapabilities;
   if (effectiveCapabilities.includes('local_commit') && !effectiveCapabilities.includes('run_tests')) {
-    return failed('hermes', 'invalid_hermes_proposal', 'Local commit requires successful verification.', identifiers);
+    return fail('hermes', 'invalid_hermes_proposal', 'Local commit requires successful verification.', identifiers);
   }
+  markStage('hermes');
 
   let codexResult: ProjectCodexExecutionResult;
   await observe(dependencies, 'codex');
   try {
     codexResult = await (dependencies.executeCodex ?? executeProjectCodexHandoff)(handoffResult.handoff);
   } catch {
-    return failed('codex', 'codex_execution_failed', 'Codex execution did not complete.', identifiers);
+    return fail('codex', 'codex_execution_failed', 'Codex execution did not complete.', identifiers);
   }
   if (!codexResult.success) {
-    return failed('codex', codexResult.error, codexResult.summary, {
+    return fail('codex', codexResult.error, codexResult.summary, {
       ...identifiers,
       executionId: codexResult.executionId,
     });
   }
+  markStage('codex');
 
   const executionIdentifiers = { ...identifiers, executionId: codexResult.executionId };
   if (!effectiveCapabilities.includes('isolated_worktree_write')) {
@@ -222,6 +246,7 @@ export async function executeProjectTaskWorkflow(
       status: 'analyzed',
       executionSummary: codexResult.summary,
       resultText: codexResult.resultText,
+      stages: [...completedStages],
     };
   }
   if (!effectiveCapabilities.includes('run_tests')) {
@@ -231,10 +256,11 @@ export async function executeProjectTaskWorkflow(
       status: 'ready_for_review',
       executionSummary: codexResult.summary,
       resultText: codexResult.resultText,
+      stages: [...completedStages],
     };
   }
   if (verificationRegistry === undefined) {
-    return failed(
+    return fail(
       'verification',
       'verification_unavailable',
       'Verification is not available for this project.',
@@ -252,7 +278,7 @@ export async function executeProjectTaskWorkflow(
       verificationRegistry,
     );
   } catch {
-    return failed(
+    return fail(
       'verification',
       'verification_unavailable',
       'Verification is not available for this project.',
@@ -260,16 +286,17 @@ export async function executeProjectTaskWorkflow(
     );
   }
   if (!verificationResult.success) {
-    return failed('verification', verificationResult.error, verificationResult.summary, executionIdentifiers);
+    return fail('verification', verificationResult.error, verificationResult.summary, executionIdentifiers);
   }
   if (verificationResult.executionId !== codexResult.executionId) {
-    return failed(
+    return fail(
       'verification',
       'invalid_generated_path',
       'The retained workspace could not be resolved safely.',
       executionIdentifiers,
     );
   }
+  markStage('verification');
 
   let visualVerificationResult: ProjectVisualVerificationResult;
   try {
@@ -280,7 +307,7 @@ export async function executeProjectTaskWorkflow(
       codexResult.executionId,
     );
   } catch {
-    return failed(
+    return fail(
       'verification',
       'verification_unavailable',
       'Visual verification is not available for this project.',
@@ -289,7 +316,7 @@ export async function executeProjectTaskWorkflow(
   }
 
   if (!visualVerificationResult.success) {
-    return failed(
+    return fail(
       'verification',
       visualVerificationResult.error === 'visual_check_failed'
         ? 'check_failed'
@@ -300,13 +327,14 @@ export async function executeProjectTaskWorkflow(
   }
 
   if (visualVerificationResult.executionId !== codexResult.executionId) {
-    return failed(
+    return fail(
       'verification',
       'invalid_generated_path',
       'The retained workspace could not be resolved safely.',
       executionIdentifiers,
     );
   }
+  markStage('visualQa');
 
   const verification = {
     status: 'verified' as const,
@@ -325,6 +353,7 @@ export async function executeProjectTaskWorkflow(
       executionSummary: codexResult.summary,
       resultText: codexResult.resultText,
       verification,
+      stages: [...completedStages],
     };
   }
 
@@ -338,22 +367,23 @@ export async function executeProjectTaskWorkflow(
       verificationResult,
     );
   } catch {
-    return failed('commit', 'git_commit_failed', 'The local commit could not be created.', executionIdentifiers);
+    return fail('commit', 'git_commit_failed', 'The local commit could not be created.', executionIdentifiers);
   }
   if (!commitResult.success) {
-    return failed('commit', commitResult.error, commitResult.summary, executionIdentifiers);
+    return fail('commit', commitResult.error, commitResult.summary, executionIdentifiers);
   }
   if (
     commitResult.executionId !== codexResult.executionId
     || !/^[0-9a-fA-F]{40,64}$/.test(commitResult.commit)
   ) {
-    return failed(
+    return fail(
       'commit',
       'git_revision_failed',
       'The local commit revision could not be validated.',
       executionIdentifiers,
     );
   }
+  markStage('commit');
 
   return {
     ok: true,
@@ -363,5 +393,6 @@ export async function executeProjectTaskWorkflow(
     resultText: buildCommittedResultText(verification, commitResult.commit),
     verification,
     commit: commitResult.commit,
+    stages: [...completedStages],
   };
 }

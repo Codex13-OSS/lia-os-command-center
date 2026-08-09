@@ -57,6 +57,23 @@ instrucción real de `lia-hermes` resuelve en la etapa de planificación con las
 capacidades aprobadas (`repository_read`, `isolated_worktree_write`,
 `run_tests`, `local_commit`).
 
+## Observabilidad segura del flujo autónomo
+
+Los resultados durables de cada tarea (`GET /api/projects/tasks/:taskId` y el
+recibo en SQLite) permiten distinguir qué ocurrió sin leer logs internos:
+
+- Recibo terminal exitoso: campo `stages` con las fases completadas en orden
+  canónico: `planning`, `hermes` (Hermes Supervisor), `codex`,
+  `verification` (verificación técnica), `visualQa` (Visual QA) y `commit`
+  (commit local, con el hash en `commit`).
+- Falla terminal: el campo `error` incluye `stage` (dónde falló) y
+  `completedStages` (qué fases se completaron antes), con el mismo vocabulario.
+
+La traza usa exclusivamente un vocabulario fijo de fase pública; nunca incluye
+prompts, comandos, stdout/stderr, rutas privadas, IDs internos de subagentes,
+sesiones, credenciales ni secretos. Los registros antiguos sin estos campos
+siguen siendo legibles y compatibles.
+
 ## Verificación local del flujo
 
 ```bash
