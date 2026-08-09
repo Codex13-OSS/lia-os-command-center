@@ -83,11 +83,90 @@ test('serves current status promptly while a deliberately slow workflow is still
       taskId: ID,
       status: 'codex',
       terminal: false,
+      completedStages: ['planning', 'hermes'],
     });
     assert.ok(elapsedMs < 250, `status took ${elapsedMs.toFixed(1)}ms while workflow was active`);
 
     gate.resolve();
   });
+});
+
+
+test('active GET strips adversarial completed-stage values from a custom store', async () => {
+  const maliciousStore = {
+    createOrGet() { throw new Error('not used'); },
+    get(taskId) {
+      if (taskId !== ID) return undefined;
+      const safeIntent = request();
+      delete safeIntent.taskId;
+      return {
+        taskId: ID,
+        fingerprint: 'safe',
+        intent: safeIntent,
+        status: 'codex',
+        createdAt: 1,
+        updatedAt: 2,
+        completedStages: ['planning', 'PRIVATE', '/safe/repo'],
+      };
+    },
+    transition() {},
+    complete() {},
+    fail() {},
+  };
+
+  const app = createApp(loadConfig({}), {
+    projectRegistrySource: registry,
+    projectTaskStore: maliciousStore,
+  });
+
+  await server(app, async (base) => {
+    const response = await fetch(`${base}/api/projects/tasks/${ID}`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body, {
+      ok: true,
+      integration: 'project_task',
+      taskId: ID,
+      status: 'codex',
+      terminal: false,
+      completedStages: [],
+    });
+
+    const publicResponse = JSON.stringify(body);
+    for (const privateValue of ['PRIVATE', '/safe/repo']) {
+      assert.equal(publicResponse.includes(privateValue), false);
+    }
+  });
+});
+
+
+test('in-memory store ignores backward active-stage observations', () => {
+  let now = 1000;
+  const store = new InMemoryProjectTaskStore({
+    maxRecords: 10,
+    maxActive: 10,
+    terminalTtlMs: 1000,
+    now: () => now,
+  });
+
+  const taskIntent = request();
+  delete taskIntent.taskId;
+
+  store.createOrGet(ID, 'memory-backward', taskIntent);
+
+  now = 2000;
+  store.transition(ID, 'planning');
+
+  now = 3000;
+  store.transition(ID, 'hermes');
+
+  now = 4000;
+  store.transition(ID, 'planning');
+
+  const record = store.get(ID);
+  assert.equal(record.status, 'hermes');
+  assert.deepEqual(record.completedStages, ['planning']);
+  assert.equal(record.updatedAt, 3000);
 });
 
 test('store capacity never evicts active tasks and terminal TTL uses injected clock', () => {

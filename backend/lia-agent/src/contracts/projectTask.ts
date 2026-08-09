@@ -5,6 +5,45 @@ export const PROJECT_TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9
 export type ProjectTaskStage = 'accepted' | 'planning' | 'hermes' | 'codex' | 'verification' | 'commit' | 'completed' | 'failed';
 
 /**
+ * Safe public stages that may be observed while a durable task is active.
+ *
+ * Unlike SafeTaskStage terminal traces, active traces may contain canonical
+ * gaps because the store records only stages that were actually observed and
+ * later superseded. It must never invent a missing workflow phase.
+ */
+export const ACTIVE_TASK_STAGES = [
+  'planning',
+  'hermes',
+  'codex',
+  'verification',
+  'commit',
+] as const;
+export type ActiveTaskStage = (typeof ACTIVE_TASK_STAGES)[number];
+
+const ACTIVE_TASK_STAGE_INDEX = new Map<string, number>(
+  ACTIVE_TASK_STAGES.map((stage, index) => [stage, index]),
+);
+
+/**
+ * Validates an active completed-stage trace.
+ *
+ * Empty is valid. Non-empty traces must contain only fixed public names,
+ * without duplicates and in strictly increasing canonical order. Gaps are
+ * intentionally allowed so the trace never fabricates an unobserved stage.
+ */
+export function isActiveTaskCompletedStages(value: unknown): value is readonly ActiveTaskStage[] {
+  if (!Array.isArray(value)) return false;
+  let previousIndex = -1;
+  for (const stage of value) {
+    if (typeof stage !== 'string') return false;
+    const index = ACTIVE_TASK_STAGE_INDEX.get(stage);
+    if (index === undefined || index <= previousIndex) return false;
+    previousIndex = index;
+  }
+  return true;
+}
+
+/**
  * Safe, durable trace of the autonomous workflow phases that completed.
  *
  * Only fixed public phase names are allowed; the trace never carries prompts,
@@ -93,7 +132,10 @@ export type SafeTaskError = ({
 })[SafeTaskErrorCode] & SafeTaskErrorDetails;
 export type ProjectTaskRecord = {
   taskId: string; fingerprint: string; intent: ProjectTaskRequest; status: ProjectTaskStage;
-  createdAt: number; updatedAt: number; terminalAt?: number; receipt?: SafeTaskReceipt; error?: SafeTaskError;
+  createdAt: number; updatedAt: number;
+  /** Active workflow phases confirmed complete by observed durable transitions. */
+  completedStages?: readonly ActiveTaskStage[];
+  terminalAt?: number; receipt?: SafeTaskReceipt; error?: SafeTaskError;
 };
 export type CreateProjectTaskResult = { kind: 'created'; record: ProjectTaskRecord } | { kind: 'known'; record: ProjectTaskRecord } | { kind: 'conflict' } | { kind: 'capacity' };
 

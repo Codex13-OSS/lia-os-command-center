@@ -3,7 +3,7 @@ import { Router } from 'express';
 import type { LiaAgentConfig } from '../config.js';
 import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
 import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
-import { PROJECT_TASK_ID, SAFE_TASK_ERROR_MESSAGES, isSafeTaskStages, type ProjectTaskStage, type ProjectTaskStore, type SafeTaskError, type SafeTaskReceipt } from '../contracts/projectTask.js';
+import { PROJECT_TASK_ID, SAFE_TASK_ERROR_MESSAGES, isActiveTaskCompletedStages, isSafeTaskStages, type ProjectTaskStage, type ProjectTaskStore, type SafeTaskError, type SafeTaskReceipt } from '../contracts/projectTask.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
 import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
 import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
@@ -75,7 +75,17 @@ export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: P
     if (!record) return void res.status(404).json({ ok: false, integration: 'project_task', error: 'task_not_found' });
     if (record.status === 'completed') return void res.json({ ok: true, integration: 'project_task', taskId: record.taskId, status: record.status, terminal: true, receipt: record.receipt });
     if (record.status === 'failed') return void res.json({ ok: true, integration: 'project_task', taskId: record.taskId, status: record.status, terminal: true, error: record.error });
-    res.json({ ok: true, integration: 'project_task', taskId: record.taskId, status: record.status, terminal: false });
+    const completedStages = isActiveTaskCompletedStages(record.completedStages ?? [])
+      ? [...(record.completedStages ?? [])]
+      : [];
+    res.json({
+      ok: true,
+      integration: 'project_task',
+      taskId: record.taskId,
+      status: record.status,
+      terminal: false,
+      completedStages,
+    });
   }).all(methodNotAllowed(['GET']));
   return router;
 }

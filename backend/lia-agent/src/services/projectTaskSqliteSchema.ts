@@ -2,7 +2,8 @@ import { chmodSync, closeSync, openSync, unlinkSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 1;
+export const PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION = 1;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 2;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -33,7 +34,7 @@ CREATE TABLE project_task_meta (
 ) STRICT;
 
 INSERT INTO project_task_meta (singleton, schema_version)
-VALUES (1, ${PROJECT_TASK_SQLITE_SCHEMA_VERSION});
+VALUES (1, ${PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION});
 
 CREATE TABLE project_tasks (
   task_id TEXT PRIMARY KEY CHECK (task_id <> ''),
@@ -58,6 +59,72 @@ CREATE INDEX project_tasks_terminal_at
 ON project_tasks(terminal_at)
 WHERE terminal_at IS NOT NULL;
 `;
+}
+
+
+/**
+ * Transactionally upgrades the only supported legacy schema (V1) to the
+ * current schema. Unknown versions fail closed without modification.
+ */
+export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync): void {
+  let meta: { singleton: unknown; schema_version: unknown } | undefined;
+  try {
+    meta = database.prepare(
+      'SELECT singleton, schema_version FROM project_task_meta WHERE singleton = 1',
+    ).get() as unknown as typeof meta;
+  } catch {
+    throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+  }
+
+  if (
+    meta?.singleton !== 1
+    || typeof meta.schema_version !== 'number'
+    || !Number.isInteger(meta.schema_version)
+  ) {
+    throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_VERSION) return;
+
+  if (meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION) {
+    throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+  }
+
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.exec(`
+      CREATE TABLE project_task_active_stage_traces (
+        task_id TEXT PRIMARY KEY CHECK (task_id <> ''),
+        completed_stages_json TEXT NOT NULL
+          CHECK (
+            json_valid(completed_stages_json)
+            AND json_type(completed_stages_json, '$') IS 'array'
+          )
+      ) STRICT
+    `);
+
+    const update = database.prepare(`
+      UPDATE project_task_meta
+      SET schema_version = ?
+      WHERE singleton = 1 AND schema_version = ?
+    `).run(
+      PROJECT_TASK_SQLITE_SCHEMA_VERSION,
+      PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION,
+    );
+
+    if (Number(update.changes) !== 1) {
+      throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+    }
+
+    database.exec('COMMIT');
+  } catch {
+    try {
+      database.exec('ROLLBACK');
+    } catch {
+      // Preserve the migration failure.
+    }
+    throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+  }
 }
 
 function isErrorWithCode(error: unknown, code: string): boolean {

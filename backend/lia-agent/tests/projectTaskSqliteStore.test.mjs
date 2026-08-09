@@ -119,6 +119,184 @@ test('transition updates status and timestamps while preserving intent and finge
   });
 });
 
+
+test('transition records only actually superseded observed stages and never invents canonical gaps', async () => {
+  let now = 1000;
+  await withTempStore({ now: () => now }, (store) => {
+    store.createOrGet(ID, 'fp-trace', intent());
+
+    now = 2000;
+    store.transition(ID, 'planning');
+    assert.equal(store.get(ID).completedStages, undefined);
+
+    now = 3000;
+    store.transition(ID, 'codex');
+    assert.deepEqual(store.get(ID).completedStages, ['planning']);
+
+    now = 4000;
+    store.transition(ID, 'verification');
+    assert.deepEqual(store.get(ID).completedStages, ['planning', 'codex']);
+
+    now = 5000;
+    store.transition(ID, 'verification');
+    assert.deepEqual(store.get(ID).completedStages, ['planning', 'codex']);
+  });
+});
+
+
+test('backward transitions are ignored and preserve the latest durable active boundary', async () => {
+  let now = 1000;
+
+  await withTempStore({ now: () => now }, (store) => {
+    store.createOrGet(ID, 'fp-backward', intent());
+
+    now = 2000;
+    store.transition(ID, 'planning');
+
+    now = 3000;
+    store.transition(ID, 'hermes');
+
+    const before = store.get(ID);
+    assert.equal(before.status, 'hermes');
+    assert.deepEqual(before.completedStages, ['planning']);
+    assert.equal(before.updatedAt, 3000);
+
+    now = 4000;
+    store.transition(ID, 'planning');
+
+    const after = store.get(ID);
+    assert.equal(after.status, 'hermes');
+    assert.deepEqual(after.completedStages, ['planning']);
+    assert.equal(after.updatedAt, 3000);
+  });
+});
+
+test('opens a legacy V1 database and transactionally migrates it to the current active-trace schema', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-task-sqlite-v1-migration-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+
+  try {
+    initializeProjectTaskSqliteDatabaseV1(databasePath);
+
+    const legacy = new DatabaseSync(databasePath);
+    const legacyMeta = legacy.prepare(
+      'SELECT schema_version FROM project_task_meta WHERE singleton = 1',
+    ).get();
+    assert.equal(legacyMeta.schema_version, 1);
+
+    legacy.prepare(`
+      INSERT INTO project_tasks
+        (task_id, fingerprint, intent_json, status, created_at, updated_at)
+      VALUES (?, ?, ?, 'accepted', ?, ?)
+    `).run(ID, 'fp-v1', JSON.stringify(intent()), 1000, 1000);
+    legacy.close();
+
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 2000 });
+    assert.equal(store.get(ID).status, 'accepted');
+    assert.equal(store.get(ID).completedStages, undefined);
+
+    store.transition(ID, 'planning');
+    store.transition(ID, 'codex');
+
+    const migratedRecord = store.get(ID);
+    assert.equal(migratedRecord.status, 'codex');
+    assert.deepEqual(migratedRecord.completedStages, ['planning']);
+    store.close();
+
+    const migrated = new DatabaseSync(databasePath);
+    const meta = migrated.prepare(
+      'SELECT schema_version FROM project_task_meta WHERE singleton = 1',
+    ).get();
+    assert.equal(meta.schema_version, PROJECT_TASK_SQLITE_SCHEMA_VERSION);
+
+    const mainColumns = migrated
+      .prepare('PRAGMA table_info(project_tasks)')
+      .all()
+      .map((column) => column.name);
+    assert.equal(mainColumns.includes('active_completed_stages_json'), false);
+
+    const sidecar = migrated.prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'project_task_active_stage_traces'
+    `).get();
+    assert.equal(sidecar.name, 'project_task_active_stage_traces');
+
+    const row = migrated.prepare(`
+      SELECT completed_stages_json
+      FROM project_task_active_stage_traces
+      WHERE task_id = ?
+    `).get(ID);
+    assert.equal(row.completed_stages_json, '["planning"]');
+    migrated.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('fails closed when a V2 sidecar trace contains non-public stage data', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-task-sqlite-sidecar-corrupt-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath });
+    store.createOrGet(ID, 'fp-sidecar-corrupt', intent());
+    store.close();
+
+    const database = new DatabaseSync(databasePath);
+    database.prepare(`
+      INSERT INTO project_task_active_stage_traces (task_id, completed_stages_json)
+      VALUES (?, ?)
+    `).run(ID, JSON.stringify(['planning', 'PRIVATE']));
+    database.close();
+
+    const reopened = new ProjectTaskSqliteStore({ databasePath });
+    try {
+      assert.throws(
+        () => reopened.get(ID),
+        /corrupt_project_task_record/,
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('fails closed when a V2 sidecar trace contradicts the current active status', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-task-sqlite-sidecar-status-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath });
+    store.createOrGet(ID, 'fp-sidecar-status', intent());
+    store.transition(ID, 'planning');
+    store.close();
+
+    const database = new DatabaseSync(databasePath);
+    database.prepare(`
+      INSERT INTO project_task_active_stage_traces (task_id, completed_stages_json)
+      VALUES (?, ?)
+    `).run(ID, JSON.stringify(['planning']));
+    database.close();
+
+    const reopened = new ProjectTaskSqliteStore({ databasePath });
+    try {
+      assert.throws(
+        () => reopened.get(ID),
+        /corrupt_project_task_record/,
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('transition is a no-op for unknown and already-terminal tasks', async () => {
   await withTempStore({}, (store) => {
     assert.doesNotThrow(() => store.transition(ID3, 'planning'));
