@@ -14,6 +14,7 @@ import {
 } from '../../integrations/liaProjectTaskClient';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import '../../styles/projectsExecutiveR3.css';
+import { readLiaHermesUiStatus, type LiaHermesUiStatus } from '../../integrations/liaHermesStatusClient';
 
 type Props = {
   onDashboard: () => void;
@@ -322,6 +323,10 @@ function ConversationTurn({ run, now }: { run: ProjectRun; now: number }) {
 }
 
 export function ProjectsShellR3(props: Props) {
+  const [hermesUiStatus, setHermesUiStatus] = useState<LiaHermesUiStatus>({
+    state: 'checking',
+    label: 'Comprobando Hermes…',
+  });
   const [instruction, setInstruction] = useState('');
   const [priority, setPriority] = useState<LiaProjectTaskPriority>('normal');
   const [runs, setRuns] = useState<ProjectRun[]>([]);
@@ -452,6 +457,18 @@ export function ProjectsShellR3(props: Props) {
   };
 
   useEffect(() => {
+    let cancelled = false;
+
+    void readLiaHermesUiStatus().then((status) => {
+      if (!cancelled) setHermesUiStatus(status);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     mountedRef.current = true;
     const saved = loadPersistedProjectTask();
     if (saved && saved.lastStatus !== 'completed' && saved.lastStatus !== 'failed') {
@@ -561,7 +578,14 @@ export function ProjectsShellR3(props: Props) {
         <div>
           <span>PROYECTOS</span>
           <h1>Proyectos</h1>
-          <div className="lia-projects-r3-live-badge"><i aria-hidden="true" /> LÍA · Hermes · Codex conectados</div>
+          <div
+            className={`lia-projects-r3-live-badge is-${hermesUiStatus.state}`}
+            role="status"
+            aria-live="polite"
+          >
+            <i aria-hidden="true" />
+            LÍA · {hermesUiStatus.label}
+          </div>
           <p>Envía una instrucción y sigue el trabajo de LÍA en vivo</p>
         </div>
       </header>

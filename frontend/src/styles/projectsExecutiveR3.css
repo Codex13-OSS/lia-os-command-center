@@ -1025,3 +1025,13 @@
     display: none !important;
   }
 }
+
+.lia-projects-r3-live-badge.is-checking i {
+  background: #d6a84f;
+  box-shadow: 0 0 10px rgba(214, 168, 79, .5);
+}
+
+.lia-projects-r3-live-badge.is-unavailable i {
+  background: #d86f78;
+  box-shadow: 0 0 10px rgba(216, 111, 120, .5);
+}
