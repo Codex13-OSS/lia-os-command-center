@@ -70,4 +70,4 @@
   .lia-dash-r3-search button { width: 42px; height: 42px; }
   .lia-conversation-r3-panel { right: 14px; width: min(390px, calc(100vw - var(--lia-dash-r3-sidebar-width) - 28px)); }
 }
-@media (max-width: 720px) { .lia-conversation-r3-panel { left: 82px; right: 10px; width: auto; height: min(520px, calc(100dvh - 84px)); } }
+@media (max-width: 720px) { .lia-conversation-r3-panel { left: max(10px, env(safe-area-inset-left, 0px)); right: 10px; width: auto; height: min(520px, calc(100dvh - 84px)); } }
