@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -23,6 +24,19 @@ import {
   PROJECT_GOAL_TERMINAL_REASONS,
 } from '../contracts/projectGoal.js';
 import type {
+  EvaluateProjectGoalAttemptInput,
+  ProjectGoalEvaluationDecision,
+  ProjectGoalEvaluationRecord,
+  ProjectGoalEvaluationReasonCode,
+  ProjectGoalEvaluationStore,
+} from '../contracts/projectGoalEvaluation.js';
+import {
+  PROJECT_GOAL_EVALUATION_DECISIONS,
+  PROJECT_GOAL_EVALUATION_ERRORS,
+  PROJECT_GOAL_EVALUATION_REASON_CODES,
+  PROJECT_GOAL_EVALUATOR_VERSION,
+} from '../contracts/projectGoalEvaluation.js';
+import type {
   CreateProjectTaskResult,
   ActiveTaskStage,
   ProjectTaskRecord,
@@ -41,6 +55,10 @@ import {
   initializeProjectTaskSqliteDatabaseV1,
   migrateProjectTaskSqliteDatabaseToCurrent,
 } from './projectTaskSqliteSchema.js';
+import {
+  evaluateProjectGoalCompletion,
+  isProjectGoalEvaluationEvidence,
+} from './projectCompletionEvaluator.js';
 
 export type ProjectTaskSqliteStoreOptions = {
   databasePath: string;
@@ -66,6 +84,8 @@ const ACTIVE_STAGE_INDEX = new Map<string, number>(
 );
 const GOAL_STATUSES = new Set<string>(PROJECT_GOAL_STATUSES);
 const GOAL_TERMINAL_REASONS = new Set<string>(PROJECT_GOAL_TERMINAL_REASONS);
+const EVALUATION_DECISIONS = new Set<string>(PROJECT_GOAL_EVALUATION_DECISIONS);
+const EVALUATION_REASON_CODES = new Set<string>(PROJECT_GOAL_EVALUATION_REASON_CODES);
 
 type ProjectTaskRow = {
   task_id: unknown;
@@ -99,6 +119,20 @@ type ProjectTaskLineageRow = {
   parent_task_id: unknown;
   continuation_depth: unknown;
   attempt_number: unknown;
+};
+
+type ProjectGoalEvaluationRow = {
+  evaluation_id: unknown;
+  goal_id: unknown;
+  task_id: unknown;
+  attempt_number: unknown;
+  evaluator_version: unknown;
+  decision: unknown;
+  reason_code: unknown;
+  summary: unknown;
+  evidence_fingerprint: unknown;
+  created_at: unknown;
+  applied_at: unknown;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -146,7 +180,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectGoalStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectGoalStore, ProjectGoalEvaluationStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -189,6 +223,7 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
 
     try {
       this.database.exec('PRAGMA foreign_keys = ON');
+      this.database.exec('PRAGMA busy_timeout = 5000');
       migrateProjectTaskSqliteDatabaseToCurrent(this.database);
       this.assertSchemaCompatible();
     } catch (error) {
@@ -247,6 +282,9 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       this.database.prepare('SELECT goal_id FROM project_goals LIMIT 1').all();
       this.database.prepare(
         'SELECT task_id, goal_id, parent_task_id, continuation_depth, attempt_number FROM project_task_lineage LIMIT 1',
+      ).all();
+      this.database.prepare(
+        'SELECT evaluation_id, goal_id, task_id, evaluator_version FROM project_goal_evaluations LIMIT 1',
       ).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -524,6 +562,257 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       ...(receipt !== undefined ? { receipt } : {}),
       ...(error !== undefined ? { error } : {}),
     };
+  }
+
+  private selectEvaluationRow(evaluationId: string): ProjectGoalEvaluationRow | undefined {
+    return this.database.prepare(`
+      SELECT evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
+             decision, reason_code, summary, evidence_fingerprint, created_at, applied_at
+      FROM project_goal_evaluations WHERE evaluation_id = ?
+    `).get(evaluationId) as unknown as ProjectGoalEvaluationRow | undefined;
+  }
+
+  private decodeEvaluationRow(row: ProjectGoalEvaluationRow): ProjectGoalEvaluationRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    if (typeof row.evaluation_id !== 'string' || !PROJECT_GOAL_ID.test(row.evaluation_id)) throw corrupt();
+    if (typeof row.goal_id !== 'string' || !PROJECT_GOAL_ID.test(row.goal_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (!isNonNegativeInteger(row.attempt_number)) throw corrupt();
+    if (row.evaluator_version !== PROJECT_GOAL_EVALUATOR_VERSION) throw corrupt();
+    if (typeof row.decision !== 'string' || !EVALUATION_DECISIONS.has(row.decision)) throw corrupt();
+    if (typeof row.reason_code !== 'string' || !EVALUATION_REASON_CODES.has(row.reason_code)) throw corrupt();
+    if (typeof row.summary !== 'string' || row.summary.length === 0 || row.summary.length > 500) throw corrupt();
+    if (typeof row.evidence_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(row.evidence_fingerprint)) throw corrupt();
+    if (!isNonNegativeInteger(row.created_at)) throw corrupt();
+    if (row.applied_at !== null && (!isNonNegativeInteger(row.applied_at) || row.applied_at < row.created_at)) throw corrupt();
+
+    const decision = row.decision as ProjectGoalEvaluationDecision;
+    const reasonCode = row.reason_code as ProjectGoalEvaluationReasonCode;
+    const validReasons: Record<ProjectGoalEvaluationDecision, readonly ProjectGoalEvaluationReasonCode[]> = {
+      completed: ['goal_satisfied'],
+      retryable: ['partial_result', 'verification_failed', 'visual_verification_failed', 'execution_failed', 'insufficient_evidence'],
+      blocked: ['human_approval_required', 'forbidden_capability_required', 'external_dependency'],
+      failed: ['execution_failed', 'attempt_budget_exhausted', 'continuation_depth_exhausted'],
+    };
+    if (!validReasons[decision].includes(reasonCode)) throw corrupt();
+
+    return {
+      evaluationId: row.evaluation_id,
+      goalId: row.goal_id,
+      taskId: row.task_id,
+      attemptNumber: row.attempt_number,
+      evaluatorVersion: PROJECT_GOAL_EVALUATOR_VERSION,
+      decision,
+      reasonCode,
+      summary: row.summary,
+      evidenceFingerprint: row.evidence_fingerprint,
+      createdAt: row.created_at,
+      ...(row.applied_at !== null ? { appliedAt: row.applied_at } : {}),
+    };
+  }
+
+  private prepareGoalEvaluation(input: EvaluateProjectGoalAttemptInput): ProjectGoalEvaluationRecord {
+    if (
+      !PROJECT_GOAL_ID.test(input.goalId)
+      || !PROJECT_TASK_ID.test(input.taskId)
+      || !isNonNegativeInteger(input.attemptNumber)
+      || input.evaluatorVersion !== PROJECT_GOAL_EVALUATOR_VERSION
+      || !isProjectGoalEvaluationEvidence(input.evidence)
+    ) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.invalidInput);
+    }
+
+    const goalRow = this.selectGoalRow(input.goalId);
+    if (goalRow === undefined) throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.goalNotFound);
+    const goal = this.decodeGoalRow(goalRow);
+    const taskRow = this.selectRow(input.taskId);
+    if (taskRow === undefined) throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.taskNotFound);
+    const task = this.decodeRow(taskRow);
+    if (task.intent.projectId !== goal.projectId) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.taskProjectMismatch);
+    }
+    if (task.lineage?.goalId !== goal.goalId) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.taskGoalMismatch);
+    }
+    if (task.lineage.attemptNumber !== input.attemptNumber) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.attemptMismatch);
+    }
+    if (goal.currentAttempt !== input.attemptNumber) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.staleAttempt);
+    }
+    if (task.status !== 'completed' && task.status !== 'failed') {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.taskNotTerminal);
+    }
+
+    const evaluated = evaluateProjectGoalCompletion({ goal, task }, input.evidence);
+    const existingRow = this.database.prepare(`
+      SELECT evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
+             decision, reason_code, summary, evidence_fingerprint, created_at, applied_at
+      FROM project_goal_evaluations
+      WHERE goal_id = ? AND task_id = ? AND evaluator_version = ?
+    `).get(input.goalId, input.taskId, PROJECT_GOAL_EVALUATOR_VERSION) as unknown as ProjectGoalEvaluationRow | undefined;
+    if (existingRow !== undefined) {
+      const existing = this.decodeEvaluationRow(existingRow);
+      if (existing.evidenceFingerprint !== evaluated.evidenceFingerprint) {
+        throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.evidenceConflict);
+      }
+      return existing;
+    }
+    if (goal.status !== 'active') throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.terminalGoal);
+
+    const evaluationId = randomUUID();
+    const createdAt = this.now();
+    this.database.prepare(`
+      INSERT INTO project_goal_evaluations (
+        evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
+        decision, reason_code, summary, evidence_fingerprint, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      evaluationId,
+      input.goalId,
+      input.taskId,
+      input.attemptNumber,
+      PROJECT_GOAL_EVALUATOR_VERSION,
+      evaluated.decision,
+      evaluated.reasonCode,
+      evaluated.summary,
+      evaluated.evidenceFingerprint,
+      createdAt,
+    );
+    const inserted = this.selectEvaluationRow(evaluationId);
+    if (inserted === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    return this.decodeEvaluationRow(inserted);
+  }
+
+  private applyPreparedGoalEvaluation(evaluationId: string): ProjectGoalRecord {
+    if (!PROJECT_GOAL_ID.test(evaluationId)) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.invalidInput);
+    }
+    const evaluationRow = this.selectEvaluationRow(evaluationId);
+    if (evaluationRow === undefined) throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.evaluationNotFound);
+    const evaluation = this.decodeEvaluationRow(evaluationRow);
+    const goalRow = this.selectGoalRow(evaluation.goalId);
+    if (goalRow === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    const goal = this.decodeGoalRow(goalRow);
+
+    const targetStatus = evaluation.decision === 'completed'
+      ? 'completed'
+      : evaluation.decision === 'blocked'
+        ? 'blocked'
+        : evaluation.decision === 'failed'
+          && (evaluation.reasonCode === 'attempt_budget_exhausted'
+            || evaluation.reasonCode === 'continuation_depth_exhausted')
+          ? 'exhausted'
+          : evaluation.decision === 'failed'
+            ? 'failed'
+            : undefined;
+
+    if (evaluation.appliedAt !== undefined) {
+      if (
+        (targetStatus !== undefined && goal.status !== targetStatus)
+        || (targetStatus === undefined && goal.status !== 'active')
+      ) {
+        throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.incompatibleState);
+      }
+      return goal;
+    }
+    if (goal.status !== 'active' || goal.currentAttempt !== evaluation.attemptNumber) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.incompatibleState);
+    }
+    const taskRow = this.selectRow(evaluation.taskId);
+    if (taskRow === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    const task = this.decodeRow(taskRow);
+    if (
+      task.lineage?.goalId !== evaluation.goalId
+      || task.lineage.attemptNumber !== evaluation.attemptNumber
+      || (task.status !== 'completed' && task.status !== 'failed')
+    ) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.incompatibleState);
+    }
+
+    const appliedAt = Math.max(this.now(), evaluation.createdAt);
+    if (targetStatus !== undefined) {
+      const terminalReason: ProjectGoalTerminalReason = targetStatus === 'completed'
+        ? 'objective_completed'
+        : targetStatus === 'blocked'
+          ? 'human_intervention_required'
+          : targetStatus === 'exhausted'
+            ? 'attempt_limit_reached'
+            : 'unrecoverable_failure';
+      const changed = this.database.prepare(`
+        UPDATE project_goals
+        SET status = ?, terminal_reason = ?, updated_at = ?, terminal_at = ?
+        WHERE goal_id = ? AND status = 'active' AND current_attempt = ?
+      `).run(targetStatus, terminalReason, appliedAt, appliedAt, evaluation.goalId, evaluation.attemptNumber);
+      if (Number(changed.changes) !== 1) {
+        throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.incompatibleState);
+      }
+    }
+    const applied = this.database.prepare(`
+      UPDATE project_goal_evaluations SET applied_at = ?
+      WHERE evaluation_id = ? AND applied_at IS NULL
+    `).run(appliedAt, evaluationId);
+    if (Number(applied.changes) !== 1) {
+      throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.incompatibleState);
+    }
+    const appliedGoalRow = this.selectGoalRow(evaluation.goalId);
+    if (appliedGoalRow === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    return this.decodeGoalRow(appliedGoalRow);
+  }
+
+  evaluateGoalAttempt(input: EvaluateProjectGoalAttemptInput): ProjectGoalEvaluationRecord {
+    return this.inTransaction(() => this.prepareGoalEvaluation(input));
+  }
+
+  applyGoalEvaluation(evaluationId: string): ProjectGoalRecord {
+    return this.inTransaction(() => this.applyPreparedGoalEvaluation(evaluationId));
+  }
+
+  evaluateAndApplyGoalAttempt(input: EvaluateProjectGoalAttemptInput): {
+    evaluation: ProjectGoalEvaluationRecord;
+    goal: ProjectGoalRecord;
+  } {
+    return this.inTransaction(() => {
+      const prepared = this.prepareGoalEvaluation(input);
+      const goal = this.applyPreparedGoalEvaluation(prepared.evaluationId);
+      const appliedRow = this.selectEvaluationRow(prepared.evaluationId);
+      if (appliedRow === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return { evaluation: this.decodeEvaluationRow(appliedRow), goal };
+    });
+  }
+
+  readGoalEvaluation(evaluationId: string): ProjectGoalEvaluationRecord | undefined {
+    return this.inTransaction(() => {
+      const row = this.selectEvaluationRow(evaluationId);
+      return row === undefined ? undefined : this.decodeEvaluationRow(row);
+    });
+  }
+
+  readLatestGoalEvaluation(goalId: string): ProjectGoalEvaluationRecord | undefined {
+    return this.inTransaction(() => {
+      const row = this.database.prepare(`
+        SELECT evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
+               decision, reason_code, summary, evidence_fingerprint, created_at, applied_at
+        FROM project_goal_evaluations WHERE goal_id = ?
+        ORDER BY created_at DESC, evaluation_id DESC LIMIT 1
+      `).get(goalId) as unknown as ProjectGoalEvaluationRow | undefined;
+      return row === undefined ? undefined : this.decodeEvaluationRow(row);
+    });
+  }
+
+  listGoalEvaluations(goalId: string): ProjectGoalEvaluationRecord[] {
+    return this.inTransaction(() => {
+      const goal = this.selectGoalRow(goalId);
+      if (goal === undefined) throw new Error(PROJECT_GOAL_EVALUATION_ERRORS.goalNotFound);
+      this.decodeGoalRow(goal);
+      const rows = this.database.prepare(`
+        SELECT evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
+               decision, reason_code, summary, evidence_fingerprint, created_at, applied_at
+        FROM project_goal_evaluations WHERE goal_id = ?
+        ORDER BY created_at ASC, evaluation_id ASC
+      `).all(goalId) as unknown as ProjectGoalEvaluationRow[];
+      return rows.map((row) => this.decodeEvaluationRow(row));
+    });
   }
 
   createGoal(input: CreateProjectGoalInput): ProjectGoalRecord {

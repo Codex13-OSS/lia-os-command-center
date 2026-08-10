@@ -4,7 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION = 1;
 export const PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION = 2;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 3;
+export const PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION = 3;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 4;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -85,6 +86,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   if (
     meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -120,7 +122,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   }
 
   if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION) {
-    migrate(PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION, `
       CREATE TABLE project_goals (
         goal_id TEXT PRIMARY KEY CHECK (goal_id <> ''),
         project_id TEXT NOT NULL CHECK (project_id <> ''),
@@ -218,6 +220,123 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       WHEN OLD.status <> 'active'
       BEGIN
         SELECT RAISE(ABORT, 'invalid_project_goal_transition');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+      CREATE TABLE project_goal_evaluations (
+        evaluation_id TEXT PRIMARY KEY CHECK (length(evaluation_id) = 36),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        task_id TEXT NOT NULL CHECK (task_id <> ''),
+        attempt_number INTEGER NOT NULL CHECK (attempt_number >= 0),
+        evaluator_version TEXT NOT NULL CHECK (evaluator_version = 'completion-evaluator-v1'),
+        decision TEXT NOT NULL CHECK (decision IN ('completed', 'retryable', 'blocked', 'failed')),
+        reason_code TEXT NOT NULL CHECK (reason_code IN (
+          'goal_satisfied', 'partial_result', 'verification_failed', 'visual_verification_failed',
+          'execution_failed', 'human_approval_required', 'forbidden_capability_required',
+          'external_dependency', 'attempt_budget_exhausted', 'continuation_depth_exhausted',
+          'insufficient_evidence'
+        )),
+        summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 500),
+        evidence_fingerprint TEXT NOT NULL CHECK (
+          length(evidence_fingerprint) = 64 AND evidence_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        applied_at INTEGER CHECK (applied_at IS NULL OR applied_at >= created_at),
+        UNIQUE (goal_id, task_id, evaluator_version, evidence_fingerprint),
+        UNIQUE (goal_id, task_id, evaluator_version),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (goal_id, task_id) REFERENCES project_task_lineage(goal_id, task_id),
+        CHECK (
+          (decision = 'completed' AND reason_code = 'goal_satisfied')
+          OR (decision = 'blocked' AND reason_code IN (
+            'human_approval_required', 'forbidden_capability_required', 'external_dependency'
+          ))
+          OR (decision = 'retryable' AND reason_code IN (
+            'partial_result', 'verification_failed', 'visual_verification_failed',
+            'execution_failed', 'insufficient_evidence'
+          ))
+          OR (decision = 'failed' AND reason_code IN (
+            'execution_failed', 'attempt_budget_exhausted', 'continuation_depth_exhausted'
+          ))
+        )
+      ) STRICT;
+
+      CREATE INDEX project_goal_evaluations_goal_created
+      ON project_goal_evaluations(goal_id, created_at DESC, evaluation_id DESC);
+
+      CREATE TRIGGER project_goal_evaluations_validate_insert
+      BEFORE INSERT ON project_goal_evaluations
+      BEGIN
+        SELECT CASE WHEN NEW.attempt_number <>
+          (SELECT attempt_number FROM project_task_lineage
+           WHERE task_id = NEW.task_id AND goal_id = NEW.goal_id)
+          THEN RAISE(ABORT, 'project_goal_evaluation_attempt_mismatch') END;
+      END;
+
+      CREATE TRIGGER project_goal_evaluations_decision_immutable
+      BEFORE UPDATE OF evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
+                       decision, reason_code, summary, evidence_fingerprint, created_at
+      ON project_goal_evaluations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_evaluation_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_evaluations_applied_once
+      BEFORE UPDATE OF applied_at ON project_goal_evaluations
+      WHEN OLD.applied_at IS NOT NULL OR NEW.applied_at IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_evaluation_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_evaluations_validate_apply
+      AFTER UPDATE OF applied_at ON project_goal_evaluations
+      WHEN NEW.applied_at IS NOT NULL
+      BEGIN
+        SELECT CASE
+          WHEN NEW.decision = 'retryable'
+            AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'active'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+          WHEN NEW.decision = 'completed'
+            AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'completed'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+          WHEN NEW.decision = 'blocked'
+            AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'blocked'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+          WHEN NEW.decision = 'failed' AND NEW.reason_code IN (
+            'attempt_budget_exhausted', 'continuation_depth_exhausted'
+          ) AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'exhausted'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+          WHEN NEW.decision = 'failed' AND NEW.reason_code = 'execution_failed'
+            AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'failed'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+        END;
+      END;
+
+      CREATE TRIGGER project_goal_evaluations_immutable_delete
+      BEFORE DELETE ON project_goal_evaluations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_evaluation_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_attempt_terminal_evidence_immutable
+      BEFORE UPDATE OF status, terminal_at, receipt_json, error_json ON project_tasks
+      WHEN OLD.terminal_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM project_task_lineage WHERE task_id = OLD.task_id)
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_attempt_terminal_evidence_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_evaluation_identity_immutable
+      BEFORE UPDATE OF goal_id, project_id, objective, max_attempts, continuation_depth_limit
+      ON project_goals
+      WHEN EXISTS (SELECT 1 FROM project_task_lineage WHERE goal_id = OLD.goal_id)
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_evaluation_incompatible_state');
       END
     `);
   }
