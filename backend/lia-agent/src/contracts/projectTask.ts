@@ -130,11 +130,19 @@ type SafeTaskErrorDetails = {
 export type SafeTaskError = ({
   [Code in SafeTaskErrorCode]: { code: Code; message: (typeof SAFE_TASK_ERROR_MESSAGES)[Code] }
 })[SafeTaskErrorCode] & SafeTaskErrorDetails;
+export type ProjectTaskLineage = {
+  goalId: string;
+  parentTaskId?: string;
+  continuationDepth: number;
+  attemptNumber: number;
+};
 export type ProjectTaskRecord = {
   taskId: string; fingerprint: string; intent: ProjectTaskRequest; status: ProjectTaskStage;
   createdAt: number; updatedAt: number;
   /** Active workflow phases confirmed complete by observed durable transitions. */
   completedStages?: readonly ActiveTaskStage[];
+  /** Durable mission lineage only. It carries no executable authority. */
+  lineage?: ProjectTaskLineage;
   terminalAt?: number; receipt?: SafeTaskReceipt; error?: SafeTaskError;
 };
 export type CreateProjectTaskResult = { kind: 'created'; record: ProjectTaskRecord } | { kind: 'known'; record: ProjectTaskRecord } | { kind: 'conflict' } | { kind: 'capacity' };
