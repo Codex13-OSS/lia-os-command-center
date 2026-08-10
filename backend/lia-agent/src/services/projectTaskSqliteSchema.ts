@@ -7,7 +7,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION = 2;
 export const PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION = 3;
 export const PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION = 4;
 export const PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION = 5;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 6;
+export const PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION = 6;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 7;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -91,6 +92,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -481,7 +483,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   }
 
   if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION) {
-    migrate(PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION, `
       CREATE TABLE project_goal_continuation_consumptions (
         plan_id TEXT PRIMARY KEY CHECK (length(plan_id) = 36),
         created_task_id TEXT NOT NULL UNIQUE CHECK (length(created_task_id) = 36),
@@ -549,6 +551,77 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       )
       BEGIN
         SELECT RAISE(ABORT, 'project_continuation_consumption_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+      CREATE TABLE project_task_lease_generations (
+        task_id TEXT NOT NULL CHECK (task_id <> ''),
+        lease_id TEXT NOT NULL UNIQUE CHECK (length(lease_id) = 36),
+        lease_owner TEXT NOT NULL CHECK (
+          length(lease_owner) BETWEEN 1 AND 200 AND lease_owner = trim(lease_owner)
+        ),
+        fencing_token INTEGER NOT NULL CHECK (
+          fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        acquired_at INTEGER NOT NULL CHECK (
+          acquired_at BETWEEN 0 AND 9007199254740991
+        ),
+        lease_expires_at INTEGER NOT NULL CHECK (
+          lease_expires_at > acquired_at AND lease_expires_at <= 9007199254740991
+        ),
+        released_at INTEGER CHECK (
+          released_at IS NULL OR released_at BETWEEN acquired_at AND 9007199254740991
+        ),
+        PRIMARY KEY (task_id, fencing_token)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX project_task_lease_one_current_generation
+      ON project_task_lease_generations(task_id)
+      WHERE released_at IS NULL;
+
+      CREATE TRIGGER project_task_lease_validate_insert
+      BEFORE INSERT ON project_task_lease_generations
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_tasks
+          WHERE task_id = NEW.task_id AND status NOT IN ('completed', 'failed')
+        ) THEN RAISE(ABORT, 'project_task_lease_task_unavailable') END;
+        SELECT CASE WHEN NEW.fencing_token <> COALESCE((
+          SELECT MAX(fencing_token) + 1
+          FROM project_task_lease_generations WHERE task_id = NEW.task_id
+        ), 1) THEN RAISE(ABORT, 'project_task_lease_invalid_fencing_token') END;
+      END;
+
+      CREATE TRIGGER project_task_lease_identity_immutable
+      BEFORE UPDATE OF task_id, lease_id, lease_owner, fencing_token, acquired_at
+      ON project_task_lease_generations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lease_generation_immutable');
+      END;
+
+      CREATE TRIGGER project_task_lease_expiry_monotonic
+      BEFORE UPDATE OF lease_expires_at ON project_task_lease_generations
+      WHEN NEW.lease_expires_at <= OLD.lease_expires_at
+        OR OLD.released_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lease_invalid_renewal');
+      END;
+
+      CREATE TRIGGER project_task_lease_release_once
+      BEFORE UPDATE OF released_at ON project_task_lease_generations
+      WHEN OLD.released_at IS NOT NULL OR NEW.released_at IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lease_generation_immutable');
+      END;
+
+      CREATE TRIGGER project_task_lease_generation_immutable_delete
+      BEFORE DELETE ON project_task_lease_generations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lease_generation_immutable');
       END
     `);
   }

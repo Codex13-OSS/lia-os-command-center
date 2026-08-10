@@ -54,6 +54,19 @@ import type {
 } from '../contracts/projectContinuationRuntime.js';
 import { PROJECT_CONTINUATION_RUNTIME_ERRORS } from '../contracts/projectContinuationRuntime.js';
 import type {
+  AcquireProjectTaskLeaseInput,
+  ProjectTaskLeaseAuthority,
+  ProjectTaskLeaseRecord,
+  ProjectTaskLeaseStore,
+  RenewProjectTaskLeaseInput,
+} from '../contracts/projectTaskLease.js';
+import {
+  PROJECT_TASK_LEASE_ERRORS,
+  PROJECT_TASK_LEASE_INITIAL_FENCING_TOKEN,
+  PROJECT_TASK_LEASE_MAX_DURATION_MS,
+  PROJECT_TASK_LEASE_MIN_DURATION_MS,
+} from '../contracts/projectTaskLease.js';
+import type {
   CreateProjectTaskResult,
   ActiveTaskStage,
   ProjectTaskRecord,
@@ -176,6 +189,16 @@ type ProjectGoalContinuationPlanRow = {
   cancelled_at: unknown;
 };
 
+type ProjectTaskLeaseRow = {
+  task_id: unknown;
+  lease_id: unknown;
+  lease_owner: unknown;
+  fencing_token: unknown;
+  acquired_at: unknown;
+  lease_expires_at: unknown;
+  released_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -221,7 +244,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -333,6 +356,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       this.database.prepare(
         'SELECT plan_id, created_task_id, consumed_at FROM project_goal_continuation_consumptions LIMIT 1',
       ).all();
+      this.database.prepare(`
+        SELECT task_id, lease_id, lease_owner, fencing_token, acquired_at,
+               lease_expires_at, released_at
+        FROM project_task_lease_generations LIMIT 1
+      `).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
     }
@@ -375,6 +403,101 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       FROM project_tasks
       WHERE task_id = ?
     `).get(taskId) as unknown as ProjectTaskRow | undefined;
+  }
+
+  private selectCurrentLeaseRow(taskId: string): ProjectTaskLeaseRow | undefined {
+    return this.database.prepare(`
+      SELECT task_id, lease_id, lease_owner, fencing_token, acquired_at,
+             lease_expires_at, released_at
+      FROM project_task_lease_generations
+      WHERE task_id = ? AND released_at IS NULL
+    `).get(taskId) as unknown as ProjectTaskLeaseRow | undefined;
+  }
+
+  private selectLeaseGenerationRow(
+    taskId: string,
+    leaseId: string,
+    fencingToken: number,
+  ): ProjectTaskLeaseRow | undefined {
+    return this.database.prepare(`
+      SELECT task_id, lease_id, lease_owner, fencing_token, acquired_at,
+             lease_expires_at, released_at
+      FROM project_task_lease_generations
+      WHERE task_id = ? AND lease_id = ? AND fencing_token = ?
+    `).get(taskId, leaseId, fencingToken) as unknown as ProjectTaskLeaseRow | undefined;
+  }
+
+  private decodeLeaseRow(row: ProjectTaskLeaseRow): ProjectTaskLeaseRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_LEASE_ERRORS.corruptRecord);
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.lease_id !== 'string' || !PROJECT_TASK_ID.test(row.lease_id)) throw corrupt();
+    if (
+      typeof row.lease_owner !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/.test(row.lease_owner)
+    ) throw corrupt();
+    if (
+      typeof row.fencing_token !== 'number'
+      || !Number.isSafeInteger(row.fencing_token)
+      || row.fencing_token < PROJECT_TASK_LEASE_INITIAL_FENCING_TOKEN
+    ) throw corrupt();
+    if (
+      typeof row.acquired_at !== 'number'
+      || !Number.isSafeInteger(row.acquired_at)
+      || row.acquired_at < 0
+      || typeof row.lease_expires_at !== 'number'
+      || !Number.isSafeInteger(row.lease_expires_at)
+      || row.lease_expires_at <= row.acquired_at
+      || (row.released_at !== null && (
+        typeof row.released_at !== 'number'
+        || !Number.isSafeInteger(row.released_at)
+        || row.released_at < row.acquired_at
+      ))
+    ) throw corrupt();
+    return {
+      taskId: row.task_id,
+      leaseOwner: row.lease_owner,
+      leaseId: row.lease_id,
+      fencingToken: row.fencing_token,
+      acquiredAt: row.acquired_at,
+      leaseExpiresAt: row.lease_expires_at,
+    };
+  }
+
+  private validateLeaseOwner(leaseOwner: unknown): leaseOwner is string {
+    return typeof leaseOwner === 'string'
+      && /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/.test(leaseOwner);
+  }
+
+  private validLeaseDuration(durationMs: unknown): durationMs is number {
+    return typeof durationMs === 'number'
+      && Number.isSafeInteger(durationMs)
+      && durationMs >= PROJECT_TASK_LEASE_MIN_DURATION_MS
+      && durationMs <= PROJECT_TASK_LEASE_MAX_DURATION_MS;
+  }
+
+  private validLeaseAuthority(authority: unknown): authority is ProjectTaskLeaseAuthority {
+    if (!isRecord(authority)) return false;
+    const keys = Object.keys(authority);
+    return keys.length === 4
+      && keys.every((key) => ['taskId', 'leaseOwner', 'leaseId', 'fencingToken'].includes(key))
+      && typeof authority.taskId === 'string'
+      && PROJECT_TASK_ID.test(authority.taskId)
+      && this.validateLeaseOwner(authority.leaseOwner)
+      && typeof authority.leaseId === 'string'
+      && PROJECT_TASK_ID.test(authority.leaseId)
+      && typeof authority.fencingToken === 'number'
+      && Number.isSafeInteger(authority.fencingToken)
+      && authority.fencingToken >= PROJECT_TASK_LEASE_INITIAL_FENCING_TOKEN;
+  }
+
+  private leaseAuthorityMatches(
+    lease: ProjectTaskLeaseRecord,
+    authority: ProjectTaskLeaseAuthority,
+  ): boolean {
+    return lease.taskId === authority.taskId
+      && lease.leaseOwner === authority.leaseOwner
+      && lease.leaseId === authority.leaseId
+      && lease.fencingToken === authority.fencingToken;
   }
 
   private selectGoalRow(goalId: string): ProjectGoalRow | undefined {
@@ -1771,6 +1894,207 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       `).run();
 
       return Number(result.changes);
+    });
+  }
+
+  acquireTaskLease(input: AcquireProjectTaskLeaseInput): ProjectTaskLeaseRecord {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      const keys = Object.keys(input);
+      if (
+        keys.length !== 3
+        || !keys.every((key) => ['taskId', 'leaseOwner', 'durationMs'].includes(key))
+        || typeof input.taskId !== 'string'
+        || !PROJECT_TASK_ID.test(input.taskId)
+        || !this.validateLeaseOwner(input.leaseOwner)
+        || !this.validLeaseDuration(input.durationMs)
+      ) throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+
+      const task = this.selectRow(input.taskId);
+      if (task === undefined) throw new Error(PROJECT_TASK_LEASE_ERRORS.taskNotFound);
+      if (task.terminal_at !== null) throw new Error(PROJECT_TASK_LEASE_ERRORS.taskTerminal);
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > Number.MAX_SAFE_INTEGER - input.durationMs) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      }
+
+      const currentRow = this.selectCurrentLeaseRow(input.taskId);
+      if (currentRow !== undefined) {
+        const current = this.decodeLeaseRow(currentRow);
+        if (now < current.leaseExpiresAt) {
+          if (current.leaseOwner === input.leaseOwner) return current;
+          throw new Error(PROJECT_TASK_LEASE_ERRORS.unavailable);
+        }
+        const released = this.database.prepare(`
+          UPDATE project_task_lease_generations SET released_at = ?
+          WHERE task_id = ? AND lease_id = ? AND fencing_token = ? AND released_at IS NULL
+        `).run(Math.max(now, current.acquiredAt), input.taskId, current.leaseId, current.fencingToken);
+        if (Number(released.changes) !== 1) throw new Error(PROJECT_TASK_LEASE_ERRORS.stale);
+      }
+
+      const counter = this.database.prepare(`
+        SELECT MAX(fencing_token) AS last_token
+        FROM project_task_lease_generations WHERE task_id = ?
+      `).get(input.taskId) as unknown as { last_token: unknown };
+      if (
+        counter.last_token !== null
+        && (typeof counter.last_token !== 'number'
+          || !Number.isSafeInteger(counter.last_token)
+          || counter.last_token < PROJECT_TASK_LEASE_INITIAL_FENCING_TOKEN)
+      ) throw new Error(PROJECT_TASK_LEASE_ERRORS.corruptRecord);
+      const fencingToken = counter.last_token === null
+        ? PROJECT_TASK_LEASE_INITIAL_FENCING_TOKEN
+        : counter.last_token + 1;
+      if (!Number.isSafeInteger(fencingToken)) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.fencingExhausted);
+      }
+      const leaseId = randomUUID();
+      const leaseExpiresAt = now + input.durationMs;
+      this.database.prepare(`
+        INSERT INTO project_task_lease_generations (
+          task_id, lease_id, lease_owner, fencing_token, acquired_at, lease_expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(input.taskId, leaseId, input.leaseOwner, fencingToken, now, leaseExpiresAt);
+      const inserted = this.selectCurrentLeaseRow(input.taskId);
+      if (inserted === undefined) throw new Error(PROJECT_TASK_LEASE_ERRORS.corruptRecord);
+      return this.decodeLeaseRow(inserted);
+    });
+  }
+
+  renewTaskLease(input: RenewProjectTaskLeaseInput): ProjectTaskLeaseRecord {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      const { durationMs, ...authority } = input;
+      if (
+        Object.keys(input).length !== 5
+        || !Object.keys(input).every((key) => [
+          'taskId', 'leaseOwner', 'leaseId', 'fencingToken', 'durationMs',
+        ].includes(key))
+        || !this.validLeaseAuthority(authority)
+        || !this.validLeaseDuration(durationMs)
+      ) throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      const task = this.selectRow(input.taskId);
+      if (task === undefined) throw new Error(PROJECT_TASK_LEASE_ERRORS.taskNotFound);
+      if (task.terminal_at !== null) throw new Error(PROJECT_TASK_LEASE_ERRORS.taskTerminal);
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > Number.MAX_SAFE_INTEGER - durationMs) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      }
+      const currentRow = this.selectCurrentLeaseRow(input.taskId);
+      if (currentRow === undefined) throw new Error(PROJECT_TASK_LEASE_ERRORS.notFound);
+      const current = this.decodeLeaseRow(currentRow);
+      if (!this.leaseAuthorityMatches(current, authority)) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.stale);
+      }
+      if (now >= current.leaseExpiresAt) throw new Error(PROJECT_TASK_LEASE_ERRORS.expired);
+      const leaseExpiresAt = now + durationMs;
+      if (leaseExpiresAt <= current.leaseExpiresAt) return current;
+      const renewed = this.database.prepare(`
+        UPDATE project_task_lease_generations SET lease_expires_at = ?
+        WHERE task_id = ? AND lease_id = ? AND fencing_token = ? AND released_at IS NULL
+      `).run(leaseExpiresAt, input.taskId, input.leaseId, input.fencingToken);
+      if (Number(renewed.changes) !== 1) throw new Error(PROJECT_TASK_LEASE_ERRORS.stale);
+      const row = this.selectCurrentLeaseRow(input.taskId);
+      if (row === undefined) throw new Error(PROJECT_TASK_LEASE_ERRORS.corruptRecord);
+      return this.decodeLeaseRow(row);
+    });
+  }
+
+  releaseTaskLease(authority: ProjectTaskLeaseAuthority): ProjectTaskLeaseRecord {
+    return this.inTransaction(() => {
+      if (!this.validLeaseAuthority(authority)) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      }
+      const currentRow = this.selectCurrentLeaseRow(authority.taskId);
+      if (currentRow !== undefined) {
+        const current = this.decodeLeaseRow(currentRow);
+        if (!this.leaseAuthorityMatches(current, authority)) {
+          throw new Error(PROJECT_TASK_LEASE_ERRORS.stale);
+        }
+        const now = this.now();
+        if (!Number.isSafeInteger(now) || now < 0) {
+          throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+        }
+        const released = this.database.prepare(`
+          UPDATE project_task_lease_generations SET released_at = ?
+          WHERE task_id = ? AND lease_id = ? AND fencing_token = ? AND released_at IS NULL
+        `).run(
+          Math.max(now, current.acquiredAt),
+          authority.taskId,
+          authority.leaseId,
+          authority.fencingToken,
+        );
+        if (Number(released.changes) !== 1) throw new Error(PROJECT_TASK_LEASE_ERRORS.stale);
+        return current;
+      }
+
+      const releasedRow = this.selectLeaseGenerationRow(
+        authority.taskId,
+        authority.leaseId,
+        authority.fencingToken,
+      );
+      if (releasedRow === undefined) throw new Error(PROJECT_TASK_LEASE_ERRORS.notFound);
+      const released = this.decodeLeaseRow(releasedRow);
+      if (!this.leaseAuthorityMatches(released, authority) || releasedRow.released_at === null) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.stale);
+      }
+      const latest = this.database.prepare(`
+        SELECT MAX(fencing_token) AS latest_token
+        FROM project_task_lease_generations WHERE task_id = ?
+      `).get(authority.taskId) as unknown as { latest_token: unknown };
+      if (latest.latest_token !== authority.fencingToken) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.stale);
+      }
+      return released;
+    });
+  }
+
+  readTaskLease(taskId: string): ProjectTaskLeaseRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      }
+      const row = this.selectCurrentLeaseRow(taskId);
+      return row === undefined ? undefined : this.decodeLeaseRow(row);
+    });
+  }
+
+  validateTaskLease(authority: ProjectTaskLeaseAuthority): boolean {
+    return this.inTransaction(() => {
+      if (!this.validLeaseAuthority(authority)) return false;
+      const task = this.selectRow(authority.taskId);
+      if (task === undefined || task.terminal_at !== null) return false;
+      const row = this.selectCurrentLeaseRow(authority.taskId);
+      if (row === undefined) return false;
+      const lease = this.decodeLeaseRow(row);
+      const now = this.now();
+      return Number.isSafeInteger(now)
+        && now >= 0
+        && now < lease.leaseExpiresAt
+        && this.leaseAuthorityMatches(lease, authority);
+    });
+  }
+
+  assertCurrentTaskLease(authority: ProjectTaskLeaseAuthority): ProjectTaskLeaseRecord {
+    return this.inTransaction(() => {
+      if (!this.validLeaseAuthority(authority)) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      }
+      const task = this.selectRow(authority.taskId);
+      if (task === undefined) throw new Error(PROJECT_TASK_LEASE_ERRORS.taskNotFound);
+      if (task.terminal_at !== null) throw new Error(PROJECT_TASK_LEASE_ERRORS.taskTerminal);
+      const row = this.selectCurrentLeaseRow(authority.taskId);
+      if (row === undefined) throw new Error(PROJECT_TASK_LEASE_ERRORS.notFound);
+      const lease = this.decodeLeaseRow(row);
+      if (!this.leaseAuthorityMatches(lease, authority)) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.stale);
+      }
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
+      }
+      if (now >= lease.leaseExpiresAt) throw new Error(PROJECT_TASK_LEASE_ERRORS.expired);
+      return lease;
     });
   }
 

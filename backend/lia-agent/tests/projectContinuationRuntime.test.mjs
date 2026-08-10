@@ -454,6 +454,14 @@ test('legacy task behavior is unchanged and an authentic V5 database migrates ad
     store.close();
 
     const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      DROP TRIGGER project_task_lease_validate_insert;
+      DROP TRIGGER project_task_lease_identity_immutable;
+      DROP TRIGGER project_task_lease_expiry_monotonic;
+      DROP TRIGGER project_task_lease_release_once;
+      DROP TRIGGER project_task_lease_generation_immutable_delete;
+      DROP TABLE project_task_lease_generations;
+    `);
     legacy.exec('DROP TRIGGER project_goal_continuation_consumed_plan_state_immutable');
     legacy.exec('DROP TABLE project_goal_continuation_consumptions');
     legacy.prepare('UPDATE project_task_meta SET schema_version = 5 WHERE singleton = 1').run();
