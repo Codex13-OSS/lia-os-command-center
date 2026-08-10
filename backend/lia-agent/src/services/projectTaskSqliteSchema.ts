@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 export const PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION = 1;
 export const PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION = 2;
 export const PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION = 3;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 4;
+export const PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION = 4;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 5;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -87,6 +88,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -226,7 +228,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   }
 
   if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION) {
-    migrate(PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION, `
       CREATE TABLE project_goal_evaluations (
         evaluation_id TEXT PRIMARY KEY CHECK (length(evaluation_id) = 36),
         goal_id TEXT NOT NULL CHECK (goal_id <> ''),
@@ -337,6 +339,140 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       WHEN EXISTS (SELECT 1 FROM project_task_lineage WHERE goal_id = OLD.goal_id)
       BEGIN
         SELECT RAISE(ABORT, 'project_goal_evaluation_incompatible_state');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+      CREATE TABLE project_goal_continuation_plans (
+        plan_id TEXT PRIMARY KEY CHECK (length(plan_id) = 36),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        source_evaluation_id TEXT NOT NULL CHECK (source_evaluation_id <> ''),
+        parent_task_id TEXT NOT NULL CHECK (parent_task_id <> ''),
+        parent_attempt_number INTEGER NOT NULL CHECK (parent_attempt_number >= 0),
+        next_attempt_number INTEGER NOT NULL CHECK (next_attempt_number = parent_attempt_number + 1),
+        next_continuation_depth INTEGER NOT NULL CHECK (next_continuation_depth > 0),
+        planner_version TEXT NOT NULL CHECK (planner_version = 'continuation-planner-v1'),
+        status TEXT NOT NULL CHECK (status IN ('planned', 'cancelled')),
+        instruction TEXT NOT NULL CHECK (
+          length(instruction) BETWEEN 1 AND 2000 AND instruction = trim(instruction)
+          AND lower(instruction) NOT LIKE '%deploy%'
+          AND lower(instruction) NOT LIKE '%push%'
+          AND lower(instruction) NOT LIKE '%merge%'
+          AND lower(instruction) NOT LIKE '%production%'
+          AND lower(instruction) NOT LIKE '%secret%'
+          AND lower(instruction) NOT LIKE '%credential%'
+          AND lower(instruction) NOT LIKE '%shell%'
+          AND lower(instruction) NOT LIKE '%sudo%'
+          AND lower(instruction) NOT LIKE '%requestedcapabilities%'
+          AND lower(instruction) NOT LIKE '%approvedcapabilities%'
+          AND lower(instruction) NOT LIKE '%effectivecapabilities%'
+          AND lower(instruction) NOT LIKE '%repository_read%'
+          AND lower(instruction) NOT LIKE '%isolated_worktree_write%'
+          AND lower(instruction) NOT LIKE '%run_tests%'
+          AND lower(instruction) NOT LIKE '%local_commit%'
+        ),
+        reason_code TEXT NOT NULL CHECK (reason_code IN (
+          'continue_partial_result', 'retry_verification_failure', 'retry_visual_failure',
+          'retry_execution_failure', 'retry_insufficient_evidence'
+        )),
+        fingerprint TEXT NOT NULL CHECK (
+          length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        source_evidence_fingerprint TEXT NOT NULL CHECK (
+          length(source_evidence_fingerprint) = 64
+          AND source_evidence_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        cancelled_at INTEGER CHECK (cancelled_at IS NULL OR cancelled_at >= created_at),
+        UNIQUE (source_evaluation_id, planner_version),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (source_evaluation_id) REFERENCES project_goal_evaluations(evaluation_id),
+        FOREIGN KEY (parent_task_id) REFERENCES project_tasks(task_id),
+        CHECK ((status = 'cancelled') = (cancelled_at IS NOT NULL))
+      ) STRICT;
+
+      CREATE INDEX project_goal_continuation_plans_goal_created
+      ON project_goal_continuation_plans(goal_id, created_at ASC, plan_id ASC);
+
+      CREATE INDEX project_goal_continuation_plans_parent
+      ON project_goal_continuation_plans(parent_task_id, parent_attempt_number);
+
+      CREATE TRIGGER project_goal_continuation_plans_validate_insert
+      BEFORE INSERT ON project_goal_continuation_plans
+      BEGIN
+        SELECT CASE WHEN NEW.status <> 'planned' OR NEW.cancelled_at IS NOT NULL
+          THEN RAISE(ABORT, 'invalid_project_goal_continuation_plan') END;
+        SELECT CASE WHEN (SELECT goal_id FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NOT NEW.goal_id
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_goal_mismatch') END;
+        SELECT CASE WHEN (SELECT applied_at FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NULL
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_evaluation_not_applied') END;
+        SELECT CASE WHEN (SELECT decision FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NOT 'retryable'
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_evaluation_not_retryable') END;
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id
+            AND (
+              (reason_code = 'partial_result' AND NEW.reason_code = 'continue_partial_result')
+              OR (reason_code = 'verification_failed' AND NEW.reason_code = 'retry_verification_failure')
+              OR (reason_code = 'visual_verification_failed' AND NEW.reason_code = 'retry_visual_failure')
+              OR (reason_code = 'execution_failed' AND NEW.reason_code = 'retry_execution_failure')
+              OR (reason_code = 'insufficient_evidence' AND NEW.reason_code = 'retry_insufficient_evidence')
+            )
+        ) THEN RAISE(ABORT, 'project_goal_continuation_plan_incompatible') END;
+        SELECT CASE WHEN (SELECT evidence_fingerprint FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NOT NEW.source_evidence_fingerprint
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_evidence_conflict') END;
+        SELECT CASE WHEN (SELECT task_id FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NOT NEW.parent_task_id
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_incompatible') END;
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_task_lineage AS lineage
+          JOIN project_goals AS goal ON goal.goal_id = lineage.goal_id
+          JOIN project_tasks AS task ON task.task_id = lineage.task_id
+          WHERE lineage.task_id = NEW.parent_task_id
+            AND lineage.goal_id = NEW.goal_id
+            AND lineage.attempt_number = NEW.parent_attempt_number
+            AND NEW.next_attempt_number = lineage.attempt_number + 1
+            AND NEW.next_continuation_depth = lineage.continuation_depth + 1
+            AND goal.status = 'active'
+            AND goal.current_attempt = lineage.attempt_number
+            AND NEW.next_attempt_number < goal.max_attempts
+            AND NEW.next_continuation_depth <= goal.continuation_depth_limit
+            AND json_extract(task.intent_json, '$.projectId') = goal.project_id
+        ) THEN RAISE(ABORT, 'project_goal_continuation_plan_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_goal_continuation_plans_identity_immutable
+      BEFORE UPDATE OF plan_id, goal_id, source_evaluation_id, parent_task_id,
+                       parent_attempt_number, next_attempt_number, next_continuation_depth,
+                       planner_version, instruction, reason_code, fingerprint,
+                       source_evidence_fingerprint, created_at
+      ON project_goal_continuation_plans
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_plan_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_continuation_plans_cancel_once
+      BEFORE UPDATE OF status, cancelled_at ON project_goal_continuation_plans
+      WHEN NOT (
+        OLD.status = 'planned' AND OLD.cancelled_at IS NULL
+        AND NEW.status = 'cancelled' AND NEW.cancelled_at IS NOT NULL
+        AND NEW.cancelled_at >= OLD.created_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_plan_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_continuation_plans_immutable_delete
+      BEFORE DELETE ON project_goal_continuation_plans
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_plan_immutable');
       END
     `);
   }

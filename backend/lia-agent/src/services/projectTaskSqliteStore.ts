@@ -37,6 +37,19 @@ import {
   PROJECT_GOAL_EVALUATOR_VERSION,
 } from '../contracts/projectGoalEvaluation.js';
 import type {
+  CreateProjectGoalContinuationPlanInput,
+  ProjectGoalContinuationPlanReasonCode,
+  ProjectGoalContinuationPlanRecord,
+  ProjectGoalContinuationPlanStatus,
+  ProjectGoalContinuationPlanStore,
+} from '../contracts/projectGoalContinuationPlan.js';
+import {
+  CONTINUATION_PLANNER_VERSION,
+  PROJECT_GOAL_CONTINUATION_PLAN_ERRORS,
+  PROJECT_GOAL_CONTINUATION_PLAN_REASON_CODES,
+  PROJECT_GOAL_CONTINUATION_PLAN_STATUSES,
+} from '../contracts/projectGoalContinuationPlan.js';
+import type {
   CreateProjectTaskResult,
   ActiveTaskStage,
   ProjectTaskRecord,
@@ -59,6 +72,11 @@ import {
   evaluateProjectGoalCompletion,
   isProjectGoalEvaluationEvidence,
 } from './projectCompletionEvaluator.js';
+import {
+  buildDeterministicContinuationInstruction,
+  fingerprintContinuationPlanMeaning,
+  isSafeContinuationInstruction,
+} from './projectContinuationPlanner.js';
 
 export type ProjectTaskSqliteStoreOptions = {
   databasePath: string;
@@ -86,6 +104,8 @@ const GOAL_STATUSES = new Set<string>(PROJECT_GOAL_STATUSES);
 const GOAL_TERMINAL_REASONS = new Set<string>(PROJECT_GOAL_TERMINAL_REASONS);
 const EVALUATION_DECISIONS = new Set<string>(PROJECT_GOAL_EVALUATION_DECISIONS);
 const EVALUATION_REASON_CODES = new Set<string>(PROJECT_GOAL_EVALUATION_REASON_CODES);
+const CONTINUATION_PLAN_STATUSES = new Set<string>(PROJECT_GOAL_CONTINUATION_PLAN_STATUSES);
+const CONTINUATION_PLAN_REASON_CODES = new Set<string>(PROJECT_GOAL_CONTINUATION_PLAN_REASON_CODES);
 
 type ProjectTaskRow = {
   task_id: unknown;
@@ -135,6 +155,24 @@ type ProjectGoalEvaluationRow = {
   applied_at: unknown;
 };
 
+type ProjectGoalContinuationPlanRow = {
+  plan_id: unknown;
+  goal_id: unknown;
+  source_evaluation_id: unknown;
+  parent_task_id: unknown;
+  parent_attempt_number: unknown;
+  next_attempt_number: unknown;
+  next_continuation_depth: unknown;
+  planner_version: unknown;
+  status: unknown;
+  instruction: unknown;
+  reason_code: unknown;
+  fingerprint: unknown;
+  source_evidence_fingerprint: unknown;
+  created_at: unknown;
+  cancelled_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -180,7 +218,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectGoalStore, ProjectGoalEvaluationStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -285,6 +323,9 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       ).all();
       this.database.prepare(
         'SELECT evaluation_id, goal_id, task_id, evaluator_version FROM project_goal_evaluations LIMIT 1',
+      ).all();
+      this.database.prepare(
+        'SELECT plan_id, goal_id, source_evaluation_id, planner_version FROM project_goal_continuation_plans LIMIT 1',
       ).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -611,6 +652,60 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     };
   }
 
+  private selectContinuationPlanRow(planId: string): ProjectGoalContinuationPlanRow | undefined {
+    return this.database.prepare(`
+      SELECT plan_id, goal_id, source_evaluation_id, parent_task_id,
+             parent_attempt_number, next_attempt_number, next_continuation_depth,
+             planner_version, status, instruction, reason_code, fingerprint,
+             source_evidence_fingerprint, created_at, cancelled_at
+      FROM project_goal_continuation_plans WHERE plan_id = ?
+    `).get(planId) as unknown as ProjectGoalContinuationPlanRow | undefined;
+  }
+
+  private decodeContinuationPlanRow(
+    row: ProjectGoalContinuationPlanRow,
+  ): ProjectGoalContinuationPlanRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    if (typeof row.plan_id !== 'string' || !PROJECT_GOAL_ID.test(row.plan_id)) throw corrupt();
+    if (typeof row.goal_id !== 'string' || !PROJECT_GOAL_ID.test(row.goal_id)) throw corrupt();
+    if (typeof row.source_evaluation_id !== 'string' || !PROJECT_GOAL_ID.test(row.source_evaluation_id)) throw corrupt();
+    if (typeof row.parent_task_id !== 'string' || !PROJECT_TASK_ID.test(row.parent_task_id)) throw corrupt();
+    if (!isNonNegativeInteger(row.parent_attempt_number)) throw corrupt();
+    if (row.next_attempt_number !== row.parent_attempt_number + 1) throw corrupt();
+    if (!isNonNegativeInteger(row.next_continuation_depth) || row.next_continuation_depth === 0) throw corrupt();
+    if (row.planner_version !== CONTINUATION_PLANNER_VERSION) throw corrupt();
+    if (typeof row.status !== 'string' || !CONTINUATION_PLAN_STATUSES.has(row.status)) throw corrupt();
+    if (!isSafeContinuationInstruction(row.instruction)) throw corrupt();
+    if (typeof row.reason_code !== 'string' || !CONTINUATION_PLAN_REASON_CODES.has(row.reason_code)) throw corrupt();
+    if (typeof row.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(row.fingerprint)) throw corrupt();
+    if (typeof row.source_evidence_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(row.source_evidence_fingerprint)) throw corrupt();
+    if (!isNonNegativeInteger(row.created_at)) throw corrupt();
+    if (row.cancelled_at !== null && (!isNonNegativeInteger(row.cancelled_at) || row.cancelled_at < row.created_at)) throw corrupt();
+    if ((row.status === 'cancelled') !== (row.cancelled_at !== null)) throw corrupt();
+
+    const meaning = {
+      goalId: row.goal_id,
+      sourceEvaluationId: row.source_evaluation_id,
+      parentTaskId: row.parent_task_id,
+      parentAttemptNumber: row.parent_attempt_number,
+      nextAttemptNumber: row.next_attempt_number,
+      nextContinuationDepth: row.next_continuation_depth,
+      plannerVersion: CONTINUATION_PLANNER_VERSION,
+      instruction: row.instruction,
+      reasonCode: row.reason_code as ProjectGoalContinuationPlanReasonCode,
+      sourceEvidenceFingerprint: row.source_evidence_fingerprint,
+    };
+    if (fingerprintContinuationPlanMeaning(meaning) !== row.fingerprint) throw corrupt();
+    return {
+      planId: row.plan_id,
+      ...meaning,
+      status: row.status as ProjectGoalContinuationPlanStatus,
+      fingerprint: row.fingerprint,
+      createdAt: row.created_at,
+      ...(row.cancelled_at !== null ? { cancelledAt: row.cancelled_at } : {}),
+    };
+  }
+
   private prepareGoalEvaluation(input: EvaluateProjectGoalAttemptInput): ProjectGoalEvaluationRecord {
     if (
       !PROJECT_GOAL_ID.test(input.goalId)
@@ -812,6 +907,263 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         ORDER BY created_at ASC, evaluation_id ASC
       `).all(goalId) as unknown as ProjectGoalEvaluationRow[];
       return rows.map((row) => this.decodeEvaluationRow(row));
+    });
+  }
+
+  private assertContinuationPlanSource(
+    goalId: string,
+    sourceEvaluationId: string,
+    sourceEvidenceFingerprint: string,
+  ): {
+    goal: ProjectGoalRecord;
+    evaluation: ProjectGoalEvaluationRecord;
+    parent: ProjectTaskRecord;
+  } {
+    const evaluationRow = this.selectEvaluationRow(sourceEvaluationId);
+    if (evaluationRow === undefined) {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.evaluationNotFound);
+    }
+    const evaluation = this.decodeEvaluationRow(evaluationRow);
+    if (evaluation.goalId !== goalId) {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.goalMismatch);
+    }
+    if (evaluation.evidenceFingerprint !== sourceEvidenceFingerprint) {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.evidenceConflict);
+    }
+    if (evaluation.appliedAt === undefined) {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.evaluationNotApplied);
+    }
+    if (evaluation.decision !== 'retryable') {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.evaluationNotRetryable);
+    }
+    const goalRow = this.selectGoalRow(goalId);
+    if (goalRow === undefined) throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.goalNotFound);
+    const goal = this.decodeGoalRow(goalRow);
+    if (goal.status !== 'active') throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.terminalGoal);
+    const parentRow = this.selectRow(evaluation.taskId);
+    if (parentRow === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    const parent = this.decodeRow(parentRow);
+    if (parent.intent.projectId !== goal.projectId) {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.projectMismatch);
+    }
+    if (
+      parent.lineage?.goalId !== goalId
+      || parent.lineage.attemptNumber !== evaluation.attemptNumber
+      || goal.currentAttempt !== evaluation.attemptNumber
+    ) {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.staleAttempt);
+    }
+    if (parent.lineage.attemptNumber + 1 >= goal.maxAttempts) {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.attemptLimit);
+    }
+    if (parent.lineage.continuationDepth + 1 > goal.continuationDepthLimit) {
+      throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.depthLimit);
+    }
+    return { goal, evaluation, parent };
+  }
+
+  createContinuationPlan(
+    input: CreateProjectGoalContinuationPlanInput,
+  ): ProjectGoalContinuationPlanRecord {
+    return this.inTransaction(() => {
+      if (
+        !isRecord(input)
+        || Object.keys(input).length !== 4
+        || !Object.keys(input).every((key) => [
+          'goalId', 'sourceEvaluationId', 'plannerVersion', 'sourceEvidenceFingerprint',
+        ].includes(key))
+        || typeof input.goalId !== 'string'
+        || !PROJECT_GOAL_ID.test(input.goalId)
+        || typeof input.sourceEvaluationId !== 'string'
+        || !PROJECT_GOAL_ID.test(input.sourceEvaluationId)
+        || input.plannerVersion !== CONTINUATION_PLANNER_VERSION
+        || typeof input.sourceEvidenceFingerprint !== 'string'
+        || !/^[0-9a-f]{64}$/.test(input.sourceEvidenceFingerprint)
+      ) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.invalidInput);
+      }
+      const { goal, evaluation, parent } = this.assertContinuationPlanSource(
+        input.goalId,
+        input.sourceEvaluationId,
+        input.sourceEvidenceFingerprint,
+      );
+      if (parent.lineage === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.staleAttempt);
+      }
+      const { instruction, reasonCode } = buildDeterministicContinuationInstruction(
+        goal,
+        evaluation,
+        parent,
+      );
+      const meaning = {
+        goalId: goal.goalId,
+        sourceEvaluationId: evaluation.evaluationId,
+        parentTaskId: parent.taskId,
+        parentAttemptNumber: parent.lineage.attemptNumber,
+        nextAttemptNumber: parent.lineage.attemptNumber + 1,
+        nextContinuationDepth: parent.lineage.continuationDepth + 1,
+        plannerVersion: CONTINUATION_PLANNER_VERSION,
+        instruction,
+        reasonCode,
+        sourceEvidenceFingerprint: evaluation.evidenceFingerprint,
+      };
+      const fingerprint = fingerprintContinuationPlanMeaning(meaning);
+      const existingRow = this.database.prepare(`
+        SELECT plan_id, goal_id, source_evaluation_id, parent_task_id,
+               parent_attempt_number, next_attempt_number, next_continuation_depth,
+               planner_version, status, instruction, reason_code, fingerprint,
+               source_evidence_fingerprint, created_at, cancelled_at
+        FROM project_goal_continuation_plans
+        WHERE source_evaluation_id = ? AND planner_version = ?
+      `).get(evaluation.evaluationId, CONTINUATION_PLANNER_VERSION) as unknown as ProjectGoalContinuationPlanRow | undefined;
+      if (existingRow !== undefined) {
+        const existing = this.decodeContinuationPlanRow(existingRow);
+        if (
+          existing.goalId !== meaning.goalId
+          || existing.parentTaskId !== meaning.parentTaskId
+          || existing.parentAttemptNumber !== meaning.parentAttemptNumber
+          || existing.nextAttemptNumber !== meaning.nextAttemptNumber
+          || existing.nextContinuationDepth !== meaning.nextContinuationDepth
+          || existing.instruction !== meaning.instruction
+          || existing.reasonCode !== meaning.reasonCode
+          || existing.sourceEvidenceFingerprint !== meaning.sourceEvidenceFingerprint
+          || existing.fingerprint !== fingerprint
+        ) {
+          throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.incompatiblePlan);
+        }
+        return existing;
+      }
+
+      const planId = randomUUID();
+      const createdAt = Math.max(this.now(), evaluation.appliedAt ?? 0);
+      this.database.prepare(`
+        INSERT INTO project_goal_continuation_plans (
+          plan_id, goal_id, source_evaluation_id, parent_task_id,
+          parent_attempt_number, next_attempt_number, next_continuation_depth,
+          planner_version, status, instruction, reason_code, fingerprint,
+          source_evidence_fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)
+      `).run(
+        planId,
+        meaning.goalId,
+        meaning.sourceEvaluationId,
+        meaning.parentTaskId,
+        meaning.parentAttemptNumber,
+        meaning.nextAttemptNumber,
+        meaning.nextContinuationDepth,
+        meaning.plannerVersion,
+        meaning.instruction,
+        meaning.reasonCode,
+        fingerprint,
+        meaning.sourceEvidenceFingerprint,
+        createdAt,
+      );
+      const inserted = this.selectContinuationPlanRow(planId);
+      if (inserted === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeContinuationPlanRow(inserted);
+    });
+  }
+
+  readContinuationPlan(planId: string): ProjectGoalContinuationPlanRecord | undefined {
+    return this.inTransaction(() => {
+      if (!PROJECT_GOAL_ID.test(planId)) throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.invalidInput);
+      const row = this.selectContinuationPlanRow(planId);
+      return row === undefined ? undefined : this.decodeContinuationPlanRow(row);
+    });
+  }
+
+  readContinuationPlanBySourceEvaluation(
+    sourceEvaluationId: string,
+    plannerVersion: typeof CONTINUATION_PLANNER_VERSION = CONTINUATION_PLANNER_VERSION,
+  ): ProjectGoalContinuationPlanRecord | undefined {
+    return this.inTransaction(() => {
+      if (!PROJECT_GOAL_ID.test(sourceEvaluationId) || plannerVersion !== CONTINUATION_PLANNER_VERSION) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.invalidInput);
+      }
+      const row = this.database.prepare(`
+        SELECT plan_id, goal_id, source_evaluation_id, parent_task_id,
+               parent_attempt_number, next_attempt_number, next_continuation_depth,
+               planner_version, status, instruction, reason_code, fingerprint,
+               source_evidence_fingerprint, created_at, cancelled_at
+        FROM project_goal_continuation_plans
+        WHERE source_evaluation_id = ? AND planner_version = ?
+      `).get(sourceEvaluationId, plannerVersion) as unknown as ProjectGoalContinuationPlanRow | undefined;
+      return row === undefined ? undefined : this.decodeContinuationPlanRow(row);
+    });
+  }
+
+  listGoalContinuationPlans(goalId: string): ProjectGoalContinuationPlanRecord[] {
+    return this.inTransaction(() => {
+      const goal = this.selectGoalRow(goalId);
+      if (goal === undefined) throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.goalNotFound);
+      this.decodeGoalRow(goal);
+      const rows = this.database.prepare(`
+        SELECT plan_id, goal_id, source_evaluation_id, parent_task_id,
+               parent_attempt_number, next_attempt_number, next_continuation_depth,
+               planner_version, status, instruction, reason_code, fingerprint,
+               source_evidence_fingerprint, created_at, cancelled_at
+        FROM project_goal_continuation_plans WHERE goal_id = ?
+        ORDER BY created_at ASC, plan_id ASC
+      `).all(goalId) as unknown as ProjectGoalContinuationPlanRow[];
+      return rows.map((row) => this.decodeContinuationPlanRow(row));
+    });
+  }
+
+  assertContinuationPlanUsable(planId: string): ProjectGoalContinuationPlanRecord {
+    return this.inTransaction(() => {
+      const row = this.selectContinuationPlanRow(planId);
+      if (row === undefined) throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.planNotFound);
+      const plan = this.decodeContinuationPlanRow(row);
+      if (plan.status !== 'planned') throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.planNotUsable);
+      let source;
+      try {
+        source = this.assertContinuationPlanSource(
+          plan.goalId,
+          plan.sourceEvaluationId,
+          plan.sourceEvidenceFingerprint,
+        );
+      } catch {
+        throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.planNotUsable);
+      }
+      const lineage = source.parent.lineage;
+      if (
+        lineage === undefined
+        || source.parent.taskId !== plan.parentTaskId
+        || lineage.attemptNumber !== plan.parentAttemptNumber
+        || plan.nextAttemptNumber !== lineage.attemptNumber + 1
+        || plan.nextContinuationDepth !== lineage.continuationDepth + 1
+      ) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.planNotUsable);
+      }
+      const expected = buildDeterministicContinuationInstruction(
+        source.goal,
+        source.evaluation,
+        source.parent,
+      );
+      if (expected.instruction !== plan.instruction || expected.reasonCode !== plan.reasonCode) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.planNotUsable);
+      }
+      return plan;
+    });
+  }
+
+  cancelContinuationPlan(planId: string): ProjectGoalContinuationPlanRecord {
+    return this.inTransaction(() => {
+      const row = this.selectContinuationPlanRow(planId);
+      if (row === undefined) throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.planNotFound);
+      const plan = this.decodeContinuationPlanRow(row);
+      if (plan.status === 'cancelled') return plan;
+      const cancelledAt = Math.max(this.now(), plan.createdAt);
+      const changed = this.database.prepare(`
+        UPDATE project_goal_continuation_plans SET status = 'cancelled', cancelled_at = ?
+        WHERE plan_id = ? AND status = 'planned' AND cancelled_at IS NULL
+      `).run(cancelledAt, planId);
+      if (Number(changed.changes) !== 1) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.incompatiblePlan);
+      }
+      const cancelled = this.selectContinuationPlanRow(planId);
+      if (cancelled === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeContinuationPlanRow(cancelled);
     });
   }
 
