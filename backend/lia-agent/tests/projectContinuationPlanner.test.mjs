@@ -522,6 +522,8 @@ test('legacy V4 database migrates additively and legacy tasks remain unchanged',
     store.close();
 
     const legacy = new DatabaseSync(databasePath);
+    // Remove the V6 additive relation before reconstructing an authentic V4 fixture.
+    legacy.exec('DROP TABLE project_goal_continuation_consumptions');
     const objects = legacy.prepare(`
       SELECT type, name FROM sqlite_master
       WHERE tbl_name = 'project_goal_continuation_plans' OR name LIKE 'project_goal_continuation_plans_%'

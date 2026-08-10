@@ -71,7 +71,7 @@ export function buildDeterministicContinuationInstruction(
 }
 
 function canonicalPlanMeaning(
-  plan: Omit<ProjectGoalContinuationPlanRecord, 'planId' | 'status' | 'fingerprint' | 'createdAt' | 'cancelledAt'>,
+  plan: Omit<ProjectGoalContinuationPlanRecord, 'planId' | 'status' | 'fingerprint' | 'createdAt' | 'cancelledAt' | 'createdTaskId' | 'consumedAt'>,
 ): string {
   return JSON.stringify({
     goalId: plan.goalId,
@@ -88,7 +88,7 @@ function canonicalPlanMeaning(
 }
 
 export function fingerprintContinuationPlanMeaning(
-  plan: Omit<ProjectGoalContinuationPlanRecord, 'planId' | 'status' | 'fingerprint' | 'createdAt' | 'cancelledAt'>,
+  plan: Omit<ProjectGoalContinuationPlanRecord, 'planId' | 'status' | 'fingerprint' | 'createdAt' | 'cancelledAt' | 'createdTaskId' | 'consumedAt'>,
 ): string {
   if (plan.plannerVersion !== CONTINUATION_PLANNER_VERSION || !isSafeContinuationInstruction(plan.instruction)) {
     throw new Error(PROJECT_GOAL_CONTINUATION_PLAN_ERRORS.invalidInput);

@@ -6,7 +6,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION = 1;
 export const PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION = 2;
 export const PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION = 3;
 export const PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION = 4;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 5;
+export const PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION = 5;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 6;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -89,6 +90,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -345,7 +347,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   }
 
   if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION) {
-    migrate(PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION, `
       CREATE TABLE project_goal_continuation_plans (
         plan_id TEXT PRIMARY KEY CHECK (length(plan_id) = 36),
         goal_id TEXT NOT NULL CHECK (goal_id <> ''),
@@ -473,6 +475,80 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       BEFORE DELETE ON project_goal_continuation_plans
       BEGIN
         SELECT RAISE(ABORT, 'project_goal_continuation_plan_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+      CREATE TABLE project_goal_continuation_consumptions (
+        plan_id TEXT PRIMARY KEY CHECK (length(plan_id) = 36),
+        created_task_id TEXT NOT NULL UNIQUE CHECK (length(created_task_id) = 36),
+        consumed_at INTEGER NOT NULL CHECK (consumed_at >= 0),
+        FOREIGN KEY (plan_id) REFERENCES project_goal_continuation_plans(plan_id),
+        FOREIGN KEY (created_task_id) REFERENCES project_tasks(task_id)
+      ) STRICT;
+
+      CREATE TRIGGER project_goal_continuation_consumptions_validate_insert
+      BEFORE INSERT ON project_goal_continuation_consumptions
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_goal_continuation_plans AS plan
+          JOIN project_goal_evaluations AS evaluation
+            ON evaluation.evaluation_id = plan.source_evaluation_id
+          JOIN project_goals AS goal ON goal.goal_id = plan.goal_id
+          JOIN project_task_lineage AS parent_lineage
+            ON parent_lineage.task_id = plan.parent_task_id AND parent_lineage.goal_id = plan.goal_id
+          JOIN project_task_lineage AS child_lineage
+            ON child_lineage.task_id = NEW.created_task_id AND child_lineage.goal_id = plan.goal_id
+          JOIN project_tasks AS child ON child.task_id = NEW.created_task_id
+          WHERE plan.plan_id = NEW.plan_id
+            AND plan.status = 'planned' AND plan.cancelled_at IS NULL
+            AND NEW.consumed_at >= plan.created_at
+            AND evaluation.goal_id = plan.goal_id
+            AND evaluation.task_id = plan.parent_task_id
+            AND evaluation.attempt_number = plan.parent_attempt_number
+            AND evaluation.evidence_fingerprint = plan.source_evidence_fingerprint
+            AND evaluation.applied_at IS NOT NULL AND evaluation.decision = 'retryable'
+            AND goal.status = 'active'
+            AND goal.current_attempt = plan.next_attempt_number
+            AND child_lineage.parent_task_id = plan.parent_task_id
+            AND child_lineage.attempt_number = plan.next_attempt_number
+            AND child_lineage.continuation_depth = plan.next_continuation_depth
+            AND json_extract(child.intent_json, '$.projectId') = goal.project_id
+            AND json_extract(child.intent_json, '$.instruction') = plan.instruction
+            AND json_extract(child.intent_json, '$.priority') = (
+              SELECT json_extract(intent_json, '$.priority')
+              FROM project_tasks WHERE task_id = plan.parent_task_id
+            )
+            AND json_extract(child.intent_json, '$.requestedCapabilities') = (
+              SELECT json_extract(intent_json, '$.requestedCapabilities')
+              FROM project_tasks WHERE task_id = plan.parent_task_id
+            )
+        ) THEN RAISE(ABORT, 'project_continuation_plan_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_goal_continuation_consumptions_immutable_update
+      BEFORE UPDATE ON project_goal_continuation_consumptions
+      BEGIN
+        SELECT RAISE(ABORT, 'project_continuation_consumption_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_continuation_consumptions_immutable_delete
+      BEFORE DELETE ON project_goal_continuation_consumptions
+      BEGIN
+        SELECT RAISE(ABORT, 'project_continuation_consumption_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_continuation_consumed_plan_state_immutable
+      BEFORE UPDATE OF status, cancelled_at ON project_goal_continuation_plans
+      WHEN EXISTS (
+        SELECT 1 FROM project_goal_continuation_consumptions WHERE plan_id = OLD.plan_id
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_continuation_consumption_immutable');
       END
     `);
   }

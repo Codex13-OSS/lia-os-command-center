@@ -2,7 +2,7 @@ import type { ProjectGoalEvaluationReasonCode } from './projectGoalEvaluation.js
 
 export const CONTINUATION_PLANNER_VERSION = 'continuation-planner-v1' as const;
 
-export const PROJECT_GOAL_CONTINUATION_PLAN_STATUSES = ['planned', 'cancelled'] as const;
+export const PROJECT_GOAL_CONTINUATION_PLAN_STATUSES = ['planned', 'cancelled', 'consumed'] as const;
 export type ProjectGoalContinuationPlanStatus =
   (typeof PROJECT_GOAL_CONTINUATION_PLAN_STATUSES)[number];
 
@@ -43,6 +43,9 @@ export type ProjectGoalContinuationPlanRecord = {
   sourceEvidenceFingerprint: string;
   createdAt: number;
   cancelledAt?: number;
+  /** Present exactly when status is consumed. Both fields are immutable. */
+  createdTaskId?: string;
+  consumedAt?: number;
 };
 
 export interface ProjectGoalContinuationPlanStore {
