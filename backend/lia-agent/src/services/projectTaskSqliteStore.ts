@@ -65,6 +65,15 @@ import {
   PROJECT_TASK_DISPATCH_MAX_LIST_LIMIT,
 } from '../contracts/projectTaskDispatch.js';
 import type {
+  PrepareProjectTaskExecutionRunInput,
+  ProjectTaskExecutionRunRecord,
+  ProjectTaskExecutionRunStore,
+} from '../contracts/projectTaskExecutionRun.js';
+import {
+  PROJECT_TASK_EXECUTION_RUN_ERRORS,
+  PROJECT_TASK_EXECUTION_RUN_MAX_LIST_LIMIT,
+} from '../contracts/projectTaskExecutionRun.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -221,6 +230,15 @@ type ProjectTaskDispatchRow = {
   consumed_fencing_token: unknown;
 };
 
+type ProjectTaskExecutionRunRow = {
+  execution_run_id: unknown;
+  task_id: unknown;
+  dispatch_id: unknown;
+  preparation_lease_id: unknown;
+  preparation_fencing_token: unknown;
+  prepared_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -266,7 +284,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -388,6 +406,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
                consumed_lease_id, consumed_fencing_token
         FROM project_task_dispatch_outbox LIMIT 1
       `).all();
+      this.database.prepare(`
+        SELECT execution_run_id, task_id, dispatch_id, preparation_lease_id,
+               preparation_fencing_token, prepared_at
+        FROM project_task_execution_runs LIMIT 1
+      `).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
     }
@@ -463,6 +486,22 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     `).get(dispatchId) as unknown as ProjectTaskDispatchRow | undefined;
   }
 
+  private selectExecutionRunRow(executionRunId: string): ProjectTaskExecutionRunRow | undefined {
+    return this.database.prepare(`
+      SELECT execution_run_id, task_id, dispatch_id, preparation_lease_id,
+             preparation_fencing_token, prepared_at
+      FROM project_task_execution_runs WHERE execution_run_id = ?
+    `).get(executionRunId) as unknown as ProjectTaskExecutionRunRow | undefined;
+  }
+
+  private selectExecutionRunByTaskRow(taskId: string): ProjectTaskExecutionRunRow | undefined {
+    return this.database.prepare(`
+      SELECT execution_run_id, task_id, dispatch_id, preparation_lease_id,
+             preparation_fencing_token, prepared_at
+      FROM project_task_execution_runs WHERE task_id = ?
+    `).get(taskId) as unknown as ProjectTaskExecutionRunRow | undefined;
+  }
+
   private decodeDispatchRow(row: ProjectTaskDispatchRow): ProjectTaskDispatchRecord {
     const corrupt = (): Error => new Error(PROJECT_TASK_DISPATCH_ERRORS.corruptRecord);
     if (typeof row.dispatch_id !== 'string' || !PROJECT_TASK_ID.test(row.dispatch_id)) throw corrupt();
@@ -489,6 +528,48 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         consumedLeaseId: row.consumed_lease_id as string,
         consumedFencingToken: row.consumed_fencing_token as number,
       } : {}),
+    };
+  }
+
+  private decodeExecutionRunRow(row: ProjectTaskExecutionRunRow): ProjectTaskExecutionRunRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.corruptRecord);
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.dispatch_id !== 'string' || !PROJECT_TASK_ID.test(row.dispatch_id)) throw corrupt();
+    if (typeof row.preparation_lease_id !== 'string' || !PROJECT_TASK_ID.test(row.preparation_lease_id)) throw corrupt();
+    if (
+      typeof row.preparation_fencing_token !== 'number'
+      || !Number.isSafeInteger(row.preparation_fencing_token)
+      || row.preparation_fencing_token < PROJECT_TASK_LEASE_INITIAL_FENCING_TOKEN
+      || !isNonNegativeInteger(row.prepared_at)
+      || !Number.isSafeInteger(row.prepared_at)
+    ) throw corrupt();
+
+    const dispatchRow = this.selectDispatchRow(row.dispatch_id);
+    if (dispatchRow === undefined) throw corrupt();
+    const dispatch = this.decodeDispatchRow(dispatchRow);
+    if (
+      dispatch.taskId !== row.task_id
+      || dispatch.consumedAt !== row.prepared_at
+      || dispatch.consumedLeaseId !== row.preparation_lease_id
+      || dispatch.consumedFencingToken !== row.preparation_fencing_token
+    ) throw corrupt();
+    const leaseRow = this.selectLeaseGenerationRow(
+      row.task_id,
+      row.preparation_lease_id,
+      row.preparation_fencing_token,
+    );
+    if (leaseRow === undefined) throw corrupt();
+    const lease = this.decodeLeaseRow(leaseRow);
+    if (row.prepared_at < lease.acquiredAt || row.prepared_at >= lease.leaseExpiresAt) throw corrupt();
+
+    return {
+      executionRunId: row.execution_run_id,
+      taskId: row.task_id,
+      dispatchId: row.dispatch_id,
+      preparationLeaseId: row.preparation_lease_id,
+      preparationFencingToken: row.preparation_fencing_token,
+      preparedAt: row.prepared_at,
     };
   }
 
@@ -2036,8 +2117,9 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
 
   /**
    * Atomically applies the conservative restart-safe recovery matrix.
-   * Only accepted tasks with an intact pending dispatch are preserved. No
-   * dispatch or lease operation is performed and terminal tasks are untouched.
+   * Accepted tasks with an intact pending dispatch or a structurally valid
+   * prepared execution run are preserved. No dispatch, run, or lease operation
+   * is performed and terminal tasks are untouched.
    */
   reconcileRestartSafeTasks(): ProjectTaskRestartRecoveryResult {
     return this.inTransaction(() => {
@@ -2057,6 +2139,12 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         SELECT task_id FROM project_task_active_stage_traces
         ORDER BY task_id ASC
       `).all() as unknown as Array<{ task_id: unknown }>;
+      const executionRunRows = this.database.prepare(`
+        SELECT execution_run_id, task_id, dispatch_id, preparation_lease_id,
+               preparation_fencing_token, prepared_at
+        FROM project_task_execution_runs
+        ORDER BY task_id ASC
+      `).all() as unknown as ProjectTaskExecutionRunRow[];
 
       // Validate ordinary durable read shapes before making any change. Also
       // reject outbox references that do not resolve to exactly one task.
@@ -2091,6 +2179,20 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         }
         dispatchByTask.set(dispatch.taskId, dispatch);
       }
+      const executionRunByTask = new Map<string, ProjectTaskExecutionRunRecord>();
+      for (const row of executionRunRows) {
+        const executionRun = this.decodeExecutionRunRow(row);
+        if (!taskIds.has(executionRun.taskId) || executionRunByTask.has(executionRun.taskId)) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        const dispatch = dispatchByTask.get(executionRun.taskId);
+        if (
+          dispatch === undefined
+          || dispatch.dispatchId !== executionRun.dispatchId
+          || dispatch.consumedAt === undefined
+        ) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        executionRunByTask.set(executionRun.taskId, executionRun);
+      }
 
       let failedTaskIds: string[] = [];
       let preservedRecoverable = 0;
@@ -2102,9 +2204,18 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         const rawDispatch = typeof row.task_id === 'string'
           ? dispatchByTask.get(row.task_id)
           : undefined;
+        const rawExecutionRun = typeof row.task_id === 'string'
+          ? executionRunByTask.get(row.task_id)
+          : undefined;
+        if (rawDispatch?.consumedAt === undefined && rawExecutionRun !== undefined) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
         const couldBePreserved = row.status === 'accepted'
           && rawDispatch !== undefined
-          && rawDispatch.consumedAt === undefined;
+          && (
+            rawDispatch.consumedAt === undefined
+            || rawExecutionRun !== undefined
+          );
         let rowForDecode = row;
         if (!couldBePreserved && row.terminal_at === null && row.receipt_json !== null) {
           if (typeof row.receipt_json !== 'string') {
@@ -2127,7 +2238,12 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           continue;
         }
         const dispatch = dispatchByTask.get(task.taskId);
-        if (task.status === 'accepted' && dispatch !== undefined && dispatch.consumedAt === undefined) {
+        const executionRun = executionRunByTask.get(task.taskId);
+        if (
+          task.status === 'accepted'
+          && dispatch !== undefined
+          && (dispatch.consumedAt === undefined || executionRun !== undefined)
+        ) {
           preservedRecoverable += 1;
           continue;
         }
@@ -2271,8 +2387,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     });
   }
 
-  consumeTaskDispatch(input: ConsumeProjectTaskDispatchInput): ProjectTaskDispatchRecord {
-    return this.inTransaction(() => {
+  /** Dispatcher consumption logic for callers already holding BEGIN IMMEDIATE. */
+  private consumeTaskDispatchInTransaction(
+    input: ConsumeProjectTaskDispatchInput,
+    operationTime?: number,
+  ): ProjectTaskDispatchRecord {
       if (!isRecord(input)) throw new Error(PROJECT_TASK_DISPATCH_ERRORS.invalidInput);
       const keys = Object.keys(input);
       if (
@@ -2333,7 +2452,7 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       if (!this.leaseAuthorityMatches(current, authority)) {
         throw new Error(PROJECT_TASK_DISPATCH_ERRORS.authorityMismatch);
       }
-      const now = this.now();
+      const now = operationTime ?? this.now();
       if (!Number.isSafeInteger(now) || now < 0) {
         throw new Error(PROJECT_TASK_DISPATCH_ERRORS.invalidInput);
       }
@@ -2350,6 +2469,135 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       const updated = this.selectDispatchRow(input.dispatchId);
       if (updated === undefined) throw new Error(PROJECT_TASK_DISPATCH_ERRORS.corruptRecord);
       return this.decodeDispatchRow(updated);
+  }
+
+  consumeTaskDispatch(input: ConsumeProjectTaskDispatchInput): ProjectTaskDispatchRecord {
+    return this.inTransaction(() => this.consumeTaskDispatchInTransaction(input));
+  }
+
+  prepareTaskExecutionRun(
+    input: PrepareProjectTaskExecutionRunInput,
+  ): ProjectTaskExecutionRunRecord {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.invalidInput);
+      const keys = Object.keys(input);
+      if (
+        keys.length !== 5
+        || !keys.every((key) => [
+          'dispatchId', 'taskId', 'leaseOwner', 'leaseId', 'fencingToken',
+        ].includes(key))
+        || typeof input.dispatchId !== 'string'
+        || !PROJECT_TASK_ID.test(input.dispatchId)
+        || !this.validLeaseAuthority({
+          taskId: input.taskId,
+          leaseOwner: input.leaseOwner,
+          leaseId: input.leaseId,
+          fencingToken: input.fencingToken,
+        })
+      ) throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.invalidInput);
+
+      const authority: ProjectTaskLeaseAuthority = {
+        taskId: input.taskId,
+        leaseOwner: input.leaseOwner,
+        leaseId: input.leaseId,
+        fencingToken: input.fencingToken,
+      };
+      const existingRow = this.selectExecutionRunByTaskRow(input.taskId);
+      if (existingRow !== undefined) {
+        const existing = this.decodeExecutionRunRow(existingRow);
+        const generationRow = this.selectLeaseGenerationRow(
+          existing.taskId,
+          existing.preparationLeaseId,
+          existing.preparationFencingToken,
+        );
+        if (generationRow === undefined) throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.corruptRecord);
+        const generation = this.decodeLeaseRow(generationRow);
+        if (
+          existing.dispatchId !== input.dispatchId
+          || existing.preparationLeaseId !== input.leaseId
+          || existing.preparationFencingToken !== input.fencingToken
+          || !this.leaseAuthorityMatches(generation, authority)
+        ) throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.authorityMismatch);
+        return existing;
+      }
+
+      const task = this.selectRow(input.taskId);
+      if (task === undefined) throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.taskNotFound);
+      if (task.status !== 'accepted' || task.terminal_at !== null) {
+        throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.taskUnavailable);
+      }
+      const dispatchRow = this.selectDispatchRow(input.dispatchId);
+      if (dispatchRow === undefined) throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.dispatchNotFound);
+      const dispatch = this.decodeDispatchRow(dispatchRow);
+      if (dispatch.taskId !== input.taskId) {
+        throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.authorityMismatch);
+      }
+      if (dispatch.consumedAt !== undefined) {
+        // Historical consumed rows without a run retain their ambiguity.
+        throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.dispatchUnavailable);
+      }
+
+      const operationTime = this.now();
+      const consumed = this.consumeTaskDispatchInTransaction(input, operationTime);
+      if (consumed.consumedAt === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.corruptRecord);
+      }
+      const executionRunId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_execution_runs (
+          execution_run_id, task_id, dispatch_id, preparation_lease_id,
+          preparation_fencing_token, prepared_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        executionRunId,
+        input.taskId,
+        input.dispatchId,
+        input.leaseId,
+        input.fencingToken,
+        consumed.consumedAt,
+      );
+      const inserted = this.selectExecutionRunRow(executionRunId);
+      if (inserted === undefined) throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.corruptRecord);
+      return this.decodeExecutionRunRow(inserted);
+    });
+  }
+
+  readTaskExecutionRun(executionRunId: string): ProjectTaskExecutionRunRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof executionRunId !== 'string' || !PROJECT_TASK_ID.test(executionRunId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionRunRow(executionRunId);
+      return row === undefined ? undefined : this.decodeExecutionRunRow(row);
+    });
+  }
+
+  readTaskExecutionRunByTask(taskId: string): ProjectTaskExecutionRunRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionRunByTaskRow(taskId);
+      return row === undefined ? undefined : this.decodeExecutionRunRow(row);
+    });
+  }
+
+  listPreparedTaskExecutionRuns(limit: number): ProjectTaskExecutionRunRecord[] {
+    return this.inTransaction(() => {
+      if (
+        typeof limit !== 'number'
+        || !Number.isSafeInteger(limit)
+        || limit < 1
+        || limit > PROJECT_TASK_EXECUTION_RUN_MAX_LIST_LIMIT
+      ) throw new Error(PROJECT_TASK_EXECUTION_RUN_ERRORS.invalidInput);
+      const rows = this.database.prepare(`
+        SELECT execution_run_id, task_id, dispatch_id, preparation_lease_id,
+               preparation_fencing_token, prepared_at
+        FROM project_task_execution_runs
+        ORDER BY prepared_at ASC, execution_run_id ASC
+        LIMIT ?
+      `).all(limit) as unknown as ProjectTaskExecutionRunRow[];
+      return rows.map((row) => this.decodeExecutionRunRow(row));
     });
   }
 

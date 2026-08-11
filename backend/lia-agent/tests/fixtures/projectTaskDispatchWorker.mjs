@@ -13,6 +13,8 @@ try {
     result = store.claimTaskDispatch(workerData.input);
   } else if (workerData.action === 'consume') {
     result = store.consumeTaskDispatch(workerData.input);
+  } else if (workerData.action === 'prepare') {
+    result = store.prepareTaskExecutionRun(workerData.input);
   } else {
     throw new Error('invalid_worker_action');
   }

@@ -9,7 +9,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION = 4;
 export const PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION = 5;
 export const PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION = 6;
 export const PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION = 7;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 8;
+export const PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION = 8;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 9;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -95,6 +96,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -630,7 +632,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   }
 
   if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION) {
-    migrate(PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION, `
       CREATE TABLE project_task_dispatch_outbox (
         dispatch_id TEXT PRIMARY KEY CHECK (
           length(dispatch_id) = 36
@@ -715,6 +717,69 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       BEFORE DELETE ON project_task_dispatch_outbox
       BEGIN
         SELECT RAISE(ABORT, 'project_task_dispatch_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+      CREATE TABLE project_task_execution_runs (
+        execution_run_id TEXT PRIMARY KEY CHECK (
+          length(execution_run_id) = 36
+          AND substr(execution_run_id, 9, 1) = '-'
+          AND substr(execution_run_id, 14, 1) = '-'
+          AND substr(execution_run_id, 19, 1) = '-'
+          AND substr(execution_run_id, 24, 1) = '-'
+          AND execution_run_id = lower(execution_run_id)
+          AND replace(execution_run_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        dispatch_id TEXT NOT NULL UNIQUE CHECK (length(dispatch_id) = 36),
+        preparation_lease_id TEXT NOT NULL CHECK (length(preparation_lease_id) = 36),
+        preparation_fencing_token INTEGER NOT NULL CHECK (
+          preparation_fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        prepared_at INTEGER NOT NULL CHECK (prepared_at BETWEEN 0 AND 9007199254740991),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (dispatch_id) REFERENCES project_task_dispatch_outbox(dispatch_id),
+        FOREIGN KEY (preparation_lease_id) REFERENCES project_task_lease_generations(lease_id),
+        FOREIGN KEY (task_id, preparation_fencing_token)
+          REFERENCES project_task_lease_generations(task_id, fencing_token)
+      ) STRICT;
+
+      CREATE INDEX project_task_execution_runs_prepared
+      ON project_task_execution_runs(prepared_at ASC, execution_run_id ASC);
+
+      CREATE TRIGGER project_task_execution_runs_validate_insert
+      BEFORE INSERT ON project_task_execution_runs
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_dispatch_outbox AS dispatch
+          JOIN project_task_lease_generations AS lease
+            ON lease.task_id = dispatch.task_id
+           AND lease.lease_id = dispatch.consumed_lease_id
+           AND lease.fencing_token = dispatch.consumed_fencing_token
+          WHERE dispatch.dispatch_id = NEW.dispatch_id
+            AND dispatch.task_id = NEW.task_id
+            AND dispatch.consumed_at IS NOT NULL
+            AND dispatch.consumed_lease_id = NEW.preparation_lease_id
+            AND dispatch.consumed_fencing_token = NEW.preparation_fencing_token
+            AND dispatch.consumed_at = NEW.prepared_at
+        ) THEN RAISE(ABORT, 'project_task_execution_run_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_execution_runs_immutable_update
+      BEFORE UPDATE ON project_task_execution_runs
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_run_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_runs_immutable_delete
+      BEFORE DELETE ON project_task_execution_runs
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_run_immutable');
       END
     `);
   }

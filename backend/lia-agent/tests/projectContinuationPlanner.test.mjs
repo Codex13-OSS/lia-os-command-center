@@ -522,8 +522,9 @@ test('legacy V4 database migrates additively and legacy tasks remain unchanged',
     store.close();
 
     const legacy = new DatabaseSync(databasePath);
-    // Remove V8/V7/V6 additive relations before reconstructing an authentic V4 fixture.
+    // Remove V9/V8/V7/V6 additive relations before reconstructing an authentic V4 fixture.
     legacy.exec(`
+      DROP TABLE project_task_execution_runs;
       DROP TABLE project_task_dispatch_outbox;
       DROP TRIGGER project_task_lease_validate_insert;
       DROP TRIGGER project_task_lease_identity_immutable;
