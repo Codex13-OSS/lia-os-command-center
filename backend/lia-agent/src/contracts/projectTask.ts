@@ -164,3 +164,15 @@ export interface ProjectTaskStore {
 export interface ProjectTaskReconciler {
   reconcileInterruptedTasks(): number;
 }
+
+/** Aggregate-only restart recovery outcome. It conveys no execution authority. */
+export type ProjectTaskRestartRecoveryResult = {
+  preservedRecoverable: number;
+  failedInterrupted: number;
+  terminalUnchanged: number;
+};
+
+/** Optional durable, restart-safe recovery capability. */
+export interface ProjectTaskRestartSafeReconciler {
+  reconcileRestartSafeTasks(): ProjectTaskRestartRecoveryResult;
+}

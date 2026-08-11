@@ -82,6 +82,8 @@ import type {
   ActiveTaskStage,
   ProjectTaskRecord,
   ProjectTaskReconciler,
+  ProjectTaskRestartRecoveryResult,
+  ProjectTaskRestartSafeReconciler,
   ProjectTaskLineage,
   ProjectTaskStage,
   ProjectTaskStore,
@@ -264,7 +266,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -767,6 +769,13 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     }
 
     if (!isActiveTaskCompletedStages(parsed)) {
+      throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    }
+
+    // No durable evidence is represented by absence of the sidecar row.
+    // Persisting [] is contradictory durable state even though [] remains a
+    // valid in-memory representation before any active stage has completed.
+    if (parsed.length === 0) {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
     }
 
@@ -2022,6 +2031,136 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       `).run();
 
       return Number(result.changes);
+    });
+  }
+
+  /**
+   * Atomically applies the conservative restart-safe recovery matrix.
+   * Only accepted tasks with an intact pending dispatch are preserved. No
+   * dispatch or lease operation is performed and terminal tasks are untouched.
+   */
+  reconcileRestartSafeTasks(): ProjectTaskRestartRecoveryResult {
+    return this.inTransaction(() => {
+      const rows = this.database.prepare(`
+        SELECT task_id, fingerprint, intent_json, status, created_at, updated_at,
+               terminal_at, receipt_json, error_json
+        FROM project_tasks
+        ORDER BY task_id ASC
+      `).all() as unknown as ProjectTaskRow[];
+      const dispatchRows = this.database.prepare(`
+        SELECT dispatch_id, task_id, created_at, consumed_at,
+               consumed_lease_id, consumed_fencing_token
+        FROM project_task_dispatch_outbox
+        ORDER BY task_id ASC
+      `).all() as unknown as ProjectTaskDispatchRow[];
+      const traceRows = this.database.prepare(`
+        SELECT task_id FROM project_task_active_stage_traces
+        ORDER BY task_id ASC
+      `).all() as unknown as Array<{ task_id: unknown }>;
+
+      // Validate ordinary durable read shapes before making any change. Also
+      // reject outbox references that do not resolve to exactly one task.
+      const taskIds = new Set(rows.map((row) => row.task_id));
+      for (const trace of traceRows) {
+        if (typeof trace.task_id !== 'string' || !taskIds.has(trace.task_id)) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+      }
+      const dispatchByTask = new Map<string, ProjectTaskDispatchRecord>();
+      for (const row of dispatchRows) {
+        const dispatch = this.decodeDispatchRow(row);
+        if (!taskIds.has(dispatch.taskId) || dispatchByTask.has(dispatch.taskId)) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        if (dispatch.consumedAt !== undefined) {
+          const generationRow = this.selectLeaseGenerationRow(
+            dispatch.taskId,
+            dispatch.consumedLeaseId as string,
+            dispatch.consumedFencingToken as number,
+          );
+          if (generationRow === undefined) {
+            throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+          }
+          const generation = this.decodeLeaseRow(generationRow);
+          if (
+            dispatch.consumedAt < generation.acquiredAt
+            || dispatch.consumedAt >= generation.leaseExpiresAt
+          ) {
+            throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+          }
+        }
+        dispatchByTask.set(dispatch.taskId, dispatch);
+      }
+
+      let failedTaskIds: string[] = [];
+      let preservedRecoverable = 0;
+      let terminalUnchanged = 0;
+      for (const row of rows) {
+        // A legacy nonterminal receipt is explicitly cleared when that task is
+        // failed. It must still be a valid safe receipt, and it is never
+        // tolerated on a task that could otherwise be preserved.
+        const rawDispatch = typeof row.task_id === 'string'
+          ? dispatchByTask.get(row.task_id)
+          : undefined;
+        const couldBePreserved = row.status === 'accepted'
+          && rawDispatch !== undefined
+          && rawDispatch.consumedAt === undefined;
+        let rowForDecode = row;
+        if (!couldBePreserved && row.terminal_at === null && row.receipt_json !== null) {
+          if (typeof row.receipt_json !== 'string') {
+            throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+          }
+          let receipt: unknown;
+          try {
+            receipt = JSON.parse(row.receipt_json);
+          } catch {
+            throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+          }
+          if (!isSafeTaskReceipt(receipt)) {
+            throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+          }
+          rowForDecode = { ...row, receipt_json: null };
+        }
+        const task = this.decodeRow(rowForDecode);
+        if (task.status === 'completed' || task.status === 'failed') {
+          terminalUnchanged += 1;
+          continue;
+        }
+        const dispatch = dispatchByTask.get(task.taskId);
+        if (task.status === 'accepted' && dispatch !== undefined && dispatch.consumedAt === undefined) {
+          preservedRecoverable += 1;
+          continue;
+        }
+        failedTaskIds = [...failedTaskIds, task.taskId];
+      }
+
+      const interrupted: SafeTaskError = {
+        code: 'workflow_interrupted',
+        message: SAFE_TASK_ERROR_MESSAGES.workflow_interrupted,
+      };
+      const now = this.now();
+      const fail = this.database.prepare(`
+        UPDATE project_tasks
+        SET status = 'failed', error_json = ?, receipt_json = NULL,
+            updated_at = ?, terminal_at = ?
+        WHERE task_id = ? AND status NOT IN ('completed', 'failed')
+      `);
+      const clearTrace = this.database.prepare(
+        'DELETE FROM project_task_active_stage_traces WHERE task_id = ?',
+      );
+      for (const taskId of failedTaskIds) {
+        const result = fail.run(JSON.stringify(interrupted), now, now, taskId);
+        if (Number(result.changes) !== 1) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        clearTrace.run(taskId);
+      }
+
+      return {
+        preservedRecoverable,
+        failedInterrupted: failedTaskIds.length,
+        terminalUnchanged,
+      };
     });
   }
 

@@ -4,15 +4,14 @@ import { createAgendaSqliteReadSource } from './services/agendaSqliteReadSource.
 import { createProjectRegistryFileSource } from './services/projectRegistryFileSource.js';
 import { createFileProjectVerificationRegistry } from './services/projectVerificationFileSource.js';
 import { createProjectTaskStore } from './services/projectTaskStoreFactory.js';
-import { reconcileInterruptedTasksIfSupported } from './services/projectTaskReconciliation.js';
+import { reconcileProjectTasksAtStartup } from './services/projectTaskReconciliation.js';
 
 const config = loadConfig();
 const projectTaskStore = createProjectTaskStore(config);
 
-// Reconcile tasks interrupted by a previous service restart before the app
-// starts listening. A failure here fails startup closed: app.listen never
-// runs and there is no silent fallback to the in-memory store.
-reconcileInterruptedTasksIfSupported(projectTaskStore);
+// Recover only provably pre-execution durable work before listening. Ambiguous
+// work fails closed, and a recovery failure prevents app.listen.
+reconcileProjectTasksAtStartup(projectTaskStore);
 
 const dependencies = {
   ...(config.agendaSqlitePath === ''

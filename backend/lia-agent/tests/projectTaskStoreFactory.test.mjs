@@ -7,7 +7,7 @@ import { createApp } from '../dist/app.js';
 import { loadConfig } from '../dist/config.js';
 import { InMemoryProjectTaskStore } from '../dist/services/inMemoryProjectTaskStore.js';
 import { ProjectTaskSqliteStore } from '../dist/services/projectTaskSqliteStore.js';
-import { hasReconcileInterruptedTasks, reconcileInterruptedTasksIfSupported } from '../dist/services/projectTaskReconciliation.js';
+import { hasReconcileInterruptedTasks, hasReconcileRestartSafeTasks, reconcileInterruptedTasksIfSupported } from '../dist/services/projectTaskReconciliation.js';
 import { createProjectTaskStore } from '../dist/services/projectTaskStoreFactory.js';
 
 const ID = '550e8400-e29b-41d4-a716-446655440000';
@@ -138,13 +138,16 @@ test('createProjectTaskStore selects SQLite when a path is configured', async ()
       assert.equal(store instanceof ProjectTaskSqliteStore, true);
       assert.equal(store instanceof InMemoryProjectTaskStore, false);
       assert.equal(hasReconcileInterruptedTasks(store), true);
+      assert.equal(hasReconcileRestartSafeTasks(store), true);
       assert.equal(typeof store.reconcileInterruptedTasks, 'function');
+      assert.equal(typeof store.reconcileRestartSafeTasks, 'function');
     } finally {
       store.close();
     }
 
     const memory = createProjectTaskStore(loadConfig({}));
     assert.equal(hasReconcileInterruptedTasks(memory), false);
+    assert.equal(hasReconcileRestartSafeTasks(memory), false);
     assert.equal(reconcileInterruptedTasksIfSupported(memory), 0);
   });
 });

@@ -7,6 +7,8 @@ import { loadConfig } from '../dist/config.js';
 import { InMemoryProjectTaskStore } from '../dist/services/inMemoryProjectTaskStore.js';
 import {
   hasReconcileInterruptedTasks,
+  hasReconcileRestartSafeTasks,
+  reconcileProjectTasksAtStartup,
   reconcileInterruptedTasksIfSupported,
 } from '../dist/services/projectTaskReconciliation.js';
 import { createProjectTaskStore } from '../dist/services/projectTaskStoreFactory.js';
@@ -72,11 +74,36 @@ test('reconcile failure propagates: no silent fallback to memory', () => {
   );
 });
 
+test('startup wrapper prefers restart-safe recovery, retains legacy fallback, and ignores memory', () => {
+  const calls = [];
+  const restartSafe = fakeStore({
+    reconcileRestartSafeTasks() {
+      calls.push('restart-safe');
+      return { preservedRecoverable: 2, failedInterrupted: 1, terminalUnchanged: 3 };
+    },
+    reconcileInterruptedTasks() {
+      calls.push('legacy');
+      return 99;
+    },
+  });
+  assert.equal(hasReconcileRestartSafeTasks(restartSafe), true);
+  assert.deepEqual(reconcileProjectTasksAtStartup(restartSafe), {
+    preservedRecoverable: 2, failedInterrupted: 1, terminalUnchanged: 3,
+  });
+  assert.deepEqual(calls, ['restart-safe']);
+  assert.deepEqual(reconcileProjectTasksAtStartup(fakeStore({ reconcileInterruptedTasks: () => 4 })), {
+    preservedRecoverable: 0, failedInterrupted: 4, terminalUnchanged: 0,
+  });
+  assert.deepEqual(reconcileProjectTasksAtStartup(new InMemoryProjectTaskStore()), {
+    preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 0,
+  });
+});
+
 test('bootstrap wiring reconciles before the server starts listening', async () => {
   const serverSource = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
-  const reconcileIndex = serverSource.indexOf('reconcileInterruptedTasksIfSupported(projectTaskStore)');
+  const reconcileIndex = serverSource.indexOf('reconcileProjectTasksAtStartup(projectTaskStore)');
   const listenIndex = serverSource.indexOf('const server = app.listen(');
-  assert.ok(reconcileIndex !== -1, 'server.ts must call reconcileInterruptedTasksIfSupported');
+  assert.ok(reconcileIndex !== -1, 'server.ts must call reconcileProjectTasksAtStartup');
   assert.ok(listenIndex !== -1, 'server.ts must call app.listen');
   assert.ok(reconcileIndex < listenIndex, 'reconciliation must run before app.listen');
   assert.match(serverSource, /from '\.\/services\/projectTaskReconciliation\.js'/);
@@ -95,7 +122,9 @@ test('bootstrap sequence reconciles a real SQLite store before serving', async (
     // This is exactly the sequence server.ts performs during bootstrap.
     const store = createProjectTaskStore(loadConfig({ LIA_PROJECT_TASK_SQLITE_PATH: databasePath }));
     try {
-      assert.equal(reconcileInterruptedTasksIfSupported(store), 2);
+      assert.deepEqual(reconcileProjectTasksAtStartup(store), {
+        preservedRecoverable: 0, failedInterrupted: 2, terminalUnchanged: 0,
+      });
       const first = store.get(ID);
       assert.equal(first.status, 'failed');
       assert.deepEqual(first.error, {
@@ -103,7 +132,9 @@ test('bootstrap sequence reconciles a real SQLite store before serving', async (
         message: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.',
       });
       assert.equal(store.get(ID2).status, 'failed');
-      assert.equal(reconcileInterruptedTasksIfSupported(store), 0);
+      assert.deepEqual(reconcileProjectTasksAtStartup(store), {
+        preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 2,
+      });
     } finally {
       store.close();
     }
