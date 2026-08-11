@@ -8,6 +8,7 @@ import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
 import type { SafeTaskStage } from '../contracts/projectTask.js';
 import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
+import type { ProjectOrchestrationProposal } from '../contracts/projectOrchestration.js';
 import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
 import type { HermesExecutionResult, HermesQueryExecutor } from './hermesExecutor.js';
 import { executeHermesSupervisor } from './hermesSupervisorExecutor.js';
@@ -86,6 +87,20 @@ export interface ProjectTaskWorkflowDependencies {
    * behavior and records nothing.
    */
   recordExternalLaunchResult?: (outcomeClass: ProjectTaskExecutionLaunchResultOutcome) => void | Promise<void>;
+  /**
+   * Optional durable post-Hermes validated-proposal snapshot seam (Layer 13).
+   * Invoked at most once per live workflow at the proposal_valid site with
+   * ONLY the normalized validated proposal object — never the raw Hermes
+   * response, prompts, capabilities, paths or credentials. It atomically
+   * durably confirms the proposal_valid outcome together with its snapshot
+   * BEFORE any local approval/blocked-action decision, handoff validation,
+   * capability check or Codex call. When it throws, the observed outcome could
+   * not be durably confirmed: the workflow fails closed as
+   * external_launch_outcome_unknown with zero Codex and zero Hermes retry.
+   * Without this dependency the proposal_valid site falls back to the legacy
+   * recordExternalLaunchResult behavior (direct/non-durable compatibility).
+   */
+  recordValidatedProposalResult?: (proposal: ProjectOrchestrationProposal) => void | Promise<void>;
 }
 
 const observe = async (dependencies: ProjectTaskWorkflowDependencies, stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => {
@@ -181,6 +196,20 @@ export async function executeProjectTaskWorkflow(
     if (dependencies.recordExternalLaunchResult === undefined) return true;
     try {
       await dependencies.recordExternalLaunchResult(outcomeClass);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // Layer 13: the validated-proposal snapshot seam is guarded by its own
+  // once-flag. It receives ONLY the normalized validated proposal object.
+  let validatedProposalRecorded = false;
+  const recordValidatedProposal = async (proposal: ProjectOrchestrationProposal): Promise<boolean> => {
+    if (validatedProposalRecorded) return true;
+    validatedProposalRecorded = true;
+    if (dependencies.recordValidatedProposalResult === undefined) return false;
+    try {
+      await dependencies.recordValidatedProposalResult(proposal);
       return true;
     } catch {
       return false;
@@ -320,8 +349,15 @@ export async function executeProjectTaskWorkflow(
   // record proposal_valid BEFORE any local approval/blocked-action decision,
   // handoff validation, capability check or Codex call. The receipt is
   // evidence only: it grants no approval, capability, Codex or retry
-  // authority.
-  if (!(await recordLaunchResult('proposal_valid'))) {
+  // authority. When the Layer 13 validated-proposal snapshot seam is present
+  // the proposal_valid Launch Result and its snapshot are persisted ATOMICALLY
+  // as one store operation; otherwise the legacy recordExternalLaunchResult
+  // behavior is kept (direct/non-durable workflow compatibility).
+  if (dependencies.recordValidatedProposalResult !== undefined) {
+    if (!(await recordValidatedProposal(validation.proposal))) {
+      return failOutcomeNotDurable();
+    }
+  } else if (!(await recordLaunchResult('proposal_valid'))) {
     return failOutcomeNotDurable();
   }
   if (validation.proposal.requiresHumanApproval || validation.proposal.blockedActions.length > 0) {

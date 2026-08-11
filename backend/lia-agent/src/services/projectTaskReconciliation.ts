@@ -53,7 +53,8 @@ export function reconcileProjectTasksAtStartup(
       preservedRecoverable: 0,
       failedInterrupted: store.reconcileInterruptedTasks(),
       terminalUnchanged: 0,
+      resumableAvailable: 0,
     };
   }
-  return { preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 0 };
+  return { preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 0, resumableAvailable: 0 };
 }

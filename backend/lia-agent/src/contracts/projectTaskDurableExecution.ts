@@ -5,14 +5,17 @@ import type { ProjectTaskExecutionRunStore } from './projectTaskExecutionRun.js'
 import type { ProjectTaskExecutionInvocationStore } from './projectTaskExecutionInvocation.js';
 import type { ProjectTaskExecutionLaunchAttemptStore } from './projectTaskExecutionLaunchAttempt.js';
 import type { ProjectTaskExecutionLaunchResultStore } from './projectTaskExecutionLaunchResult.js';
+import type { ProjectTaskValidatedProposalSnapshotStore } from './projectTaskValidatedProposalSnapshot.js';
 
 /**
  * Narrow composite durable-execution capability assembled from the existing
- * Layers 5-10 store interfaces plus the Layer 12 launch-result evidence store.
+ * Layers 5-10 store interfaces plus the Layer 12 launch-result evidence store
+ * and the Layer 13 validated-proposal snapshot store.
  *
  * It is worker/lease/dispatch/run/invocation provenance plus observed-outcome
- * evidence only. It grants no workflow, external-execution, project, or
- * capability authority, and it adds no authority metadata of its own.
+ * evidence plus validated-proposal snapshot evidence only. It grants no
+ * workflow, external-execution, project, capability, approval or Codex
+ * authority, and it adds no authority metadata of its own.
  */
 export type ProjectTaskDurableExecutionStore = ProjectTaskStore
   & ProjectTaskLeaseStore
@@ -20,7 +23,8 @@ export type ProjectTaskDurableExecutionStore = ProjectTaskStore
   & ProjectTaskExecutionRunStore
   & ProjectTaskExecutionInvocationStore
   & ProjectTaskExecutionLaunchAttemptStore
-  & ProjectTaskExecutionLaunchResultStore;
+  & ProjectTaskExecutionLaunchResultStore
+  & ProjectTaskValidatedProposalSnapshotStore;
 
 export const PROJECT_TASK_DURABLE_EXECUTION_ERRORS = {
   unsupportedStore: 'project_task_durable_execution_store_unsupported',

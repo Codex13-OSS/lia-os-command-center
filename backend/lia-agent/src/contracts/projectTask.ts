@@ -116,8 +116,9 @@ export const SAFE_TASK_ERROR_MESSAGES = {
   workflow_failed: 'La ejecución no pudo completarse.',
   workflow_interrupted: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.',
   external_launch_outcome_unknown: 'El lanzamiento externo quedó interrumpido y su resultado es desconocido; LÍA no lo relanza automáticamente.',
+  local_resume_available: 'Existe una propuesta validada almacenada de forma duradera; la tarea permanece en estado resumible pendiente de reevaluación de LÍA.',
 } as const satisfies Record<
-  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown',
+  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown' | 'local_resume_available',
   string
 >;
 export type SafeTaskErrorCode = keyof typeof SAFE_TASK_ERROR_MESSAGES;
@@ -171,6 +172,14 @@ export type ProjectTaskRestartRecoveryResult = {
   preservedRecoverable: number;
   failedInterrupted: number;
   terminalUnchanged: number;
+  /**
+   * Tasks preserved non-terminal with a validated proposal snapshot (Layer 13
+   * recovery case 4). They are durably "local resume available": zero Hermes,
+   * zero Codex, zero new attempt/result/lease operations were performed. The
+   * snapshot is evidence only; fresh LÍA policy evaluation is still mandatory
+   * before any later action.
+   */
+  resumableAvailable: number;
 };
 
 /** Optional durable, restart-safe recovery capability. */

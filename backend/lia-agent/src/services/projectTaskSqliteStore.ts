@@ -2,7 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { AutonomousV1CompletionMode } from '../contracts/autonomousAuthority.js';
+import type { ProjectOrchestrationExecutionMode } from '../contracts/projectOrchestration.js';
 import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
+import type { ProjectTaskBlockedCapability } from '../contracts/projectExecutor.js';
 import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
 import type {
   CreateContinuationAttemptInput,
@@ -105,6 +108,17 @@ import {
   PROJECT_TASK_EXECUTION_LAUNCH_RESULT_OUTCOME_SET,
 } from '../contracts/projectTaskExecutionLaunchResult.js';
 import type {
+  RecordValidatedProposalInput,
+  RecordValidatedProposalResult,
+  ProjectTaskValidatedProposalSnapshotRecord,
+  ProjectTaskValidatedProposalSnapshotStore,
+} from '../contracts/projectTaskValidatedProposalSnapshot.js';
+import {
+  PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_CANONICAL_VERSION,
+  PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS,
+  PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_MAX_LIST_LIMIT,
+} from '../contracts/projectTaskValidatedProposalSnapshot.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -175,6 +189,11 @@ const GOAL_TERMINAL_REASONS = new Set<string>(PROJECT_GOAL_TERMINAL_REASONS);
 const EVALUATION_DECISIONS = new Set<string>(PROJECT_GOAL_EVALUATION_DECISIONS);
 const EVALUATION_REASON_CODES = new Set<string>(PROJECT_GOAL_EVALUATION_REASON_CODES);
 const CONTINUATION_PLAN_REASON_CODES = new Set<string>(PROJECT_GOAL_CONTINUATION_PLAN_REASON_CODES);
+const SNAPSHOT_EXECUTION_MODES = new Set<string>(['direct', 'delegated']);
+const SNAPSHOT_COMPLETION_MODES = new Set<string>(['analyze', 'ready_for_review', 'complete']);
+const SNAPSHOT_BLOCKED_ACTIONS = new Set<string>([
+  'push', 'merge', 'deploy', 'production_write', 'database_write', 'secret_access',
+]);
 
 type ProjectTaskRow = {
   task_id: unknown;
@@ -299,11 +318,40 @@ type ProjectTaskExecutionLaunchResultRow = {
   recorded_at: unknown;
 };
 
+type ProjectTaskValidatedProposalSnapshotRow = {
+  snapshot_id: unknown;
+  launch_result_id: unknown;
+  launch_attempt_id: unknown;
+  invocation_id: unknown;
+  execution_run_id: unknown;
+  task_id: unknown;
+  canonical_proposal_json: unknown;
+  proposal_sha256: unknown;
+  canonical_version: unknown;
+  execution_mode: unknown;
+  completion_mode: unknown;
+  requires_human_approval: unknown;
+  blocked_actions_json: unknown;
+  recorded_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isNonNegativeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0;
+
+/** Storage-integrity shape check for the frozen canonical proposal JSON. */
+function isValidCanonicalProposalJson(value: string): boolean {
+  if (value.length < 1 || value.length > 131072) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  return isRecord(parsed);
+}
 
 function isSafeTaskReceipt(value: unknown): value is SafeTaskReceipt {
   if (!isRecord(value)) return false;
@@ -344,7 +392,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -486,6 +534,13 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
                task_id, outcome_class, recorded_at
         FROM project_task_execution_launch_results LIMIT 1
       `).all();
+      this.database.prepare(`
+        SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+               execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+               canonical_version, execution_mode, completion_mode,
+               requires_human_approval, blocked_actions_json, recorded_at
+        FROM project_task_validated_proposal_snapshots LIMIT 1
+      `).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
     }
@@ -515,6 +570,7 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         AND ? - terminal_at >= ?
         AND task_id NOT IN (SELECT task_id FROM project_task_lineage)
         AND task_id NOT IN (SELECT task_id FROM project_task_dispatch_outbox)
+        AND task_id NOT IN (SELECT task_id FROM project_task_validated_proposal_snapshots)
     `).run(this.now(), this.options.terminalTtlMs);
 
     this.database.prepare(`
@@ -695,6 +751,78 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
              task_id, outcome_class, recorded_at
       FROM project_task_execution_launch_results WHERE task_id = ?
     `).get(taskId) as unknown as ProjectTaskExecutionLaunchResultRow | undefined;
+  }
+
+  private selectValidatedProposalSnapshotRow(
+    snapshotId: string,
+  ): ProjectTaskValidatedProposalSnapshotRow | undefined {
+    return this.database.prepare(`
+      SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+             execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+             canonical_version, execution_mode, completion_mode,
+             requires_human_approval, blocked_actions_json, recorded_at
+      FROM project_task_validated_proposal_snapshots WHERE snapshot_id = ?
+    `).get(snapshotId) as unknown as ProjectTaskValidatedProposalSnapshotRow | undefined;
+  }
+
+  private selectValidatedProposalSnapshotByLaunchResultRow(
+    launchResultId: string,
+  ): ProjectTaskValidatedProposalSnapshotRow | undefined {
+    return this.database.prepare(`
+      SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+             execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+             canonical_version, execution_mode, completion_mode,
+             requires_human_approval, blocked_actions_json, recorded_at
+      FROM project_task_validated_proposal_snapshots WHERE launch_result_id = ?
+    `).get(launchResultId) as unknown as ProjectTaskValidatedProposalSnapshotRow | undefined;
+  }
+
+  private selectValidatedProposalSnapshotByLaunchAttemptRow(
+    launchAttemptId: string,
+  ): ProjectTaskValidatedProposalSnapshotRow | undefined {
+    return this.database.prepare(`
+      SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+             execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+             canonical_version, execution_mode, completion_mode,
+             requires_human_approval, blocked_actions_json, recorded_at
+      FROM project_task_validated_proposal_snapshots WHERE launch_attempt_id = ?
+    `).get(launchAttemptId) as unknown as ProjectTaskValidatedProposalSnapshotRow | undefined;
+  }
+
+  private selectValidatedProposalSnapshotByInvocationRow(
+    invocationId: string,
+  ): ProjectTaskValidatedProposalSnapshotRow | undefined {
+    return this.database.prepare(`
+      SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+             execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+             canonical_version, execution_mode, completion_mode,
+             requires_human_approval, blocked_actions_json, recorded_at
+      FROM project_task_validated_proposal_snapshots WHERE invocation_id = ?
+    `).get(invocationId) as unknown as ProjectTaskValidatedProposalSnapshotRow | undefined;
+  }
+
+  private selectValidatedProposalSnapshotByExecutionRunRow(
+    executionRunId: string,
+  ): ProjectTaskValidatedProposalSnapshotRow | undefined {
+    return this.database.prepare(`
+      SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+             execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+             canonical_version, execution_mode, completion_mode,
+             requires_human_approval, blocked_actions_json, recorded_at
+      FROM project_task_validated_proposal_snapshots WHERE execution_run_id = ?
+    `).get(executionRunId) as unknown as ProjectTaskValidatedProposalSnapshotRow | undefined;
+  }
+
+  private selectValidatedProposalSnapshotByTaskRow(
+    taskId: string,
+  ): ProjectTaskValidatedProposalSnapshotRow | undefined {
+    return this.database.prepare(`
+      SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+             execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+             canonical_version, execution_mode, completion_mode,
+             requires_human_approval, blocked_actions_json, recorded_at
+      FROM project_task_validated_proposal_snapshots WHERE task_id = ?
+    `).get(taskId) as unknown as ProjectTaskValidatedProposalSnapshotRow | undefined;
   }
 
   private decodeDispatchRow(row: ProjectTaskDispatchRow): ProjectTaskDispatchRecord {
@@ -918,6 +1046,84 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       outcomeClass: row.outcome_class as ProjectTaskExecutionLaunchResultOutcome,
       recordedAt: row.recorded_at,
     };
+  }
+
+  private decodeValidatedProposalSnapshotRow(
+    row: ProjectTaskValidatedProposalSnapshotRow,
+  ): ProjectTaskValidatedProposalSnapshotRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.corruptRecord);
+    if (typeof row.snapshot_id !== 'string' || !PROJECT_TASK_ID.test(row.snapshot_id)) throw corrupt();
+    if (typeof row.launch_result_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_result_id)) throw corrupt();
+    if (typeof row.launch_attempt_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_attempt_id)) throw corrupt();
+    if (typeof row.invocation_id !== 'string' || !PROJECT_TASK_ID.test(row.invocation_id)) throw corrupt();
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.canonical_proposal_json !== 'string' || !isValidCanonicalProposalJson(row.canonical_proposal_json)) {
+      throw corrupt();
+    }
+    if (typeof row.proposal_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(row.proposal_sha256)) throw corrupt();
+    if (row.canonical_version !== PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_CANONICAL_VERSION) throw corrupt();
+    if (typeof row.execution_mode !== 'string' || !SNAPSHOT_EXECUTION_MODES.has(row.execution_mode)) throw corrupt();
+    if (typeof row.completion_mode !== 'string' || !SNAPSHOT_COMPLETION_MODES.has(row.completion_mode)) throw corrupt();
+    if (row.requires_human_approval !== 0 && row.requires_human_approval !== 1) throw corrupt();
+    const blockedActions = this.decodeBlockedActionsJson(row.blocked_actions_json);
+    if (
+      typeof row.recorded_at !== 'number'
+      || !Number.isSafeInteger(row.recorded_at)
+      || row.recorded_at < 0
+    ) throw corrupt();
+
+    const resultRow = this.selectLaunchResultRow(row.launch_result_id);
+    if (resultRow === undefined) throw corrupt();
+    const result = this.decodeLaunchResultRow(resultRow);
+    if (
+      result.outcomeClass !== 'proposal_valid'
+      || result.launchAttemptId !== row.launch_attempt_id
+      || result.invocationId !== row.invocation_id
+      || result.executionRunId !== row.execution_run_id
+      || result.taskId !== row.task_id
+      || row.recorded_at < result.recordedAt
+    ) throw corrupt();
+    // decodeLaunchResultRow already verified the full attempt -> invocation ->
+    // run -> task lineage chain of the referenced result.
+    const taskRow = this.selectRow(row.task_id);
+    if (taskRow === undefined) throw corrupt();
+
+    return {
+      snapshotId: row.snapshot_id,
+      launchResultId: row.launch_result_id,
+      launchAttemptId: row.launch_attempt_id,
+      invocationId: row.invocation_id,
+      executionRunId: row.execution_run_id,
+      taskId: row.task_id,
+      canonicalProposalJson: row.canonical_proposal_json,
+      proposalSha256: row.proposal_sha256,
+      canonicalVersion: row.canonical_version,
+      executionMode: row.execution_mode as ProjectOrchestrationExecutionMode,
+      completionMode: row.completion_mode as AutonomousV1CompletionMode,
+      requiresHumanApproval: row.requires_human_approval === 1,
+      blockedActions,
+      recordedAt: row.recorded_at,
+    };
+  }
+
+  private decodeBlockedActionsJson(value: unknown): ProjectTaskBlockedCapability[] {
+    const corrupt = (): Error => new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.corruptRecord);
+    if (typeof value !== 'string' || value.length < 2 || value.length > 512) throw corrupt();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      throw corrupt();
+    }
+    if (!Array.isArray(parsed)) throw corrupt();
+    const actions: ProjectTaskBlockedCapability[] = [];
+    for (const action of parsed) {
+      if (typeof action !== 'string' || !SNAPSHOT_BLOCKED_ACTIONS.has(action)) throw corrupt();
+      if (actions.includes(action as ProjectTaskBlockedCapability)) throw corrupt();
+      actions.push(action as ProjectTaskBlockedCapability);
+    }
+    return actions;
   }
 
   private decodeLeaseRow(row: ProjectTaskLeaseRow): ProjectTaskLeaseRecord {
@@ -2469,12 +2675,21 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
    * is treated as an AMBIGUOUS EXTERNAL LAUNCH boundary and fails closed with
    * external_launch_outcome_unknown; it is never relaunched and no attempt,
    * dispatch, run, or lease operation is performed. When a durable launch
-   * result exists the external outcome is KNOWN: the task fails closed with
-   * the same safe outcome error (workflow_interrupted for proposal_valid
-   * because no automatic local resume exists), still with zero Hermes, zero
-   * Codex, zero lease/attempt/result operations. Terminal tasks are untouched.
-   * All launch-result relationships are validated before any task state is
-   * mutated; corrupt relationships abort the whole transaction atomically.
+   * result exists the external outcome is KNOWN: failure outcomes fail closed
+   * with the same safe outcome error, and a proposal_valid result WITHOUT a
+   * snapshot (V12-era/historical/corrupt state) fails closed with
+   * workflow_interrupted — never resumable, never upgraded. A proposal_valid
+   * result WITH a validated snapshot on a PRE-Codex task (status below
+   * 'codex', so the Codex call provably did not start) is PRESERVED
+   * non-terminal as durably resumable (case 4): status normalized to 'hermes',
+   * active trace ['planning','hermes'], zero Hermes, zero Codex, zero
+   * attempt/result/lease operations. A proposal_valid result WITH a snapshot
+   * on a POST-Codex task (status >= 'codex', Codex MAY have started) is NOT
+   * resumable and fails closed with workflow_interrupted (case 9): the
+   * snapshot is never replay permission for Codex. Terminal tasks are
+   * untouched. All launch-result and snapshot relationships are validated
+   * before any task state is mutated; corrupt relationships abort the whole
+   * transaction atomically.
    */
   reconcileRestartSafeTasks(): ProjectTaskRestartRecoveryResult {
     return this.inTransaction(() => {
@@ -2624,10 +2839,55 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         launchResultInvocationIds.add(result.invocationId);
         launchResultRunIds.add(result.executionRunId);
       }
+      const snapshotRows = this.database.prepare(`
+        SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+               execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+               canonical_version, execution_mode, completion_mode,
+               requires_human_approval, blocked_actions_json, recorded_at
+        FROM project_task_validated_proposal_snapshots
+        ORDER BY task_id ASC
+      `).all() as unknown as ProjectTaskValidatedProposalSnapshotRow[];
+      // Layer 13 snapshot pre-pass: EVERY snapshot must resolve to a
+      // proposal_valid result with identical lineage, a recomputed
+      // sha256(canonical) matching proposal_sha256, and exactly one snapshot
+      // per task/attempt/invocation/run/result. ANY violation aborts the WHOLE
+      // recovery transaction atomically (fail closed, zero partial
+      // terminalization) before any task state is mutated.
+      const snapshotByTask = new Map<string, ProjectTaskValidatedProposalSnapshotRecord>();
+      const snapshotResultIds = new Set<string>();
+      const snapshotAttemptIds = new Set<string>();
+      const snapshotInvocationIds = new Set<string>();
+      const snapshotRunIds = new Set<string>();
+      for (const row of snapshotRows) {
+        const snapshot = this.decodeValidatedProposalSnapshotRow(row);
+        const result = launchResultByTask.get(snapshot.taskId);
+        if (
+          !taskIds.has(snapshot.taskId)
+          || result === undefined
+          || result.outcomeClass !== 'proposal_valid'
+          || result.launchResultId !== snapshot.launchResultId
+          || result.launchAttemptId !== snapshot.launchAttemptId
+          || result.invocationId !== snapshot.invocationId
+          || result.executionRunId !== snapshot.executionRunId
+          || snapshotByTask.has(snapshot.taskId)
+          || snapshotResultIds.has(snapshot.launchResultId)
+          || snapshotAttemptIds.has(snapshot.launchAttemptId)
+          || snapshotInvocationIds.has(snapshot.invocationId)
+          || snapshotRunIds.has(snapshot.executionRunId)
+          || createHash('sha256').update(snapshot.canonicalProposalJson).digest('hex')
+            !== snapshot.proposalSha256
+        ) throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.corruptRecord);
+        snapshotByTask.set(snapshot.taskId, snapshot);
+        snapshotResultIds.add(snapshot.launchResultId);
+        snapshotAttemptIds.add(snapshot.launchAttemptId);
+        snapshotInvocationIds.add(snapshot.invocationId);
+        snapshotRunIds.add(snapshot.executionRunId);
+      }
 
       let failedTaskIds: string[] = [];
       let ambiguousLaunchTaskIds: string[] = [];
       let knownOutcomeTaskIds: Array<{ taskId: string; outcomeClass: ProjectTaskExecutionLaunchResultOutcome }> = [];
+      let resumableTaskIds: string[] = [];
       let preservedRecoverable = 0;
       let terminalUnchanged = 0;
       for (const row of rows) {
@@ -2684,6 +2944,23 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           const result = launchResultByTask.get(task.taskId);
           if (result === undefined) {
             ambiguousLaunchTaskIds = [...ambiguousLaunchTaskIds, task.taskId];
+          } else if (
+            result.outcomeClass === 'proposal_valid'
+            && snapshotByTask.has(task.taskId)
+            && (
+              task.status === 'accepted'
+              || task.status === 'planning'
+              || task.status === 'hermes'
+            )
+          ) {
+            // Layer 13 recovery case 4: a pre-Codex task (status below
+            // 'codex', so the Codex call is provably NOT started) carrying a
+            // validated proposal snapshot is PRESERVED non-terminal as
+            // durably resumable. Status is normalized to 'hermes' and the
+            // active trace to ['planning','hermes'] (idempotent). Zero Hermes,
+            // zero Codex, zero new attempt/result/lease operations. Approval
+            // and blocked-action facts stay gated via the snapshot.
+            resumableTaskIds = [...resumableTaskIds, task.taskId];
           } else {
             knownOutcomeTaskIds = [
               ...knownOutcomeTaskIds,
@@ -2762,12 +3039,36 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         }
         clearTrace.run(taskId);
       }
+      // Case 4: normalize preserved resumable tasks. The task stays
+      // non-terminal (no terminal_at, no error); status is normalized to
+      // 'hermes' and the active trace to ['planning'] (the stage BEFORE
+      // the current active status; the decode invariant requires completed
+      // stages to be strictly earlier than current status).
+      const resume = this.database.prepare(`
+        UPDATE project_tasks
+        SET status = 'hermes', updated_at = ?
+        WHERE task_id = ? AND status NOT IN ('completed', 'failed')
+      `);
+      const upsertTrace = this.database.prepare(`
+        INSERT INTO project_task_active_stage_traces (task_id, completed_stages_json)
+        VALUES (?, ?)
+        ON CONFLICT(task_id) DO UPDATE
+        SET completed_stages_json = excluded.completed_stages_json
+      `);
+      for (const taskId of resumableTaskIds) {
+        const result = resume.run(now, taskId);
+        if (Number(result.changes) !== 1) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        upsertTrace.run(taskId, JSON.stringify(['planning']));
+      }
 
       return {
         preservedRecoverable,
         failedInterrupted:
           failedTaskIds.length + ambiguousLaunchTaskIds.length + knownOutcomeTaskIds.length,
         terminalUnchanged,
+        resumableAvailable: resumableTaskIds.length,
       };
     });
   }
@@ -3612,6 +3913,262 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         LIMIT ?
       `).all(limit) as unknown as ProjectTaskExecutionLaunchResultRow[];
       return rows.map((row) => this.decodeLaunchResultRow(row));
+    });
+  }
+
+  /**
+   * ATOMIC first-write of the proposal_valid Launch Result AND its matching
+   * validated-proposal snapshot in ONE BEGIN IMMEDIATE transaction. The two
+   * rows appear together or neither appears; a crash before COMMIT rolls back
+   * both and a crash after COMMIT persists both, so a newly-created
+   * proposal_valid result can never exist without its V13 snapshot.
+   *
+   * Evidence only: the snapshot grants no approval, capability, Codex,
+   * retry, Hermes-relaunch or any other authority. Recording does NOT require
+   * a current/unexpired lease: the Launch Attempt already binds the admitted
+   * launch provenance and recorded_at >= boundary_crossed_at, exactly like
+   * recordTaskExecutionLaunchResult. Exact replay of the same lineage +
+   * canonical hash returns created=false with zero writes; a proposal_valid
+   * result WITHOUT a snapshot fails closed with atomicityViolation and is
+   * never backfilled into resumable state.
+   */
+  recordValidatedProposalResult(
+    input: RecordValidatedProposalInput,
+  ): RecordValidatedProposalResult {
+    return this.inTransaction(() => {
+      if (
+        !isRecord(input)
+        || Object.keys(input).length !== 10
+        || !Object.keys(input).every((key) => [
+          'launchAttemptId', 'invocationId', 'executionRunId', 'taskId',
+          'canonicalProposalJson', 'proposalSha256', 'executionMode',
+          'completionMode', 'requiresHumanApproval', 'blockedActions',
+        ].includes(key))
+        || typeof input.launchAttemptId !== 'string'
+        || !PROJECT_TASK_ID.test(input.launchAttemptId)
+        || typeof input.invocationId !== 'string'
+        || !PROJECT_TASK_ID.test(input.invocationId)
+        || typeof input.executionRunId !== 'string'
+        || !PROJECT_TASK_ID.test(input.executionRunId)
+        || typeof input.taskId !== 'string'
+        || !PROJECT_TASK_ID.test(input.taskId)
+        || typeof input.canonicalProposalJson !== 'string'
+        || !isValidCanonicalProposalJson(input.canonicalProposalJson)
+        || typeof input.proposalSha256 !== 'string'
+        || !/^[0-9a-f]{64}$/.test(input.proposalSha256)
+        || typeof input.executionMode !== 'string'
+        || !SNAPSHOT_EXECUTION_MODES.has(input.executionMode)
+        || typeof input.completionMode !== 'string'
+        || !SNAPSHOT_COMPLETION_MODES.has(input.completionMode)
+        || typeof input.requiresHumanApproval !== 'boolean'
+        || !Array.isArray(input.blockedActions)
+        || !input.blockedActions.every(
+          (action) => typeof action === 'string' && SNAPSHOT_BLOCKED_ACTIONS.has(action),
+        )
+        || input.blockedActions.some((action, index) => input.blockedActions.indexOf(action) !== index)
+      ) throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+
+      // Canonical-integrity checks: the fingerprint is recomputed in the store
+      // over the EXACT stored bytes; a mismatch is an inconsistent input.
+      const recomputed = createHash('sha256').update(input.canonicalProposalJson).digest('hex');
+      if (recomputed !== input.proposalSha256) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+      const blockedActionsJson = JSON.stringify(input.blockedActions);
+      if (blockedActionsJson.length > 512) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+
+      const existingByAttempt = this.selectLaunchResultByAttemptRow(input.launchAttemptId);
+      if (existingByAttempt !== undefined) {
+        const existing = this.decodeLaunchResultRow(existingByAttempt);
+        if (
+          existing.invocationId !== input.invocationId
+          || existing.executionRunId !== input.executionRunId
+          || existing.taskId !== input.taskId
+          || existing.outcomeClass !== 'proposal_valid'
+        ) throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.contradictory);
+        const existingSnapshot = this.selectValidatedProposalSnapshotByLaunchAttemptRow(
+          input.launchAttemptId,
+        );
+        if (existingSnapshot === undefined) {
+          // A proposal_valid result WITHOUT a snapshot is V12-era or corrupt
+          // state. V13 never produces it and it must NOT be backfilled into a
+          // resumable state: fail closed.
+          throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.atomicityViolation);
+        }
+        const snapshot = this.decodeValidatedProposalSnapshotRow(existingSnapshot);
+        if (
+          snapshot.canonicalProposalJson !== input.canonicalProposalJson
+          || snapshot.proposalSha256 !== input.proposalSha256
+        ) throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.contradictory);
+        return { snapshot, created: false };
+      }
+      const existingByInvocation = this.selectLaunchResultByInvocationRow(input.invocationId);
+      const existingByRun = this.selectLaunchResultByRunRow(input.executionRunId);
+      const existingByTask = this.selectLaunchResultByTaskRow(input.taskId);
+      if (
+        existingByInvocation !== undefined
+        || existingByRun !== undefined
+        || existingByTask !== undefined
+      ) throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.contradictory);
+
+      const attemptRow = this.selectLaunchAttemptRow(input.launchAttemptId);
+      if (attemptRow === undefined) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.launchResultNotFound);
+      }
+      const attempt = this.decodeLaunchAttemptRow(attemptRow);
+      if (
+        attempt.invocationId !== input.invocationId
+        || attempt.executionRunId !== input.executionRunId
+        || attempt.taskId !== input.taskId
+      ) throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.lineageMismatch);
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+      const recordedAt = Math.max(now, attempt.boundaryCrossedAt);
+      const launchResultId = randomUUID();
+      const snapshotId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_execution_launch_results (
+          launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+          task_id, outcome_class, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        launchResultId,
+        input.launchAttemptId,
+        input.invocationId,
+        input.executionRunId,
+        input.taskId,
+        'proposal_valid',
+        recordedAt,
+      );
+      this.database.prepare(`
+        INSERT INTO project_task_validated_proposal_snapshots (
+          snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+          execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+          canonical_version, execution_mode, completion_mode,
+          requires_human_approval, blocked_actions_json, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        snapshotId,
+        launchResultId,
+        input.launchAttemptId,
+        input.invocationId,
+        input.executionRunId,
+        input.taskId,
+        input.canonicalProposalJson,
+        input.proposalSha256,
+        PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_CANONICAL_VERSION,
+        input.executionMode,
+        input.completionMode,
+        input.requiresHumanApproval ? 1 : 0,
+        blockedActionsJson,
+        recordedAt,
+      );
+      const insertedResult = this.selectLaunchResultRow(launchResultId);
+      const insertedSnapshot = this.selectValidatedProposalSnapshotRow(snapshotId);
+      if (insertedResult === undefined || insertedSnapshot === undefined) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.corruptRecord);
+      }
+      return { snapshot: this.decodeValidatedProposalSnapshotRow(insertedSnapshot), created: true };
+    });
+  }
+
+  readValidatedProposalSnapshot(
+    snapshotId: string,
+  ): ProjectTaskValidatedProposalSnapshotRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof snapshotId !== 'string' || !PROJECT_TASK_ID.test(snapshotId)) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+      const row = this.selectValidatedProposalSnapshotRow(snapshotId);
+      return row === undefined ? undefined : this.decodeValidatedProposalSnapshotRow(row);
+    });
+  }
+
+  readValidatedProposalSnapshotByLaunchResult(
+    launchResultId: string,
+  ): ProjectTaskValidatedProposalSnapshotRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof launchResultId !== 'string' || !PROJECT_TASK_ID.test(launchResultId)) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+      const row = this.selectValidatedProposalSnapshotByLaunchResultRow(launchResultId);
+      return row === undefined ? undefined : this.decodeValidatedProposalSnapshotRow(row);
+    });
+  }
+
+  readValidatedProposalSnapshotByLaunchAttempt(
+    launchAttemptId: string,
+  ): ProjectTaskValidatedProposalSnapshotRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof launchAttemptId !== 'string' || !PROJECT_TASK_ID.test(launchAttemptId)) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+      const row = this.selectValidatedProposalSnapshotByLaunchAttemptRow(launchAttemptId);
+      return row === undefined ? undefined : this.decodeValidatedProposalSnapshotRow(row);
+    });
+  }
+
+  readValidatedProposalSnapshotByInvocation(
+    invocationId: string,
+  ): ProjectTaskValidatedProposalSnapshotRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof invocationId !== 'string' || !PROJECT_TASK_ID.test(invocationId)) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+      const row = this.selectValidatedProposalSnapshotByInvocationRow(invocationId);
+      return row === undefined ? undefined : this.decodeValidatedProposalSnapshotRow(row);
+    });
+  }
+
+  readValidatedProposalSnapshotByExecutionRun(
+    executionRunId: string,
+  ): ProjectTaskValidatedProposalSnapshotRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof executionRunId !== 'string' || !PROJECT_TASK_ID.test(executionRunId)) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+      const row = this.selectValidatedProposalSnapshotByExecutionRunRow(executionRunId);
+      return row === undefined ? undefined : this.decodeValidatedProposalSnapshotRow(row);
+    });
+  }
+
+  readValidatedProposalSnapshotByTask(
+    taskId: string,
+  ): ProjectTaskValidatedProposalSnapshotRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      }
+      const row = this.selectValidatedProposalSnapshotByTaskRow(taskId);
+      return row === undefined ? undefined : this.decodeValidatedProposalSnapshotRow(row);
+    });
+  }
+
+  listValidatedProposalSnapshots(
+    limit: number,
+  ): ProjectTaskValidatedProposalSnapshotRecord[] {
+    return this.inTransaction(() => {
+      if (
+        typeof limit !== 'number'
+        || !Number.isSafeInteger(limit)
+        || limit < 1
+        || limit > PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_MAX_LIST_LIMIT
+      ) throw new Error(PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_ERRORS.invalidInput);
+      const rows = this.database.prepare(`
+        SELECT snapshot_id, launch_result_id, launch_attempt_id, invocation_id,
+               execution_run_id, task_id, canonical_proposal_json, proposal_sha256,
+               canonical_version, execution_mode, completion_mode,
+               requires_human_approval, blocked_actions_json, recorded_at
+        FROM project_task_validated_proposal_snapshots
+        ORDER BY recorded_at ASC, snapshot_id ASC
+        LIMIT ?
+      `).all(limit) as unknown as ProjectTaskValidatedProposalSnapshotRow[];
+      return rows.map((row) => this.decodeValidatedProposalSnapshotRow(row));
     });
   }
 

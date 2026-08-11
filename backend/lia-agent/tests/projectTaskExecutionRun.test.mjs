@@ -330,10 +330,10 @@ test('V8 to V12 migration preserves prior durable chain and legacy consumed ambi
       'project_tasks', 'project_goals', 'project_task_lineage', 'project_goal_evaluations',
       'project_goal_continuation_plans', 'project_task_lease_generations', 'project_task_dispatch_outbox',
     ].map((table) => [table, v8.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get().total]));
-    v8.exec('DROP TRIGGER project_task_execution_launch_results_validate_insert; DROP TRIGGER project_task_execution_launch_results_immutable_update; DROP TRIGGER project_task_execution_launch_results_immutable_delete; DROP INDEX project_task_execution_launch_results_recorded; DROP TABLE project_task_execution_launch_results; DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; DROP TABLE project_task_execution_runs; DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release; DROP TRIGGER project_task_execution_launch_attempts_validate_insert; DROP TRIGGER project_task_execution_launch_attempts_immutable_update; DROP TRIGGER project_task_execution_launch_attempts_immutable_delete; DROP INDEX project_task_execution_launch_attempts_crossed; DROP TABLE project_task_execution_launch_attempts; UPDATE project_task_meta SET schema_version = 8 WHERE singleton = 1');
+    v8.exec('DROP TRIGGER project_task_validated_proposal_snapshots_validate_insert; DROP TRIGGER project_task_validated_proposal_snapshots_immutable_update; DROP TRIGGER project_task_validated_proposal_snapshots_immutable_delete; DROP INDEX project_task_validated_proposal_snapshots_recorded; DROP TABLE project_task_validated_proposal_snapshots; DROP TRIGGER project_task_execution_launch_results_validate_insert; DROP TRIGGER project_task_execution_launch_results_immutable_update; DROP TRIGGER project_task_execution_launch_results_immutable_delete; DROP INDEX project_task_execution_launch_results_recorded; DROP TABLE project_task_execution_launch_results; DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; DROP TABLE project_task_execution_runs; DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release; DROP TRIGGER project_task_execution_launch_attempts_validate_insert; DROP TRIGGER project_task_execution_launch_attempts_immutable_update; DROP TRIGGER project_task_execution_launch_attempts_immutable_delete; DROP INDEX project_task_execution_launch_attempts_crossed; DROP TABLE project_task_execution_launch_attempts; UPDATE project_task_meta SET schema_version = 8 WHERE singleton = 1');
     v8.close();
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 200 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 12);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 13);
     assert.equal(migrated.readTaskExecutionRunByTask(TASK_A), undefined);
     migrated.close();
     const check = new DatabaseSync(databasePath);
@@ -363,13 +363,13 @@ test('recovery preserves a valid prepared boundary across reopen and remains ide
       fencingToken: prepared.lease.fencingToken,
     });
     const taskBefore = first.get(TASK_A);
-    assert.deepEqual(first.reconcileRestartSafeTasks(), { preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0 });
-    assert.deepEqual(first.reconcileRestartSafeTasks(), { preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0 });
+    assert.deepEqual(first.reconcileRestartSafeTasks(), { preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0, resumableAvailable: 0 });
+    assert.deepEqual(first.reconcileRestartSafeTasks(), { preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0, resumableAvailable: 0 });
     assert.deepEqual(first.get(TASK_A), taskBefore);
     first.close();
     const reopened = new ProjectTaskSqliteStore({ databasePath, now: () => 99_000 });
     assert.deepEqual(reopened.readTaskExecutionRun(run.executionRunId), run);
-    assert.deepEqual(reopened.reconcileRestartSafeTasks(), { preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0 });
+    assert.deepEqual(reopened.reconcileRestartSafeTasks(), { preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0, resumableAvailable: 0 });
     reopened.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

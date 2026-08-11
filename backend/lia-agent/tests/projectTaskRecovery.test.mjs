@@ -64,7 +64,7 @@ test('CASE A accepted without outbox fails closed and does not manufacture dispa
   await withDatabase(({ store }) => {
     create(store, IDS[0]);
     assert.deepEqual(store.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0,
+      preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0, resumableAvailable: 0,
     });
     assert.equal(store.get(IDS[0]).status, 'failed');
     assert.deepEqual(store.get(IDS[0]).error, interrupted);
@@ -80,7 +80,7 @@ test('CASE B accepted with pending outbox and no lease is preserved exactly', as
     const outboxBefore = durableRows(databasePath, 'project_task_dispatch_outbox', IDS[0]);
     setNow(9_000);
     assert.deepEqual(store.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0,
+      preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0, resumableAvailable: 0,
     });
     assert.deepEqual(store.get(IDS[0]), taskBefore);
     assert.deepEqual(store.readTaskDispatch(dispatch.dispatchId), dispatch);
@@ -101,7 +101,7 @@ test('CASE C valid lease and CASE D expired lease remain byte-for-byte unchanged
     const expiredBefore = durableRows(databasePath, 'project_task_lease_generations', IDS[1]);
     setNow(2_000);
     assert.deepEqual(store.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 2, failedInterrupted: 0, terminalUnchanged: 0,
+      preservedRecoverable: 2, failedInterrupted: 0, terminalUnchanged: 0, resumableAvailable: 0,
     });
     assert.deepEqual(store.readTaskLease(IDS[0]), valid);
     assert.deepEqual(store.readTaskLease(IDS[1]), expired);
@@ -139,7 +139,7 @@ test('CASE F/G and every supported post-accepted nonterminal stage fail closed',
       store.transition(IDS[index], stage);
     });
     assert.deepEqual(store.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 0, failedInterrupted: stages.length, terminalUnchanged: 0,
+      preservedRecoverable: 0, failedInterrupted: stages.length, terminalUnchanged: 0, resumableAvailable: 0,
     });
     for (const id of IDS.slice(0, stages.length)) {
       assert.equal(store.get(id).status, 'failed');
@@ -158,7 +158,7 @@ test('CASE H completed and failed records and timestamps remain identical', asyn
     const before = [store.get(IDS[0]), store.get(IDS[1])];
     setNow(8_000);
     assert.deepEqual(store.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 2,
+      preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 2, resumableAvailable: 0,
     });
     assert.deepEqual([store.get(IDS[0]), store.get(IDS[1])], before);
   });
@@ -173,12 +173,12 @@ test('recovery is idempotent and durable across a real SQLite close/reopen', asy
     const dispatch = first.enqueueTaskDispatch(IDS[0]);
     create(first, IDS[1], 'ambiguous');
     assert.deepEqual(first.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 1, failedInterrupted: 1, terminalUnchanged: 0,
+      preservedRecoverable: 1, failedInterrupted: 1, terminalUnchanged: 0, resumableAvailable: 0,
     });
     const preserved = first.get(IDS[0]);
     const failed = first.get(IDS[1]);
     assert.deepEqual(first.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 1,
+      preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 1, resumableAvailable: 0,
     });
     first.close();
     const reopened = new ProjectTaskSqliteStore({ databasePath, now: () => 9_000 });
@@ -186,7 +186,7 @@ test('recovery is idempotent and durable across a real SQLite close/reopen', asy
     assert.deepEqual(reopened.get(IDS[1]), failed);
     assert.deepEqual(reopened.readTaskDispatch(dispatch.dispatchId), dispatch);
     assert.deepEqual(reopened.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 1,
+      preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 1, resumableAvailable: 0,
     });
     reopened.close();
   } finally {
@@ -304,13 +304,13 @@ test('recovery calls no claim/consume API and exposes no authority or capability
     store.claimTaskDispatch = () => { throw new Error('claim_called'); };
     store.consumeTaskDispatch = () => { throw new Error('consume_called'); };
     const result = store.reconcileRestartSafeTasks();
-    assert.deepEqual(Object.keys(result).sort(), ['failedInterrupted', 'preservedRecoverable', 'terminalUnchanged']);
+    assert.deepEqual(Object.keys(result).sort(), ['failedInterrupted', 'preservedRecoverable', 'resumableAvailable', 'terminalUnchanged']);
     assert.equal(JSON.stringify(result).match(/capabilit|authorit|lease|dispatch|session|secret|command/i), null);
   });
 });
 
 test('Recovery V2 remains conservative under schema V12 without execution or authority side channels', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 12);
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 13);
   const source = await readFile(new URL('../src/services/projectTaskSqliteStore.ts', import.meta.url), 'utf8');
   const start = source.indexOf('reconcileRestartSafeTasks()');
   const end = source.indexOf('\n  enqueueTaskDispatch(', start);

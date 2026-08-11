@@ -14,7 +14,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION = 9;
 export const PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION = 10;
 export const PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION = 11;
 export const PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION = 12;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 12;
+export const PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION = 13;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 13;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -105,6 +106,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
   }
@@ -1020,6 +1022,116 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       END;
     `);
     meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION) {
+    // Layer 13: Durable Validated Proposal Snapshot V1. Purely additive: the
+    // snapshot table, its recorded index and its three triggers. ZERO rows are
+    // manufactured for existing data; a historical proposal_valid Launch
+    // Result without a snapshot keeps its exact Layer 12 semantics and is
+    // NEVER silently upgraded into a resumable state.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION, `
+      CREATE TABLE project_task_validated_proposal_snapshots (
+        snapshot_id TEXT PRIMARY KEY CHECK (
+          length(snapshot_id) = 36
+          AND substr(snapshot_id, 9, 1) = '-'
+          AND substr(snapshot_id, 14, 1) = '-'
+          AND substr(snapshot_id, 19, 1) = '-'
+          AND substr(snapshot_id, 24, 1) = '-'
+          AND snapshot_id = lower(snapshot_id)
+          AND replace(snapshot_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        launch_result_id TEXT NOT NULL UNIQUE CHECK (length(launch_result_id) = 36),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        canonical_proposal_json TEXT NOT NULL CHECK (
+          length(canonical_proposal_json) BETWEEN 1 AND 131072
+          AND json_valid(canonical_proposal_json)
+          AND json_type(canonical_proposal_json, '$') = 'object'
+        ),
+        proposal_sha256 TEXT NOT NULL CHECK (
+          length(proposal_sha256) = 64
+          AND proposal_sha256 NOT GLOB '*[^0-9a-f]*'
+        ),
+        canonical_version TEXT NOT NULL CHECK (
+          canonical_version = 'validated-proposal-canonical-v1'
+        ),
+        execution_mode TEXT NOT NULL CHECK (execution_mode IN ('direct','delegated')),
+        completion_mode TEXT NOT NULL CHECK (completion_mode IN ('analyze','ready_for_review','complete')),
+        requires_human_approval INTEGER NOT NULL CHECK (requires_human_approval IN (0,1)),
+        blocked_actions_json TEXT NOT NULL CHECK (
+          json_valid(blocked_actions_json)
+          AND json_type(blocked_actions_json, '$') = 'array'
+          AND length(blocked_actions_json) <= 512
+        ),
+        recorded_at INTEGER NOT NULL CHECK (
+          recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id)
+      ) STRICT;
+
+      CREATE INDEX project_task_validated_proposal_snapshots_recorded
+      ON project_task_validated_proposal_snapshots(recorded_at ASC, snapshot_id ASC);
+
+      CREATE TRIGGER project_task_validated_proposal_snapshots_validate_insert
+      BEFORE INSERT ON project_task_validated_proposal_snapshots
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_launch_results AS result
+          JOIN project_task_execution_launch_attempts AS attempt
+            ON attempt.launch_attempt_id = result.launch_attempt_id
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.invocation_id = attempt.invocation_id
+          JOIN project_task_execution_runs AS execution_run
+            ON execution_run.execution_run_id = attempt.execution_run_id
+          JOIN project_tasks AS task ON task.task_id = attempt.task_id
+          WHERE result.launch_result_id = NEW.launch_result_id
+            AND result.outcome_class = 'proposal_valid'
+            AND result.launch_attempt_id = NEW.launch_attempt_id
+            AND result.invocation_id = NEW.invocation_id
+            AND result.execution_run_id = NEW.execution_run_id
+            AND result.task_id = NEW.task_id
+            AND attempt.invocation_id = NEW.invocation_id
+            AND attempt.execution_run_id = NEW.execution_run_id
+            AND attempt.task_id = NEW.task_id
+            AND invocation.execution_run_id = NEW.execution_run_id
+            AND invocation.task_id = NEW.task_id
+            AND execution_run.task_id = NEW.task_id
+            AND NEW.recorded_at >= result.recorded_at
+            AND task.status NOT IN ('completed','failed')
+        ) THEN RAISE(ABORT, 'project_task_validated_proposal_snapshot_incompatible') END;
+        SELECT CASE WHEN
+            json_extract(NEW.canonical_proposal_json, '$.executionMode') <> NEW.execution_mode
+          OR json_extract(NEW.canonical_proposal_json, '$.completionMode') <> NEW.completion_mode
+          OR (CASE WHEN json_extract(NEW.canonical_proposal_json, '$.requiresHumanApproval') = 1 THEN 1 ELSE 0 END) <> NEW.requires_human_approval
+          OR json_extract(NEW.canonical_proposal_json, '$.blockedActions') <> NEW.blocked_actions_json
+        THEN RAISE(ABORT, 'project_task_validated_proposal_snapshot_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_validated_proposal_snapshots_immutable_update
+      BEFORE UPDATE ON project_task_validated_proposal_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_validated_proposal_snapshot_immutable');
+      END;
+
+      CREATE TRIGGER project_task_validated_proposal_snapshots_immutable_delete
+      BEFORE DELETE ON project_task_validated_proposal_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_validated_proposal_snapshot_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION;
   }
 }
 

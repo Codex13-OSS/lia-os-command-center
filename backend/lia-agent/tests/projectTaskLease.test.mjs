@@ -382,6 +382,11 @@ test('an authentic V6-shaped database migrates additively to V12 and keeps legac
     initial.close();
     const v6 = new DatabaseSync(databasePath);
     v6.exec(`
+      DROP TRIGGER project_task_validated_proposal_snapshots_validate_insert;
+      DROP TRIGGER project_task_validated_proposal_snapshots_immutable_update;
+      DROP TRIGGER project_task_validated_proposal_snapshots_immutable_delete;
+      DROP INDEX project_task_validated_proposal_snapshots_recorded;
+      DROP TABLE project_task_validated_proposal_snapshots;
       DROP TRIGGER project_task_execution_launch_results_validate_insert;
       DROP TRIGGER project_task_execution_launch_results_immutable_update;
       DROP TRIGGER project_task_execution_launch_results_immutable_delete;

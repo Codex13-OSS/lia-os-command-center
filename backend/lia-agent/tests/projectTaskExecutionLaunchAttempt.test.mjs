@@ -29,6 +29,11 @@ const receipt = { executionId: 'historical-result', status: 'verified', resultTe
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Additive V11 relations that must be removed to reconstruct an authentic V10 database.
 const REWIND_V11_TO_V10_SQL = `
+  DROP TRIGGER project_task_validated_proposal_snapshots_validate_insert;
+  DROP TRIGGER project_task_validated_proposal_snapshots_immutable_update;
+  DROP TRIGGER project_task_validated_proposal_snapshots_immutable_delete;
+  DROP INDEX project_task_validated_proposal_snapshots_recorded;
+  DROP TABLE project_task_validated_proposal_snapshots;
   DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release;
   DROP TRIGGER project_task_execution_launch_attempts_validate_insert;
   DROP TRIGGER project_task_execution_launch_attempts_immutable_update;
@@ -705,7 +710,7 @@ test('V10 to V12 migration preserves the complete existing chain', async () => {
     v10.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 12);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 13);
     assert.equal(migrated.readTaskExecutionInvocationByRun(prepared.run.executionRunId).invocationId, invocation.invocationId);
     assert.equal(migrated.readTaskExecutionRunByTask(continuation.createdTaskId).executionRunId, prepared.run.executionRunId);
     migrated.close();
@@ -759,7 +764,7 @@ test('recovery with invocation but no launch attempt keeps safe pre-launch behav
   await fixture(({ store, databasePath }) => {
     const { dispatch, run, lease, invocation } = chain(store);
     const result = store.reconcileRestartSafeTasks();
-    assert.deepEqual(result, { preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0 });
+    assert.deepEqual(result, { preservedRecoverable: 1, failedInterrupted: 0, terminalUnchanged: 0, resumableAvailable: 0 });
     const task = store.get(TASK_A);
     assert.equal(task.status, 'accepted');
     assert.equal(task.terminalAt, undefined);
@@ -779,7 +784,7 @@ test('recovery with a launch attempt fails closed as external_launch_outcome_unk
     const { dispatch, run, lease, invocation } = chain(store);
     const attempt = store.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease));
     const result = store.reconcileRestartSafeTasks();
-    assert.deepEqual(result, { preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0 });
+    assert.deepEqual(result, { preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0, resumableAvailable: 0 });
     const task = store.get(TASK_A);
     assert.equal(task.status, 'failed');
     assert.equal(task.error.code, 'external_launch_outcome_unknown');
@@ -806,12 +811,12 @@ test('recovery remains idempotent after database reopen', async () => {
     first.createOrGet(TASK_A, 'fp', intent);
     const { run, lease, invocation } = chain(first);
     first.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease));
-    assert.deepEqual(first.reconcileRestartSafeTasks(), { preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0 });
+    assert.deepEqual(first.reconcileRestartSafeTasks(), { preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0, resumableAvailable: 0 });
     const failedSnapshot = JSON.stringify(tableRows(databasePath, 'project_tasks'));
     first.close();
 
     const reopened = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.deepEqual(reopened.reconcileRestartSafeTasks(), { preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1 });
+    assert.deepEqual(reopened.reconcileRestartSafeTasks(), { preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1, resumableAvailable: 0 });
     assert.equal(JSON.stringify(tableRows(databasePath, 'project_tasks')), failedSnapshot);
     assert.equal(reopened.get(TASK_A).error.code, 'external_launch_outcome_unknown');
     reopened.close();
@@ -852,7 +857,7 @@ test('terminal task behavior stays unchanged', async () => {
       () => store.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease)),
       /project_task_execution_launch_attempt_task_unavailable/,
     );
-    assert.deepEqual(store.reconcileRestartSafeTasks(), { preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1 });
+    assert.deepEqual(store.reconcileRestartSafeTasks(), { preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1, resumableAvailable: 0 });
     const task = store.get(TASK_A);
     assert.equal(task.status, 'completed');
     assert.deepEqual(task.receipt, receipt);
@@ -865,7 +870,7 @@ test('terminal task behavior stays unchanged', async () => {
       () => store.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease)),
       /project_task_execution_launch_attempt_task_unavailable/,
     );
-    assert.deepEqual(store.reconcileRestartSafeTasks(), { preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1 });
+    assert.deepEqual(store.reconcileRestartSafeTasks(), { preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1, resumableAvailable: 0 });
     assert.equal(tableRows(databasePath, 'project_task_execution_launch_attempts').length, 0);
   });
 });

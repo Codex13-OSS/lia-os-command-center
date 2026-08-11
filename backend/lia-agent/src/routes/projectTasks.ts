@@ -70,6 +70,14 @@ export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: P
       });
       void run.then((result) => {
         if (result.ok) { const receipt = safeReceipt(result); if (receipt) dependencies.store.complete(taskId, receipt); else dependencies.store.fail(taskId, genericFailure()); }
+        else if (result.error === 'local_resume_available') {
+          // Layer 13: the task keeps its durable resumable state (non-terminal,
+          // validated proposal snapshot available). It is NOT terminalized and
+          // nothing is retried: zero Hermes, zero Codex, zero new
+          // attempt/result/lease operations. The snapshot is evidence only;
+          // fresh LÍA policy evaluation is mandatory before any later action.
+          return;
+        }
         else dependencies.store.fail(taskId, safeFailure(result));
       }).catch(() => dependencies.store.fail(taskId, genericFailure()));
     });

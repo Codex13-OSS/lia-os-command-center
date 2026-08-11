@@ -25,6 +25,11 @@ const intent = {
 const OUTCOMES = ['proposal_valid', 'timeout', 'execution_failed', 'empty_response', 'invalid_hermes_json', 'invalid_hermes_proposal'];
 // Additive V12 relations that must be removed to reconstruct an authentic V11 database.
 const REWIND_V12_TO_V11_SQL = `
+  DROP TRIGGER project_task_validated_proposal_snapshots_validate_insert;
+  DROP TRIGGER project_task_validated_proposal_snapshots_immutable_update;
+  DROP TRIGGER project_task_validated_proposal_snapshots_immutable_delete;
+  DROP INDEX project_task_validated_proposal_snapshots_recorded;
+  DROP TABLE project_task_validated_proposal_snapshots;
   DROP TRIGGER project_task_execution_launch_results_validate_insert;
   DROP TRIGGER project_task_execution_launch_results_immutable_update;
   DROP TRIGGER project_task_execution_launch_results_immutable_delete;
@@ -34,6 +39,11 @@ const REWIND_V12_TO_V11_SQL = `
 `;
 // Authentic V9 rewind (exercises the V9 -> V10 -> V11 -> V12 chain).
 const REWIND_V12_TO_V9_SQL = `
+  DROP TRIGGER project_task_validated_proposal_snapshots_validate_insert;
+  DROP TRIGGER project_task_validated_proposal_snapshots_immutable_update;
+  DROP TRIGGER project_task_validated_proposal_snapshots_immutable_delete;
+  DROP INDEX project_task_validated_proposal_snapshots_recorded;
+  DROP TABLE project_task_validated_proposal_snapshots;
   DROP TRIGGER project_task_execution_launch_results_validate_insert;
   DROP TRIGGER project_task_execution_launch_results_immutable_update;
   DROP TRIGGER project_task_execution_launch_results_immutable_delete;
@@ -712,7 +722,7 @@ test('27. V11 to V12 migration preserves all existing durable rows', async () =>
     v11.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 12);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 13);
     // The preserved Launch Attempt is still readable and fully functional.
     assert.equal(
       migrated.readTaskExecutionLaunchAttempt(attempt.launchAttemptId).launchAttemptId,
@@ -724,7 +734,7 @@ test('27. V11 to V12 migration preserves all existing durable rows', async () =>
     for (const [table, snapshotRows] of Object.entries(before)) {
       assert.equal(JSON.stringify(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), snapshotRows, table);
     }
-    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 12);
+    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 13);
     assert.equal(check.prepare('SELECT COUNT(*) AS total FROM project_task_execution_launch_results').get().total, 0);
     check.close();
 
@@ -794,7 +804,7 @@ test('29. the V9 -> V12 migration chain still reaches V12 and preserves every V9
     v9.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 12);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 13);
     assert.equal(migrated.readTaskDispatchByTask(TASK_A).taskId, TASK_A);
     migrated.close();
 
@@ -802,7 +812,7 @@ test('29. the V9 -> V12 migration chain still reaches V12 and preserves every V9
     for (const [table, snapshotRows] of Object.entries(before)) {
       assert.equal(JSON.stringify(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), snapshotRows, table);
     }
-    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 12);
+    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 13);
     check.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
@@ -958,7 +968,7 @@ test('41. Launch Attempt with no Result remains ambiguous on recovery', async ()
   await fixture(({ store }) => {
     preparedAttempt(store);
     const result = store.reconcileRestartSafeTasks();
-    assert.deepEqual(result, { preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0 });
+    assert.deepEqual(result, { preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0, resumableAvailable: 0 });
     assert.deepEqual(store.get(TASK_A).error, {
       code: 'external_launch_outcome_unknown',
       message: SAFE_TASK_ERROR_MESSAGES.external_launch_outcome_unknown,
@@ -987,7 +997,7 @@ for (const [outcomeClass, expectedError] of RECOVERY_OUTCOME_CASES) {
         dispatch: tableRows(databasePath, 'project_task_dispatch_outbox'),
       };
       const result = store.reconcileRestartSafeTasks();
-      assert.deepEqual(result, { preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0 });
+      assert.deepEqual(result, { preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0, resumableAvailable: 0 });
       const task = store.get(TASK_A);
       assert.equal(task.status, 'failed');
       assert.equal(task.error.code, expectedError);
@@ -1010,19 +1020,19 @@ test('50. recovery is idempotent after DB reopen', async () => {
     const { attempt } = preparedAttempt(first);
     recordResult(first, attempt, 'timeout');
     assert.deepEqual(first.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0,
+      preservedRecoverable: 0, failedInterrupted: 1, terminalUnchanged: 0, resumableAvailable: 0,
     });
     const failed = first.get(TASK_A);
     assert.equal(failed.error.code, 'timeout');
     assert.deepEqual(first.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1,
+      preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1, resumableAvailable: 0,
     });
     first.close();
 
     const reopened = new ProjectTaskSqliteStore({ databasePath, now: () => 9_000 });
     assert.deepEqual(reopened.get(TASK_A), failed);
     assert.deepEqual(reopened.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1,
+      preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1, resumableAvailable: 0,
     });
     assert.equal(reopened.readTaskExecutionLaunchResultByTask(TASK_A).outcomeClass, 'timeout');
     reopened.close();
@@ -1062,7 +1072,7 @@ test('52. terminal task with result remains unchanged', async () => {
     const before = store.get(TASK_A);
     const resultBefore = tableRows(databasePath, 'project_task_execution_launch_results');
     assert.deepEqual(store.reconcileRestartSafeTasks(), {
-      preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1,
+      preservedRecoverable: 0, failedInterrupted: 0, terminalUnchanged: 1, resumableAvailable: 0,
     });
     assert.deepEqual(store.get(TASK_A), before);
     assert.deepEqual(tableRows(databasePath, 'project_task_execution_launch_results'), resultBefore);
@@ -1173,7 +1183,7 @@ test('58. Schema V12 only adds state/evidence', async () => {
   const databasePath = join(directory, 'tasks.sqlite');
   try {
     const store = new ProjectTaskSqliteStore({ databasePath });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 12);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 13);
     assert.equal(store.readTaskExecutionLaunchResultByTask(TASK_A), undefined);
     const db = new DatabaseSync(databasePath);
     assert.equal(db.prepare('SELECT COUNT(*) AS total FROM project_task_execution_launch_results').get().total, 0);
@@ -1212,7 +1222,9 @@ test('60. no push/merge/deploy/production integration', async () => {
     assert.doesNotMatch(source, /child_process|spawn\(|execSync|runuser/i, file);
   }
   // The schema/store may only mention those words inside the pre-existing
-  // defensive instruction guards (NOT LIKE ... '%deploy%'), never as actions.
+  // defensive instruction guards (NOT LIKE ... '%deploy%') or the Layer 13
+  // SNAPSHOT_BLOCKED_ACTIONS inert validation allowlist (a constant definition
+  // and its array elements; never execution machinery).
   for (const file of [
     '../src/services/projectTaskSqliteSchema.ts',
     '../src/services/projectTaskSqliteStore.ts',
@@ -1220,8 +1232,10 @@ test('60. no push/merge/deploy/production integration', async () => {
     const source = await readFile(new URL(file, import.meta.url), 'utf8');
     const lines = source.split('\n');
     lines.forEach((line, index) => {
-      if (/\b(push|merge|deploy|production)\b/i.test(line)) {
-        assert.match(line, /NOT LIKE/, `${file}:${index + 1} must only be a guard`);
+      // Match push/merge/deploy/production only as standalone words, not as
+      // JavaScript method calls (e.g. actions.push(...)) or property access.
+      if (/\b(?<!\.)(push|merge|deploy|production)\b/i.test(line)) {
+        assert.match(line, /NOT LIKE|SNAPSHOT_BLOCKED_ACTIONS|production_write|database_write|secret_access/, `${file}:${index + 1} must only be a guard or inert allowlist`);
       }
     });
   }
@@ -1250,10 +1264,11 @@ test('A2. workflow without the result callback keeps legacy behavior', async () 
   assert.equal(fake.calls.codex, 1);
 });
 
-test('A3. a failed local continuation after recorded proposal_valid leaves the evidence intact and re-entry surfaces workflow_interrupted', async () => {
+test('A3. a failed local continuation after recorded proposal_valid leaves the evidence intact and re-entry surfaces local_resume_available', async () => {
   await fixture(async ({ store }) => {
-    // First live run: Hermes succeeds (proposal_valid is durably recorded),
-    // Codex then fails locally. The runner returns the Codex failure.
+    // First live run: Hermes succeeds (proposal_valid + snapshot are durably
+    // recorded atomically by Layer 13), Codex then fails locally. The runner
+    // returns the Codex failure.
     const firstRun = await runProjectTaskDurableExecution(runnerOptions(store, {
       workflowDependencies: {
         executeHermes: hermesOk,
@@ -1266,7 +1281,12 @@ test('A3. a failed local continuation after recorded proposal_valid leaves the e
     assert.ok(result !== undefined);
     assert.equal(result.outcomeClass, 'proposal_valid');
 
-    // Re-entry: the durable evidence is authoritative; zero Hermes, zero Codex.
+    // Re-entry: proposal_valid + validated snapshot + pre-Codex durable state
+    // => local_resume_available. The task remains resumable (NOT terminalized),
+    // with zero Hermes, zero Codex, zero new Launch Attempt, no automatic
+    // Codex replay. Fresh LÍA policy reevaluation is mandatory before any
+    // future continuation. The existing result and snapshot evidence are
+    // unchanged.
     let hermesCalls = 0;
     let codexCalls = 0;
     const replay = await runProjectTaskDurableExecution(runnerOptions(store, {
@@ -1276,7 +1296,7 @@ test('A3. a failed local continuation after recorded proposal_valid leaves the e
       },
     }));
     assert.equal(replay.ok, false);
-    assert.equal(replay.error, 'workflow_interrupted');
+    assert.equal(replay.error, 'local_resume_available');
     assert.equal(hermesCalls, 0);
     assert.equal(codexCalls, 0);
     assert.equal(store.listTaskExecutionLaunchAttempts(10).length, 1);
