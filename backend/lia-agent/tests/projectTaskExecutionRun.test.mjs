@@ -302,7 +302,7 @@ test('read surfaces are side-effect free and prepared list is deterministic and 
   });
 });
 
-test('V8 to V9 migration preserves prior durable chain and legacy consumed ambiguity without inventing runs', async () => {
+test('V8 to V10 migration preserves prior durable chain and legacy consumed ambiguity without inventing runs or tickets', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-task-execution-run-v8-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {
@@ -330,18 +330,19 @@ test('V8 to V9 migration preserves prior durable chain and legacy consumed ambig
       'project_tasks', 'project_goals', 'project_task_lineage', 'project_goal_evaluations',
       'project_goal_continuation_plans', 'project_task_lease_generations', 'project_task_dispatch_outbox',
     ].map((table) => [table, v8.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get().total]));
-    v8.exec('DROP TABLE project_task_execution_runs; UPDATE project_task_meta SET schema_version = 8 WHERE singleton = 1');
+    v8.exec('DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; DROP TABLE project_task_execution_runs; UPDATE project_task_meta SET schema_version = 8 WHERE singleton = 1');
     v8.close();
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 200 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 9);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 10);
     assert.equal(migrated.readTaskExecutionRunByTask(TASK_A), undefined);
     migrated.close();
     const check = new DatabaseSync(databasePath);
     for (const [table, total] of Object.entries(before)) {
       assert.equal(check.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get().total, total, table);
     }
-    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 9);
+    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 10);
     assert.equal(check.prepare('SELECT COUNT(*) AS total FROM project_task_execution_runs').get().total, 0);
+    assert.equal(check.prepare('SELECT COUNT(*) AS total FROM project_task_execution_invocations').get().total, 0);
     check.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

@@ -10,7 +10,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION = 5;
 export const PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION = 6;
 export const PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION = 7;
 export const PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION = 8;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 9;
+export const PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION = 9;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 10;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -97,6 +98,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -723,7 +725,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   }
 
   if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION) {
-    migrate(PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION, `
       CREATE TABLE project_task_execution_runs (
         execution_run_id TEXT PRIMARY KEY CHECK (
           length(execution_run_id) = 36
@@ -780,6 +782,81 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       BEFORE DELETE ON project_task_execution_runs
       BEGIN
         SELECT RAISE(ABORT, 'project_task_execution_run_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+      CREATE TABLE project_task_execution_invocations (
+        invocation_id TEXT PRIMARY KEY CHECK (
+          length(invocation_id) = 36
+          AND substr(invocation_id, 9, 1) = '-'
+          AND substr(invocation_id, 14, 1) = '-'
+          AND substr(invocation_id, 19, 1) = '-'
+          AND substr(invocation_id, 24, 1) = '-'
+          AND invocation_id = lower(invocation_id)
+          AND replace(invocation_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        reservation_lease_id TEXT NOT NULL CHECK (length(reservation_lease_id) = 36),
+        reservation_fencing_token INTEGER NOT NULL CHECK (
+          reservation_fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        reserved_at INTEGER NOT NULL CHECK (reserved_at BETWEEN 0 AND 9007199254740991),
+        FOREIGN KEY (execution_run_id) REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (reservation_lease_id) REFERENCES project_task_lease_generations(lease_id),
+        FOREIGN KEY (task_id, reservation_fencing_token)
+          REFERENCES project_task_lease_generations(task_id, fencing_token)
+      ) STRICT;
+
+      CREATE INDEX project_task_execution_invocations_reserved
+      ON project_task_execution_invocations(reserved_at ASC, invocation_id ASC);
+
+      CREATE TRIGGER project_task_execution_invocations_validate_insert
+      BEFORE INSERT ON project_task_execution_invocations
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_runs AS execution_run
+          JOIN project_task_lease_generations AS lease
+            ON lease.task_id = NEW.task_id
+           AND lease.lease_id = NEW.reservation_lease_id
+           AND lease.fencing_token = NEW.reservation_fencing_token
+          WHERE execution_run.execution_run_id = NEW.execution_run_id
+            AND execution_run.task_id = NEW.task_id
+            AND NEW.reserved_at >= lease.acquired_at
+            AND NEW.reserved_at < lease.lease_expires_at
+            AND (lease.released_at IS NULL OR NEW.reserved_at <= lease.released_at)
+        ) THEN RAISE(ABORT, 'project_task_execution_invocation_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_execution_invocations_immutable_update
+      BEFORE UPDATE ON project_task_execution_invocations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_invocation_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_invocations_immutable_delete
+      BEFORE DELETE ON project_task_execution_invocations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_invocation_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_invocations_preserve_on_lease_release
+      BEFORE UPDATE OF released_at ON project_task_lease_generations
+      WHEN NEW.released_at IS NOT NULL AND EXISTS (
+        SELECT 1 FROM project_task_execution_invocations AS invocation
+        WHERE invocation.task_id = OLD.task_id
+          AND invocation.reservation_lease_id = OLD.lease_id
+          AND invocation.reservation_fencing_token = OLD.fencing_token
+          AND NEW.released_at < invocation.reserved_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_invocation_incompatible');
       END
     `);
   }

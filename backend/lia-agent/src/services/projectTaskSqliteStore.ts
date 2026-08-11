@@ -74,6 +74,15 @@ import {
   PROJECT_TASK_EXECUTION_RUN_MAX_LIST_LIMIT,
 } from '../contracts/projectTaskExecutionRun.js';
 import type {
+  ProjectTaskExecutionInvocationRecord,
+  ProjectTaskExecutionInvocationStore,
+  ReserveProjectTaskExecutionInvocationInput,
+} from '../contracts/projectTaskExecutionInvocation.js';
+import {
+  PROJECT_TASK_EXECUTION_INVOCATION_ERRORS,
+  PROJECT_TASK_EXECUTION_INVOCATION_MAX_LIST_LIMIT,
+} from '../contracts/projectTaskExecutionInvocation.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -239,6 +248,15 @@ type ProjectTaskExecutionRunRow = {
   prepared_at: unknown;
 };
 
+type ProjectTaskExecutionInvocationRow = {
+  invocation_id: unknown;
+  execution_run_id: unknown;
+  task_id: unknown;
+  reservation_lease_id: unknown;
+  reservation_fencing_token: unknown;
+  reserved_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -284,7 +302,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -411,6 +429,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
                preparation_fencing_token, prepared_at
         FROM project_task_execution_runs LIMIT 1
       `).all();
+      this.database.prepare(`
+        SELECT invocation_id, execution_run_id, task_id, reservation_lease_id,
+               reservation_fencing_token, reserved_at
+        FROM project_task_execution_invocations LIMIT 1
+      `).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
     }
@@ -502,6 +525,36 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     `).get(taskId) as unknown as ProjectTaskExecutionRunRow | undefined;
   }
 
+  private selectExecutionInvocationRow(
+    invocationId: string,
+  ): ProjectTaskExecutionInvocationRow | undefined {
+    return this.database.prepare(`
+      SELECT invocation_id, execution_run_id, task_id, reservation_lease_id,
+             reservation_fencing_token, reserved_at
+      FROM project_task_execution_invocations WHERE invocation_id = ?
+    `).get(invocationId) as unknown as ProjectTaskExecutionInvocationRow | undefined;
+  }
+
+  private selectExecutionInvocationByRunRow(
+    executionRunId: string,
+  ): ProjectTaskExecutionInvocationRow | undefined {
+    return this.database.prepare(`
+      SELECT invocation_id, execution_run_id, task_id, reservation_lease_id,
+             reservation_fencing_token, reserved_at
+      FROM project_task_execution_invocations WHERE execution_run_id = ?
+    `).get(executionRunId) as unknown as ProjectTaskExecutionInvocationRow | undefined;
+  }
+
+  private selectExecutionInvocationByTaskRow(
+    taskId: string,
+  ): ProjectTaskExecutionInvocationRow | undefined {
+    return this.database.prepare(`
+      SELECT invocation_id, execution_run_id, task_id, reservation_lease_id,
+             reservation_fencing_token, reserved_at
+      FROM project_task_execution_invocations WHERE task_id = ?
+    `).get(taskId) as unknown as ProjectTaskExecutionInvocationRow | undefined;
+  }
+
   private decodeDispatchRow(row: ProjectTaskDispatchRow): ProjectTaskDispatchRecord {
     const corrupt = (): Error => new Error(PROJECT_TASK_DISPATCH_ERRORS.corruptRecord);
     if (typeof row.dispatch_id !== 'string' || !PROJECT_TASK_ID.test(row.dispatch_id)) throw corrupt();
@@ -570,6 +623,50 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       preparationLeaseId: row.preparation_lease_id,
       preparationFencingToken: row.preparation_fencing_token,
       preparedAt: row.prepared_at,
+    };
+  }
+
+  private decodeExecutionInvocationRow(
+    row: ProjectTaskExecutionInvocationRow,
+  ): ProjectTaskExecutionInvocationRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.corruptRecord);
+    if (typeof row.invocation_id !== 'string' || !PROJECT_TASK_ID.test(row.invocation_id)) throw corrupt();
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.reservation_lease_id !== 'string' || !PROJECT_TASK_ID.test(row.reservation_lease_id)) throw corrupt();
+    if (
+      typeof row.reservation_fencing_token !== 'number'
+      || !Number.isSafeInteger(row.reservation_fencing_token)
+      || row.reservation_fencing_token < PROJECT_TASK_LEASE_INITIAL_FENCING_TOKEN
+      || !isNonNegativeInteger(row.reserved_at)
+      || !Number.isSafeInteger(row.reserved_at)
+    ) throw corrupt();
+
+    const executionRunRow = this.selectExecutionRunRow(row.execution_run_id);
+    if (executionRunRow === undefined) throw corrupt();
+    const executionRun = this.decodeExecutionRunRow(executionRunRow);
+    if (executionRun.taskId !== row.task_id) throw corrupt();
+    const leaseRow = this.selectLeaseGenerationRow(
+      row.task_id,
+      row.reservation_lease_id,
+      row.reservation_fencing_token,
+    );
+    if (leaseRow === undefined) throw corrupt();
+    const lease = this.decodeLeaseRow(leaseRow);
+    const releasedAt = leaseRow.released_at;
+    if (
+      row.reserved_at < lease.acquiredAt
+      || row.reserved_at >= lease.leaseExpiresAt
+      || (typeof releasedAt === 'number' && row.reserved_at > releasedAt)
+    ) throw corrupt();
+
+    return {
+      invocationId: row.invocation_id,
+      executionRunId: row.execution_run_id,
+      taskId: row.task_id,
+      reservationLeaseId: row.reservation_lease_id,
+      reservationFencingToken: row.reservation_fencing_token,
+      reservedAt: row.reserved_at,
     };
   }
 
@@ -2145,6 +2242,12 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         FROM project_task_execution_runs
         ORDER BY task_id ASC
       `).all() as unknown as ProjectTaskExecutionRunRow[];
+      const invocationRows = this.database.prepare(`
+        SELECT invocation_id, execution_run_id, task_id, reservation_lease_id,
+               reservation_fencing_token, reserved_at
+        FROM project_task_execution_invocations
+        ORDER BY task_id ASC
+      `).all() as unknown as ProjectTaskExecutionInvocationRow[];
 
       // Validate ordinary durable read shapes before making any change. Also
       // reject outbox references that do not resolve to exactly one task.
@@ -2192,6 +2295,24 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           || dispatch.consumedAt === undefined
         ) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
         executionRunByTask.set(executionRun.taskId, executionRun);
+      }
+      const invocationIds = new Set<string>();
+      const invocationRunIds = new Set<string>();
+      const invocationTaskIds = new Set<string>();
+      for (const row of invocationRows) {
+        const invocation = this.decodeExecutionInvocationRow(row);
+        const executionRun = executionRunByTask.get(invocation.taskId);
+        if (
+          !taskIds.has(invocation.taskId)
+          || executionRun === undefined
+          || executionRun.executionRunId !== invocation.executionRunId
+          || invocationIds.has(invocation.invocationId)
+          || invocationRunIds.has(invocation.executionRunId)
+          || invocationTaskIds.has(invocation.taskId)
+        ) throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.corruptRecord);
+        invocationIds.add(invocation.invocationId);
+        invocationRunIds.add(invocation.executionRunId);
+        invocationTaskIds.add(invocation.taskId);
       }
 
       let failedTaskIds: string[] = [];
@@ -2601,6 +2722,184 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     });
   }
 
+  reserveTaskExecutionInvocation(
+    input: ReserveProjectTaskExecutionInvocationInput,
+  ): ProjectTaskExecutionInvocationRecord {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.invalidInput);
+      }
+      const keys = Object.keys(input);
+      if (
+        keys.length !== 5
+        || !keys.every((key) => [
+          'executionRunId', 'taskId', 'leaseOwner', 'leaseId', 'fencingToken',
+        ].includes(key))
+        || typeof input.executionRunId !== 'string'
+        || !PROJECT_TASK_ID.test(input.executionRunId)
+        || !this.validLeaseAuthority({
+          taskId: input.taskId,
+          leaseOwner: input.leaseOwner,
+          leaseId: input.leaseId,
+          fencingToken: input.fencingToken,
+        })
+      ) throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.invalidInput);
+
+      const existingByRun = this.selectExecutionInvocationByRunRow(input.executionRunId);
+      const existingByTask = this.selectExecutionInvocationByTaskRow(input.taskId);
+      if (existingByRun !== undefined || existingByTask !== undefined) {
+        if (existingByRun === undefined || existingByTask === undefined) {
+          throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.authorityMismatch);
+        }
+        const byRun = this.decodeExecutionInvocationRow(existingByRun);
+        const byTask = this.decodeExecutionInvocationRow(existingByTask);
+        if (
+          byRun.invocationId !== byTask.invocationId
+          || byRun.executionRunId !== input.executionRunId
+          || byRun.taskId !== input.taskId
+          || byRun.reservationLeaseId !== input.leaseId
+          || byRun.reservationFencingToken !== input.fencingToken
+        ) throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.authorityMismatch);
+        const generationRow = this.selectLeaseGenerationRow(
+          byRun.taskId,
+          byRun.reservationLeaseId,
+          byRun.reservationFencingToken,
+        );
+        if (generationRow === undefined) {
+          throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.corruptRecord);
+        }
+        const generation = this.decodeLeaseRow(generationRow);
+        if (generation.leaseOwner !== input.leaseOwner) {
+          throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.authorityMismatch);
+        }
+        return byRun;
+      }
+
+      const task = this.selectRow(input.taskId);
+      if (task === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.taskNotFound);
+      }
+      if (task.status !== 'accepted' || task.terminal_at !== null) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.taskUnavailable);
+      }
+      const executionRunRow = this.selectExecutionRunRow(input.executionRunId);
+      if (executionRunRow === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.executionRunNotFound);
+      }
+      const executionRun = this.decodeExecutionRunRow(executionRunRow);
+      if (executionRun.taskId !== input.taskId) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.runTaskMismatch);
+      }
+
+      const authority: ProjectTaskLeaseAuthority = {
+        taskId: input.taskId,
+        leaseOwner: input.leaseOwner,
+        leaseId: input.leaseId,
+        fencingToken: input.fencingToken,
+      };
+      const currentRow = this.selectCurrentLeaseRow(input.taskId);
+      if (currentRow === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.authorityMismatch);
+      }
+      const current = this.decodeLeaseRow(currentRow);
+      if (!this.leaseAuthorityMatches(current, authority)) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.authorityMismatch);
+      }
+      const latest = this.database.prepare(`
+        SELECT MAX(fencing_token) AS latest_token
+        FROM project_task_lease_generations WHERE task_id = ?
+      `).get(input.taskId) as unknown as { latest_token: unknown };
+      if (latest.latest_token !== input.fencingToken) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.authorityMismatch);
+      }
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.invalidInput);
+      }
+      const reservedAt = Math.max(now, current.acquiredAt);
+      if (reservedAt >= current.leaseExpiresAt) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.expired);
+      }
+
+      const invocationId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_execution_invocations (
+          invocation_id, execution_run_id, task_id, reservation_lease_id,
+          reservation_fencing_token, reserved_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        invocationId,
+        input.executionRunId,
+        input.taskId,
+        input.leaseId,
+        input.fencingToken,
+        reservedAt,
+      );
+      const inserted = this.selectExecutionInvocationRow(invocationId);
+      if (inserted === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.corruptRecord);
+      }
+      return this.decodeExecutionInvocationRow(inserted);
+    });
+  }
+
+  readTaskExecutionInvocation(
+    invocationId: string,
+  ): ProjectTaskExecutionInvocationRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof invocationId !== 'string' || !PROJECT_TASK_ID.test(invocationId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionInvocationRow(invocationId);
+      return row === undefined ? undefined : this.decodeExecutionInvocationRow(row);
+    });
+  }
+
+  readTaskExecutionInvocationByRun(
+    executionRunId: string,
+  ): ProjectTaskExecutionInvocationRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof executionRunId !== 'string' || !PROJECT_TASK_ID.test(executionRunId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionInvocationByRunRow(executionRunId);
+      return row === undefined ? undefined : this.decodeExecutionInvocationRow(row);
+    });
+  }
+
+  readTaskExecutionInvocationByTask(
+    taskId: string,
+  ): ProjectTaskExecutionInvocationRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionInvocationByTaskRow(taskId);
+      return row === undefined ? undefined : this.decodeExecutionInvocationRow(row);
+    });
+  }
+
+  listReservedTaskExecutionInvocations(
+    limit: number,
+  ): ProjectTaskExecutionInvocationRecord[] {
+    return this.inTransaction(() => {
+      if (
+        typeof limit !== 'number'
+        || !Number.isSafeInteger(limit)
+        || limit < 1
+        || limit > PROJECT_TASK_EXECUTION_INVOCATION_MAX_LIST_LIMIT
+      ) throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.invalidInput);
+      const rows = this.database.prepare(`
+        SELECT invocation_id, execution_run_id, task_id, reservation_lease_id,
+               reservation_fencing_token, reserved_at
+        FROM project_task_execution_invocations
+        ORDER BY reserved_at ASC, invocation_id ASC
+        LIMIT ?
+      `).all(limit) as unknown as ProjectTaskExecutionInvocationRow[];
+      return rows.map((row) => this.decodeExecutionInvocationRow(row));
+    });
+  }
+
   acquireTaskLease(input: AcquireProjectTaskLeaseInput): ProjectTaskLeaseRecord {
     return this.inTransaction(() => this.acquireTaskLeaseInTransaction(input));
   }
@@ -2659,11 +2958,36 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         if (!Number.isSafeInteger(now) || now < 0) {
           throw new Error(PROJECT_TASK_LEASE_ERRORS.invalidInput);
         }
+        const invocationReservation = this.database.prepare(`
+          SELECT MAX(reserved_at) AS latest_reserved_at
+          FROM project_task_execution_invocations
+          WHERE task_id = ? AND reservation_lease_id = ?
+            AND reservation_fencing_token = ?
+        `).get(
+          authority.taskId,
+          authority.leaseId,
+          authority.fencingToken,
+        ) as unknown as { latest_reserved_at: unknown };
+        if (
+          invocationReservation.latest_reserved_at !== null
+          && (
+            typeof invocationReservation.latest_reserved_at !== 'number'
+            || !Number.isSafeInteger(invocationReservation.latest_reserved_at)
+            || invocationReservation.latest_reserved_at < current.acquiredAt
+          )
+        ) throw new Error(PROJECT_TASK_EXECUTION_INVOCATION_ERRORS.corruptRecord);
+        const latestReservedAt = typeof invocationReservation.latest_reserved_at === 'number'
+          ? invocationReservation.latest_reserved_at
+          : 0;
         const released = this.database.prepare(`
           UPDATE project_task_lease_generations SET released_at = ?
           WHERE task_id = ? AND lease_id = ? AND fencing_token = ? AND released_at IS NULL
         `).run(
-          Math.max(now, current.acquiredAt),
+          Math.max(
+            now,
+            current.acquiredAt,
+            latestReservedAt,
+          ),
           authority.taskId,
           authority.leaseId,
           authority.fencingToken,

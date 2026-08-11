@@ -455,6 +455,8 @@ test('legacy task behavior is unchanged and an authentic V5 database migrates ad
 
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`
+      DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release;
+      DROP TABLE project_task_execution_invocations;
       DROP TABLE project_task_execution_runs;
       DROP TABLE project_task_dispatch_outbox;
       DROP TRIGGER project_task_lease_validate_insert;

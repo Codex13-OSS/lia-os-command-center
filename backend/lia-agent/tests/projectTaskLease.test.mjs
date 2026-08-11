@@ -382,6 +382,8 @@ test('an authentic V6-shaped database migrates additively to V8 and keeps legacy
     initial.close();
     const v6 = new DatabaseSync(databasePath);
     v6.exec(`
+      DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release;
+      DROP TABLE project_task_execution_invocations;
       DROP TABLE project_task_execution_runs;
       DROP TABLE project_task_dispatch_outbox;
       DROP TRIGGER project_task_lease_validate_insert;
