@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { createApp } from '../dist/app.js';
 import { loadConfig } from '../dist/config.js';
+import { SAFE_TASK_ERROR_MESSAGES } from '../dist/contracts/projectTask.js';
 import { InMemoryProjectTaskStore } from '../dist/services/inMemoryProjectTaskStore.js';
+import { ProjectTaskSqliteStore } from '../dist/services/projectTaskSqliteStore.js';
 
 const ID = '550e8400-e29b-41d4-a716-446655440000';
 const request = (overrides = {}) => ({ taskId: ID, projectId: 'safe', instruction: 'Implement safely.', priority: 'normal', requestedCapabilities: ['repository_read', 'isolated_worktree_write', 'run_tests', 'local_commit'], ...overrides });
@@ -13,81 +18,109 @@ const deferred = () => { let resolve; const promise = new Promise((r) => { resol
 async function server(app, fn) { const s = app.listen(0, '127.0.0.1'); await once(s, 'listening'); try { await fn(`http://127.0.0.1:${s.address().port}`); } finally { await new Promise((r) => s.close(r)); } }
 const post = (base, body) => fetch(`${base}/api/projects/tasks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
+/**
+ * The product /api/projects/tasks path now executes through the durable
+ * runner, which requires the Layers 5-10 durable primitives. The in-memory
+ * fallback fails closed by design, so workflow-executing tests run against a
+ * real durable SQLite store; every public assertion is unchanged.
+ */
+async function withDurableStore(fn) {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-project-tasks-'));
+  const store = new ProjectTaskSqliteStore({ databasePath: join(directory, 'tasks.sqlite') });
+  try {
+    await fn(store);
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 test('acknowledges before detached workflow, retries once, publishes stages and safe committed receipt', async () => {
-  const gate = deferred(); let calls = 0; const stages = [];
-  const app = createApp(loadConfig({}), { projectRegistrySource: registry, projectTaskStore: new InMemoryProjectTaskStore(), projectTasksWorkflowExecutor: async (_request, observe) => { calls++; for (const stage of ['planning', 'hermes', 'codex', 'verification', 'commit']) { observe(stage); stages.push(stage); } await gate.promise; return success; } });
-  await server(app, async (base) => {
-    const first = await post(base, request()); assert.equal(first.status, 202); assert.equal((await first.json()).status, 'accepted');
-    await new Promise(setImmediate); assert.equal(calls, 1);
-    const retry = await post(base, request()); assert.equal(retry.status, 200); assert.equal((await retry.json()).alreadyKnown, true); assert.equal(calls, 1);
-    const conflict = await post(base, request({ instruction: 'Different.' })); assert.equal(conflict.status, 409); assert.equal(calls, 1);
-    gate.resolve(); await new Promise(setImmediate);
-    const status = await fetch(`${base}/api/projects/tasks/${ID}`); const body = await status.json();
-    assert.deepEqual(stages, ['planning', 'hermes', 'codex', 'verification', 'commit']);
-    assert.deepEqual(body, { ok: true, integration: 'project_task', taskId: ID, status: 'completed', terminal: true, receipt: { executionId: 'exec-safe', status: 'committed', resultText: 'Cambio completado.', verification: { status: 'verified', checksPassed: 2, totalChecks: 3 }, commit: 'a'.repeat(40) } });
-    assert.equal(JSON.stringify(body).includes('/safe/repo'), false); assert.equal(JSON.stringify(body).includes('hidden'), false);
+  await withDurableStore(async (store) => {
+    const gate = deferred(); let calls = 0; const stages = [];
+    const app = createApp(loadConfig({}), { projectRegistrySource: registry, projectTaskStore: store, projectTasksWorkflowExecutor: async (_request, observe) => { calls++; for (const stage of ['planning', 'hermes', 'codex', 'verification', 'commit']) { observe(stage); stages.push(stage); } await gate.promise; return success; } });
+    await server(app, async (base) => {
+      const first = await post(base, request()); assert.equal(first.status, 202); assert.equal((await first.json()).status, 'accepted');
+      await new Promise(setImmediate); assert.equal(calls, 1);
+      const retry = await post(base, request()); assert.equal(retry.status, 200); assert.equal((await retry.json()).alreadyKnown, true); assert.equal(calls, 1);
+      const conflict = await post(base, request({ instruction: 'Different.' })); assert.equal(conflict.status, 409); assert.equal(calls, 1);
+      gate.resolve(); await new Promise(setImmediate);
+      const status = await fetch(`${base}/api/projects/tasks/${ID}`); const body = await status.json();
+      assert.deepEqual(stages, ['planning', 'hermes', 'codex', 'verification', 'commit']);
+      assert.deepEqual(body, { ok: true, integration: 'project_task', taskId: ID, status: 'completed', terminal: true, receipt: { executionId: 'exec-safe', status: 'committed', resultText: 'Cambio completado.', verification: { status: 'verified', checksPassed: 2, totalChecks: 3 }, commit: 'a'.repeat(40) } });
+      assert.equal(JSON.stringify(body).includes('/safe/repo'), false); assert.equal(JSON.stringify(body).includes('hidden'), false);
+    });
   });
 });
 
 test('terminalizes thrown failures and validates invalid and unknown IDs', async () => {
-  const app = createApp(loadConfig({}), { projectRegistrySource: registry, projectTasksWorkflowExecutor: async () => { throw new Error('PRIVATE /path command prompt'); } });
-  await server(app, async (base) => {
-    assert.equal((await post(base, request({ taskId: 'bad' }))).status, 400);
-    assert.equal((await fetch(`${base}/api/projects/tasks/550e8400-e29b-41d4-a716-446655440001`)).status, 404);
-    await post(base, request()); await new Promise(setImmediate);
-    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json(); assert.deepEqual(body.error, { code: 'workflow_failed', message: 'La ejecución no pudo completarse.' }); assert.equal(JSON.stringify(body).includes('PRIVATE'), false);
+  await withDurableStore(async (store) => {
+    const app = createApp(loadConfig({}), { projectRegistrySource: registry, projectTaskStore: store, projectTasksWorkflowExecutor: async () => { throw new Error('PRIVATE /path command prompt'); } });
+    await server(app, async (base) => {
+      assert.equal((await post(base, request({ taskId: 'bad' }))).status, 400);
+      assert.equal((await fetch(`${base}/api/projects/tasks/550e8400-e29b-41d4-a716-446655440001`)).status, 404);
+      await post(base, request()); await new Promise(setImmediate);
+      // The injected workflow throws after the durable Launch Attempt gate, so
+      // the external outcome is conservatively unknown: safe code, zero leaks.
+      const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json(); assert.deepEqual(body.error, { stage: 'hermes', code: 'external_launch_outcome_unknown', message: SAFE_TASK_ERROR_MESSAGES.external_launch_outcome_unknown }); assert.equal(JSON.stringify(body).includes('PRIVATE'), false);
+    });
   });
 });
 
 test('GET preserves only the controlled public workflow failure diagnosis', async () => {
-  const app = createApp(loadConfig({}), { projectRegistrySource: registry, projectTasksWorkflowExecutor: async (_request, observe) => {
-    observe('planning'); observe('hermes');
-    return { ok: false, status: 'failed', stage: 'hermes', error: 'execution_failed', summary: 'PRIVATE prompt command stdout stderr /safe/repo', projectId: 'safe' };
-  } });
-  await server(app, async (base) => {
-    await post(base, request()); await new Promise(setImmediate);
-    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
-    assert.deepEqual(body.error, { stage: 'hermes', code: 'execution_failed', message: 'Hermes no pudo completar el razonamiento.', projectId: 'safe' });
-    const publicResponse = JSON.stringify(body);
-    for (const privateValue of ['prompt', 'command', 'stdout', 'stderr', '/safe/repo']) assert.equal(publicResponse.includes(privateValue), false);
+  await withDurableStore(async (store) => {
+    const app = createApp(loadConfig({}), { projectRegistrySource: registry, projectTaskStore: store, projectTasksWorkflowExecutor: async (_request, observe) => {
+      observe('planning'); observe('hermes');
+      return { ok: false, status: 'failed', stage: 'hermes', error: 'execution_failed', summary: 'PRIVATE prompt command stdout stderr /safe/repo', projectId: 'safe' };
+    } });
+    await server(app, async (base) => {
+      await post(base, request()); await new Promise(setImmediate);
+      const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+      assert.deepEqual(body.error, { stage: 'hermes', code: 'execution_failed', message: 'Hermes no pudo completar el razonamiento.', projectId: 'safe' });
+      const publicResponse = JSON.stringify(body);
+      for (const privateValue of ['prompt', 'command', 'stdout', 'stderr', '/safe/repo']) assert.equal(publicResponse.includes(privateValue), false);
+    });
   });
 });
 
 test('serves current status promptly while a deliberately slow workflow is still running', async () => {
-  const gate = deferred();
-  const enteredCodex = deferred();
-  const app = createApp(loadConfig({}), {
-    projectRegistrySource: registry,
-    projectTasksWorkflowExecutor: async (_request, observe) => {
-      observe('planning');
-      observe('hermes');
-      observe('codex');
-      enteredCodex.resolve();
-      await gate.promise;
-      return success;
-    },
-  });
-
-  await server(app, async (base) => {
-    assert.equal((await post(base, request())).status, 202);
-    await enteredCodex.promise;
-
-    const startedAt = performance.now();
-    const response = await fetch(`${base}/api/projects/tasks/${ID}`);
-    const elapsedMs = performance.now() - startedAt;
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), {
-      ok: true,
-      integration: 'project_task',
-      taskId: ID,
-      status: 'codex',
-      terminal: false,
-      completedStages: ['planning', 'hermes'],
+  await withDurableStore(async (store) => {
+    const gate = deferred();
+    const enteredCodex = deferred();
+    const app = createApp(loadConfig({}), {
+      projectRegistrySource: registry,
+      projectTaskStore: store,
+      projectTasksWorkflowExecutor: async (_request, observe) => {
+        observe('planning');
+        observe('hermes');
+        observe('codex');
+        enteredCodex.resolve();
+        await gate.promise;
+        return success;
+      },
     });
-    assert.ok(elapsedMs < 250, `status took ${elapsedMs.toFixed(1)}ms while workflow was active`);
 
-    gate.resolve();
+    await server(app, async (base) => {
+      assert.equal((await post(base, request())).status, 202);
+      await enteredCodex.promise;
+
+      const startedAt = performance.now();
+      const response = await fetch(`${base}/api/projects/tasks/${ID}`);
+      const elapsedMs = performance.now() - startedAt;
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        ok: true,
+        integration: 'project_task',
+        taskId: ID,
+        status: 'codex',
+        terminal: false,
+        completedStages: ['planning', 'hermes'],
+      });
+      assert.ok(elapsedMs < 250, `status took ${elapsedMs.toFixed(1)}ms while workflow was active`);
+
+      gate.resolve();
+    });
   });
 });
 
@@ -179,82 +212,92 @@ test('store capacity never evicts active tasks and terminal TTL uses injected cl
 });
 
 test('durable receipt publishes the safe stage trace for the operator', async () => {
-  const app = createApp(loadConfig({}), {
-    projectRegistrySource: registry,
-    projectTaskStore: new InMemoryProjectTaskStore(),
-    projectTasksWorkflowExecutor: async () => ({
-      ...success,
-      stages: ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'],
-    }),
-  });
-  await server(app, async (base) => {
-    await post(base, request()); await new Promise(setImmediate);
-    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
-    assert.deepEqual(body.receipt.stages, ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit']);
+  await withDurableStore(async (store) => {
+    const app = createApp(loadConfig({}), {
+      projectRegistrySource: registry,
+      projectTaskStore: store,
+      projectTasksWorkflowExecutor: async () => ({
+        ...success,
+        stages: ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'],
+      }),
+    });
+    await server(app, async (base) => {
+      await post(base, request()); await new Promise(setImmediate);
+      const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+      assert.deepEqual(body.receipt.stages, ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit']);
+    });
   });
 });
 
 test('terminal failure publishes completedStages and omits invalid ones', async () => {
-  const app = createApp(loadConfig({}), {
-    projectRegistrySource: registry,
-    projectTasksWorkflowExecutor: async () => ({
-      ok: false, status: 'failed', stage: 'commit', error: 'git_commit_failed',
-      summary: 'PRIVATE', projectId: 'safe',
-      completedStages: ['planning', 'hermes', 'codex', 'verification', 'visualQa'],
-    }),
-  });
-  await server(app, async (base) => {
-    await post(base, request()); await new Promise(setImmediate);
-    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
-    assert.deepEqual(body.error, {
-      stage: 'commit', code: 'git_commit_failed',
-      message: 'No se pudo crear el commit local.',
-      projectId: 'safe',
-      completedStages: ['planning', 'hermes', 'codex', 'verification', 'visualQa'],
+  await withDurableStore(async (store) => {
+    const app = createApp(loadConfig({}), {
+      projectRegistrySource: registry,
+      projectTaskStore: store,
+      projectTasksWorkflowExecutor: async () => ({
+        ok: false, status: 'failed', stage: 'commit', error: 'git_commit_failed',
+        summary: 'PRIVATE', projectId: 'safe',
+        completedStages: ['planning', 'hermes', 'codex', 'verification', 'visualQa'],
+      }),
+    });
+    await server(app, async (base) => {
+      await post(base, request()); await new Promise(setImmediate);
+      const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+      assert.deepEqual(body.error, {
+        stage: 'commit', code: 'git_commit_failed',
+        message: 'No se pudo crear el commit local.',
+        projectId: 'safe',
+        completedStages: ['planning', 'hermes', 'codex', 'verification', 'visualQa'],
+      });
     });
   });
 });
 
 test('adversarial stage traces never reach the durable receipt', async () => {
-  const app = createApp(loadConfig({}), {
-    projectRegistrySource: registry,
-    projectTaskStore: new InMemoryProjectTaskStore(),
-    projectTasksWorkflowExecutor: async () => ({
-      ...success,
-      stages: ['planning', '/safe/repo', 'prompt', 'execution-123'],
-    }),
-  });
-  await server(app, async (base) => {
-    await post(base, request()); await new Promise(setImmediate);
-    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
-    assert.deepEqual(body.error, { code: 'workflow_failed', message: 'La ejecución no pudo completarse.' });
-    const publicResponse = JSON.stringify(body);
-    for (const privateValue of ['/safe/repo', 'prompt', 'execution-123', 'stdout', 'stderr']) {
-      assert.equal(publicResponse.includes(privateValue), false);
-    }
+  await withDurableStore(async (store) => {
+    const app = createApp(loadConfig({}), {
+      projectRegistrySource: registry,
+      projectTaskStore: store,
+      projectTasksWorkflowExecutor: async () => ({
+        ...success,
+        stages: ['planning', '/safe/repo', 'prompt', 'execution-123'],
+      }),
+    });
+    await server(app, async (base) => {
+      await post(base, request()); await new Promise(setImmediate);
+      const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+      assert.deepEqual(body.error, { code: 'workflow_failed', message: 'La ejecución no pudo completarse.' });
+      const publicResponse = JSON.stringify(body);
+      for (const privateValue of ['/safe/repo', 'prompt', 'execution-123', 'stdout', 'stderr']) {
+        assert.equal(publicResponse.includes(privateValue), false);
+      }
+    });
   });
 });
 
 test('adversarial completedStages are stripped from the durable failure', async () => {
-  const app = createApp(loadConfig({}), {
-    projectRegistrySource: registry,
-    projectTasksWorkflowExecutor: async () => ({
-      ok: false, status: 'failed', stage: 'hermes', error: 'execution_failed',
-      summary: 'PRIVATE', projectId: 'safe',
-      completedStages: ['planning', 'prompt', '/safe/repo'],
-    }),
-  });
-  await server(app, async (base) => {
-    await post(base, request()); await new Promise(setImmediate);
-    const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
-    assert.deepEqual(body.error, {
-      stage: 'hermes', code: 'execution_failed',
-      message: 'Hermes no pudo completar el razonamiento.',
-      projectId: 'safe',
+  await withDurableStore(async (store) => {
+    const app = createApp(loadConfig({}), {
+      projectRegistrySource: registry,
+      projectTaskStore: store,
+      projectTasksWorkflowExecutor: async () => ({
+        ok: false, status: 'failed', stage: 'hermes', error: 'execution_failed',
+        summary: 'PRIVATE', projectId: 'safe',
+        completedStages: ['planning', 'prompt', '/safe/repo'],
+      }),
     });
-    const publicResponse = JSON.stringify(body);
-    for (const privateValue of ['prompt', '/safe/repo', 'PRIVATE']) {
-      assert.equal(publicResponse.includes(privateValue), false);
-    }
+    await server(app, async (base) => {
+      await post(base, request()); await new Promise(setImmediate);
+      const body = await (await fetch(`${base}/api/projects/tasks/${ID}`)).json();
+      assert.deepEqual(body.error, {
+        stage: 'hermes', code: 'execution_failed',
+        message: 'Hermes no pudo completar el razonamiento.',
+        projectId: 'safe',
+      });
+      const publicResponse = JSON.stringify(body);
+      for (const privateValue of ['prompt', '/safe/repo', 'PRIVATE']) {
+        assert.equal(publicResponse.includes(privateValue), false);
+      }
+    });
   });
 });

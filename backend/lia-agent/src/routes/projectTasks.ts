@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { LiaAgentConfig } from '../config.js';
 import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
@@ -9,7 +9,7 @@ import type { ProjectVerificationRegistry } from '../contracts/projectVerificati
 import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
 import { methodNotAllowed } from '../middleware/methodNotAllowed.js';
 import { resolveAuthorizedProject } from '../services/projectRegistry.js';
-import { executeProjectTaskWorkflow } from '../services/projectTaskWorkflowService.js';
+import { runProjectTaskDurableExecution } from '../services/projectTaskDurableExecutionRunner.js';
 
 type ObservableStage = Extract<ProjectTaskStage, 'planning' | 'hermes' | 'codex' | 'verification' | 'commit'>;
 export type AsyncWorkflowExecutor = (onStage: (stage: ObservableStage) => void) => Promise<ProjectTaskWorkflowResult>;
@@ -57,9 +57,17 @@ export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: P
     if (reserved.kind === 'capacity') return void res.status(503).json({ ok: false, integration: 'project_task', error: 'task_registry_full' });
     if (reserved.kind === 'created') setImmediate(() => {
       const observe = (stage: ObservableStage) => dependencies.store.transition(taskId, stage);
-      const run = dependencies.executeWorkflow
-        ? dependencies.executeWorkflow(validation.request, observe)
-        : executeProjectTaskWorkflow(config, validation.request, dependencies.registry!, dependencies.verificationRegistry, { onStage: observe });
+      const run = runProjectTaskDurableExecution({
+        store: dependencies.store,
+        taskId,
+        workerId: `lia-durable-runner-${randomUUID()}`,
+        config,
+        request: validation.request,
+        registry: dependencies.registry!,
+        verificationRegistry: dependencies.verificationRegistry,
+        onStage: observe,
+        ...(dependencies.executeWorkflow !== undefined ? { executeWorkflow: dependencies.executeWorkflow } : {}),
+      });
       void run.then((result) => {
         if (result.ok) { const receipt = safeReceipt(result); if (receipt) dependencies.store.complete(taskId, receipt); else dependencies.store.fail(taskId, genericFailure()); }
         else dependencies.store.fail(taskId, safeFailure(result));

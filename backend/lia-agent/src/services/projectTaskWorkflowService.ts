@@ -2,6 +2,7 @@ import type { LiaAgentConfig } from '../config.js';
 import type { ProjectCodexCommitResult } from '../contracts/projectCodexCommit.js';
 import type { ProjectCodexExecutionResult } from '../contracts/projectCodexExecution.js';
 import type { ProjectCodexHandoff } from '../contracts/projectCodexHandoff.js';
+import { isExternalLaunchOutcomeUnknownError } from '../contracts/projectTaskDurableExecution.js';
 import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
 import type { SafeTaskStage } from '../contracts/projectTask.js';
@@ -50,6 +51,18 @@ export interface ProjectTaskWorkflowDependencies {
   executeCommit?: CommitExecutor;
   /** Internal observability only. Receives no workflow internals. */
   onStage?: (stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => void | Promise<void>;
+  /**
+   * Optional durable pre-Hermes launch gate. Invoked exactly once per live
+   * workflow process, after planning and prompt preparation and immediately
+   * before the first real Hermes external call (and therefore before the
+   * observable `hermes` stage). It admits entry into ONE live external phase.
+   * When it reports an already-crossed/ambiguous launch it must throw
+   * ExternalLaunchOutcomeUnknownError; the workflow then fails closed without
+   * any Hermes call and without observing the `hermes` stage. Any other throw
+   * propagates as a pre-launch failure. In-process Hermes repair calls after
+   * a successful gate are not re-gated.
+   */
+  beforeExternalLaunch?: () => void | Promise<void>;
   /** Internal, bounded diagnostics. Never includes prompts, responses, paths or process output. */
   onHermesProposalAttempt?: (outcome:
     | 'initial_invalid_json'
@@ -144,6 +157,21 @@ export async function executeProjectTaskWorkflow(
   }
 
   let hermesResult: HermesExecutionResult;
+  if (dependencies.beforeExternalLaunch !== undefined) {
+    try {
+      await dependencies.beforeExternalLaunch();
+    } catch (error) {
+      if (isExternalLaunchOutcomeUnknownError(error)) {
+        return fail(
+          'hermes',
+          'external_launch_outcome_unknown',
+          'The external launch outcome is unknown; LÍA will not relaunch automatically.',
+          identifiers,
+        );
+      }
+      throw error;
+    }
+  }
   await observe(dependencies, 'hermes');
   const executeHermes = dependencies.executeHermes ?? executeHermesSupervisor;
   const retryableHermesErrors = new Set(['timeout', 'execution_failed', 'empty_response']);
