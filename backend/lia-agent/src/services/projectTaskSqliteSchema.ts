@@ -8,7 +8,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION = 3;
 export const PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION = 4;
 export const PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION = 5;
 export const PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION = 6;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 7;
+export const PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION = 7;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 8;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -93,6 +94,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -557,7 +559,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   }
 
   if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION) {
-    migrate(PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION, `
       CREATE TABLE project_task_lease_generations (
         task_id TEXT NOT NULL CHECK (task_id <> ''),
         lease_id TEXT NOT NULL UNIQUE CHECK (length(lease_id) = 36),
@@ -622,6 +624,97 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       BEFORE DELETE ON project_task_lease_generations
       BEGIN
         SELECT RAISE(ABORT, 'project_task_lease_generation_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+      CREATE TABLE project_task_dispatch_outbox (
+        dispatch_id TEXT PRIMARY KEY CHECK (
+          length(dispatch_id) = 36
+          AND substr(dispatch_id, 9, 1) = '-' AND substr(dispatch_id, 14, 1) = '-'
+          AND substr(dispatch_id, 19, 1) = '-' AND substr(dispatch_id, 24, 1) = '-'
+          AND dispatch_id = lower(dispatch_id)
+          AND replace(dispatch_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        created_at INTEGER NOT NULL CHECK (created_at BETWEEN 0 AND 9007199254740991),
+        consumed_at INTEGER CHECK (
+          consumed_at IS NULL OR consumed_at BETWEEN created_at AND 9007199254740991
+        ),
+        consumed_lease_id TEXT UNIQUE CHECK (
+          consumed_lease_id IS NULL OR length(consumed_lease_id) = 36
+        ),
+        consumed_fencing_token INTEGER CHECK (
+          consumed_fencing_token IS NULL
+          OR consumed_fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (consumed_lease_id) REFERENCES project_task_lease_generations(lease_id),
+        CHECK (
+          (consumed_at IS NULL AND consumed_lease_id IS NULL AND consumed_fencing_token IS NULL)
+          OR (consumed_at IS NOT NULL AND consumed_lease_id IS NOT NULL
+              AND consumed_fencing_token IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX project_task_dispatch_pending_created
+      ON project_task_dispatch_outbox(created_at ASC, dispatch_id ASC)
+      WHERE consumed_at IS NULL;
+
+      CREATE TRIGGER project_task_dispatch_validate_insert
+      BEFORE INSERT ON project_task_dispatch_outbox
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_tasks
+          WHERE task_id = NEW.task_id AND status = 'accepted'
+        ) THEN RAISE(ABORT, 'project_task_dispatch_task_unavailable') END;
+        SELECT CASE WHEN NEW.consumed_at IS NOT NULL
+          OR NEW.consumed_lease_id IS NOT NULL OR NEW.consumed_fencing_token IS NOT NULL
+          THEN RAISE(ABORT, 'project_task_dispatch_invalid_initial_state') END;
+      END;
+
+      CREATE TRIGGER project_task_dispatch_identity_immutable
+      BEFORE UPDATE OF dispatch_id, task_id, created_at ON project_task_dispatch_outbox
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_dispatch_immutable');
+      END;
+
+      CREATE TRIGGER project_task_dispatch_consume_once
+      BEFORE UPDATE OF consumed_at, consumed_lease_id, consumed_fencing_token
+      ON project_task_dispatch_outbox
+      WHEN OLD.consumed_at IS NOT NULL OR NEW.consumed_at IS NULL
+        OR NEW.consumed_lease_id IS NULL OR NEW.consumed_fencing_token IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_dispatch_immutable');
+      END;
+
+      CREATE TRIGGER project_task_dispatch_validate_consume
+      BEFORE UPDATE OF consumed_at, consumed_lease_id, consumed_fencing_token
+      ON project_task_dispatch_outbox
+      WHEN OLD.consumed_at IS NULL
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_tasks
+          WHERE task_id = OLD.task_id AND status = 'accepted'
+        ) THEN RAISE(ABORT, 'project_task_dispatch_task_unavailable') END;
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_task_lease_generations
+          WHERE task_id = OLD.task_id
+            AND lease_id = NEW.consumed_lease_id
+            AND fencing_token = NEW.consumed_fencing_token
+            AND released_at IS NULL
+            AND NEW.consumed_at >= acquired_at
+            AND NEW.consumed_at < lease_expires_at
+        ) THEN RAISE(ABORT, 'project_task_dispatch_authority_mismatch') END;
+      END;
+
+      CREATE TRIGGER project_task_dispatch_immutable_delete
+      BEFORE DELETE ON project_task_dispatch_outbox
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_dispatch_immutable');
       END
     `);
   }

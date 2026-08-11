@@ -373,7 +373,7 @@ test('fencing counter fails closed at the JavaScript safe-integer ceiling', asyn
   });
 });
 
-test('an authentic V6-shaped database migrates additively to V7 and keeps legacy task data', async () => {
+test('an authentic V6-shaped database migrates additively to V8 and keeps legacy task data', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-task-lease-v6-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {
@@ -382,6 +382,7 @@ test('an authentic V6-shaped database migrates additively to V7 and keeps legacy
     initial.close();
     const v6 = new DatabaseSync(databasePath);
     v6.exec(`
+      DROP TABLE project_task_dispatch_outbox;
       DROP TRIGGER project_task_lease_validate_insert;
       DROP TRIGGER project_task_lease_identity_immutable;
       DROP TRIGGER project_task_lease_expiry_monotonic;
