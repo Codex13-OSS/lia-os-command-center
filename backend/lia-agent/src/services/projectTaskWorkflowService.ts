@@ -3,6 +3,7 @@ import type { ProjectCodexCommitResult } from '../contracts/projectCodexCommit.j
 import type { ProjectCodexExecutionResult } from '../contracts/projectCodexExecution.js';
 import type { ProjectCodexHandoff } from '../contracts/projectCodexHandoff.js';
 import { isExternalLaunchOutcomeUnknownError } from '../contracts/projectTaskDurableExecution.js';
+import type { ProjectTaskExecutionLaunchResultOutcome } from '../contracts/projectTaskExecutionLaunchResult.js';
 import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
 import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
 import type { SafeTaskStage } from '../contracts/projectTask.js';
@@ -71,6 +72,20 @@ export interface ProjectTaskWorkflowDependencies {
     | 'repair_invalid_json'
     | 'repair_invalid_structure'
   ) => void | Promise<void>;
+  /**
+   * Optional durable post-Hermes evidence seam. Invoked at most once per live
+   * workflow with ONLY the small final outcome class of the WHOLE admitted
+   * live Hermes phase (initial call plus the existing bounded repair/retry).
+   * It never receives the raw Hermes response, the parsed proposal, prompts,
+   * capabilities, paths or credentials. The workflow records the final
+   * outcome durably before any local approval/blocked-action decision, handoff
+   * validation, capability check or Codex call. When the callback throws, the
+   * workflow fails closed as external_launch_outcome_unknown with zero Codex
+   * and zero Hermes retry, because the observed outcome could not be durably
+   * confirmed. Without this dependency the workflow keeps its legacy direct
+   * behavior and records nothing.
+   */
+  recordExternalLaunchResult?: (outcomeClass: ProjectTaskExecutionLaunchResultOutcome) => void | Promise<void>;
 }
 
 const observe = async (dependencies: ProjectTaskWorkflowDependencies, stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => {
@@ -83,6 +98,28 @@ const observeHermesProposal = async (
 ) => {
   try { await dependencies.onHermesProposalAttempt?.(outcome); } catch { /* Diagnostics must not alter execution. */ }
 };
+
+/**
+ * Maps a FINAL Hermes-phase terminal execution error to the closed
+ * launch-result outcome vocabulary. 'execution_disabled' and any unknown
+ * final error are classified as execution_failed; intermediate transient
+ * errors that are followed by the existing bounded retry/repair are never
+ * classified here. invalid_hermes_json / invalid_hermes_proposal are produced
+ * only by the workflow's own parsing/structural validation and are recorded
+ * explicitly at those final-outcome sites.
+ */
+function classifyFinalHermesOutcome(
+  error: Extract<HermesExecutionResult, { ok: false }>['error'],
+): ProjectTaskExecutionLaunchResultOutcome {
+  switch (error) {
+    case 'timeout':
+      return 'timeout';
+    case 'empty_response':
+      return 'empty_response';
+    default:
+      return 'execution_failed';
+  }
+}
 
 function containsNonRetryableHermesAuthorityRequest(value: unknown, approvedCapabilities: readonly string[]): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
@@ -132,6 +169,29 @@ export async function executeProjectTaskWorkflow(
     summary: string,
     identifiers: { projectId?: string; executionId?: string } = {},
   ): ProjectTaskWorkflowResult => failed(stage, error, summary, identifiers, completedStages);
+
+  // The final outcome of the admitted live Hermes phase is durably recorded
+  // EXACTLY ONCE. When durable recording fails after admission the outcome is
+  // not durably confirmed: fail closed as external_launch_outcome_unknown with
+  // zero Codex and zero Hermes retry.
+  let launchResultRecorded = false;
+  const recordLaunchResult = async (outcomeClass: ProjectTaskExecutionLaunchResultOutcome): Promise<boolean> => {
+    if (launchResultRecorded) return true;
+    launchResultRecorded = true;
+    if (dependencies.recordExternalLaunchResult === undefined) return true;
+    try {
+      await dependencies.recordExternalLaunchResult(outcomeClass);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const failOutcomeNotDurable = (): ProjectTaskWorkflowResult => fail(
+    'hermes',
+    'external_launch_outcome_unknown',
+    'The external launch outcome is unknown; LÍA will not relaunch automatically.',
+    identifiers,
+  );
 
   await observe(dependencies, 'planning');
   const planning = await planProjectTask(request, projectRegistrySource);
@@ -184,6 +244,9 @@ export async function executeProjectTaskWorkflow(
     if (hermesResult.ok || attempt === 1 || !retryableHermesErrors.has(hermesResult.error)) break;
   }
   if (!hermesResult.ok) {
+    if (!(await recordLaunchResult(classifyFinalHermesOutcome(hermesResult.error)))) {
+      return failOutcomeNotDurable();
+    }
     return fail('hermes', hermesResult.error, 'Hermes reasoning did not complete.', identifiers);
   }
 
@@ -197,6 +260,9 @@ export async function executeProjectTaskWorkflow(
     : undefined;
   if (validation !== undefined && !validation.success) {
     if (containsNonRetryableHermesAuthorityRequest(parsed, plan.approvedCapabilities)) {
+      if (!(await recordLaunchResult('invalid_hermes_proposal'))) {
+        return failOutcomeNotDurable();
+      }
       return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
     }
     initialError = 'invalid_hermes_proposal';
@@ -219,23 +285,44 @@ export async function executeProjectTaskWorkflow(
     try { repairedResult = await executeHermes(config, repairPrompt); }
     catch { repairedResult = { ok: false, error: 'execution_failed' }; }
     if (!repairedResult.ok) {
+      if (!(await recordLaunchResult(classifyFinalHermesOutcome(repairedResult.error)))) {
+        return failOutcomeNotDurable();
+      }
       return fail('hermes', repairedResult.error, 'Hermes reasoning did not complete.', identifiers);
     }
     try { parsed = JSON.parse(repairedResult.response); }
     catch {
       await observeHermesProposal(dependencies, 'repair_invalid_json');
+      if (!(await recordLaunchResult('invalid_hermes_json'))) {
+        return failOutcomeNotDurable();
+      }
       return fail('hermes', 'invalid_hermes_json', 'Hermes returned invalid JSON.', identifiers);
     }
     validation = validateProjectOrchestrationProposal(parsed, plan);
     if (!validation.success) {
       await observeHermesProposal(dependencies, 'repair_invalid_structure');
+      if (!(await recordLaunchResult('invalid_hermes_proposal'))) {
+        return failOutcomeNotDurable();
+      }
       return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
     }
     await observeHermesProposal(dependencies, 'repair_succeeded');
   }
 
   if (validation === undefined || !validation.success) {
+    if (!(await recordLaunchResult('invalid_hermes_proposal'))) {
+      return failOutcomeNotDurable();
+    }
     return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+  }
+  // The WHOLE admitted live Hermes phase finished and LÍA obtained a final
+  // proposal that passed the existing parsing/structural validation. DURABLY
+  // record proposal_valid BEFORE any local approval/blocked-action decision,
+  // handoff validation, capability check or Codex call. The receipt is
+  // evidence only: it grants no approval, capability, Codex or retry
+  // authority.
+  if (!(await recordLaunchResult('proposal_valid'))) {
+    return failOutcomeNotDurable();
   }
   if (validation.proposal.requiresHumanApproval || validation.proposal.blockedActions.length > 0) {
     return fail('approval', 'human_approval_required', 'Human approval is required.', identifiers);

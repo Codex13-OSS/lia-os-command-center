@@ -36,6 +36,7 @@ export type ProjectTaskWorkflowError =
   | 'invalid_hermes_json'
   | 'invalid_hermes_proposal'
   | 'external_launch_outcome_unknown'
+  | 'workflow_interrupted'
   | 'human_approval_required';
 
 /** Safe workflow receipt. Internal plans, paths, prompts, process output and commands are excluded. */

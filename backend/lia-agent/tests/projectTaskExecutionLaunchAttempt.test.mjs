@@ -35,6 +35,12 @@ const REWIND_V11_TO_V10_SQL = `
   DROP TRIGGER project_task_execution_launch_attempts_immutable_delete;
   DROP INDEX project_task_execution_launch_attempts_crossed;
   DROP TABLE project_task_execution_launch_attempts;
+
+  DROP TRIGGER project_task_execution_launch_results_validate_insert;
+  DROP TRIGGER project_task_execution_launch_results_immutable_update;
+  DROP TRIGGER project_task_execution_launch_results_immutable_delete;
+  DROP INDEX project_task_execution_launch_results_recorded;
+  DROP TABLE project_task_execution_launch_results;
   UPDATE project_task_meta SET schema_version = 10 WHERE singleton = 1;
 `;
 const CHAIN_TABLES = [
@@ -656,7 +662,7 @@ test('list is deterministic and bounded', async () => {
   });
 });
 
-test('V10 to V11 migration preserves the complete existing chain', async () => {
+test('V10 to V12 migration preserves the complete existing chain', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-launch-attempt-v10-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {
@@ -664,7 +670,7 @@ test('V10 to V11 migration preserves the complete existing chain', async () => {
     initial.createGoal({
       goalId: GOAL,
       projectId: 'safe',
-      objective: 'Preserve the complete durable chain through V11 migration.',
+      objective: 'Preserve the complete durable chain through V12 migration.',
       maxAttempts: 3,
       continuationDepthLimit: 2,
     });
@@ -699,7 +705,7 @@ test('V10 to V11 migration preserves the complete existing chain', async () => {
     v10.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 11);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 12);
     assert.equal(migrated.readTaskExecutionInvocationByRun(prepared.run.executionRunId).invocationId, invocation.invocationId);
     assert.equal(migrated.readTaskExecutionRunByTask(continuation.createdTaskId).executionRunId, prepared.run.executionRunId);
     migrated.close();
@@ -708,13 +714,16 @@ test('V10 to V11 migration preserves the complete existing chain', async () => {
     for (const [table, snapshot] of Object.entries(before)) {
       assert.equal(JSON.stringify(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), snapshot, table);
     }
-    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 11);
+    assert.equal(
+      check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version,
+      PROJECT_TASK_SQLITE_SCHEMA_VERSION,
+    );
     assert.equal(check.prepare('SELECT COUNT(*) AS total FROM project_task_execution_launch_attempts').get().total, 0);
     check.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test('V10 to V11 migration manufactures zero launch attempts', async () => {
+test('V10 to V12 migration manufactures zero launch attempts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-launch-attempt-migrate-zero-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {

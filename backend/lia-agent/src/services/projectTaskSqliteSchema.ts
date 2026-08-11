@@ -13,7 +13,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION = 8;
 export const PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION = 9;
 export const PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION = 10;
 export const PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION = 11;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 11;
+export const PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION = 12;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 12;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -102,7 +103,8 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION
-    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
   }
@@ -947,6 +949,77 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       END
     `);
     meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION, `
+      CREATE TABLE project_task_execution_launch_results (
+        launch_result_id TEXT PRIMARY KEY CHECK (
+          length(launch_result_id) = 36
+          AND substr(launch_result_id, 9, 1) = '-'
+          AND substr(launch_result_id, 14, 1) = '-'
+          AND substr(launch_result_id, 19, 1) = '-'
+          AND substr(launch_result_id, 24, 1) = '-'
+          AND launch_result_id = lower(launch_result_id)
+          AND replace(launch_result_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        outcome_class TEXT NOT NULL CHECK (outcome_class IN (
+          'proposal_valid', 'timeout', 'execution_failed', 'empty_response',
+          'invalid_hermes_json', 'invalid_hermes_proposal'
+        )),
+        recorded_at INTEGER NOT NULL CHECK (
+          recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (invocation_id) REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (execution_run_id) REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id)
+      ) STRICT;
+
+      CREATE INDEX project_task_execution_launch_results_recorded
+      ON project_task_execution_launch_results(recorded_at ASC, launch_result_id ASC);
+
+      CREATE TRIGGER project_task_execution_launch_results_validate_insert
+      BEFORE INSERT ON project_task_execution_launch_results
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_launch_attempts AS attempt
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.invocation_id = attempt.invocation_id
+          JOIN project_task_execution_runs AS execution_run
+            ON execution_run.execution_run_id = attempt.execution_run_id
+          JOIN project_tasks AS task ON task.task_id = attempt.task_id
+          WHERE attempt.launch_attempt_id = NEW.launch_attempt_id
+            AND attempt.invocation_id = NEW.invocation_id
+            AND attempt.execution_run_id = NEW.execution_run_id
+            AND attempt.task_id = NEW.task_id
+            AND invocation.execution_run_id = NEW.execution_run_id
+            AND invocation.task_id = NEW.task_id
+            AND execution_run.task_id = NEW.task_id
+            AND NEW.recorded_at >= attempt.boundary_crossed_at
+            AND task.status NOT IN ('completed', 'failed')
+        ) THEN RAISE(ABORT, 'project_task_execution_launch_result_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_results_immutable_update
+      BEFORE UPDATE ON project_task_execution_launch_results
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_result_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_results_immutable_delete
+      BEFORE DELETE ON project_task_execution_launch_results
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_result_immutable');
+      END;
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION;
   }
 }
 

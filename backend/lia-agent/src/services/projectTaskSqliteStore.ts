@@ -93,6 +93,18 @@ import {
   PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_MAX_LIST_LIMIT,
 } from '../contracts/projectTaskExecutionLaunchAttempt.js';
 import type {
+  ProjectTaskExecutionLaunchResultOutcome,
+  ProjectTaskExecutionLaunchResultRecord,
+  ProjectTaskExecutionLaunchResultStore,
+  RecordProjectTaskExecutionLaunchResultInput,
+  RecordProjectTaskExecutionLaunchResultResult,
+} from '../contracts/projectTaskExecutionLaunchResult.js';
+import {
+  PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS,
+  PROJECT_TASK_EXECUTION_LAUNCH_RESULT_MAX_LIST_LIMIT,
+  PROJECT_TASK_EXECUTION_LAUNCH_RESULT_OUTCOME_SET,
+} from '../contracts/projectTaskExecutionLaunchResult.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -277,6 +289,16 @@ type ProjectTaskExecutionLaunchAttemptRow = {
   boundary_crossed_at: unknown;
 };
 
+type ProjectTaskExecutionLaunchResultRow = {
+  launch_result_id: unknown;
+  launch_attempt_id: unknown;
+  invocation_id: unknown;
+  execution_run_id: unknown;
+  task_id: unknown;
+  outcome_class: unknown;
+  recorded_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -322,7 +344,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -458,6 +480,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         SELECT launch_attempt_id, invocation_id, execution_run_id, task_id,
                launch_lease_id, launch_fencing_token, boundary_crossed_at
         FROM project_task_execution_launch_attempts LIMIT 1
+      `).all();
+      this.database.prepare(`
+        SELECT launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+               task_id, outcome_class, recorded_at
+        FROM project_task_execution_launch_results LIMIT 1
       `).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -618,6 +645,56 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
              launch_lease_id, launch_fencing_token, boundary_crossed_at
       FROM project_task_execution_launch_attempts WHERE task_id = ?
     `).get(taskId) as unknown as ProjectTaskExecutionLaunchAttemptRow | undefined;
+  }
+
+  private selectLaunchResultRow(
+    launchResultId: string,
+  ): ProjectTaskExecutionLaunchResultRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+             task_id, outcome_class, recorded_at
+      FROM project_task_execution_launch_results WHERE launch_result_id = ?
+    `).get(launchResultId) as unknown as ProjectTaskExecutionLaunchResultRow | undefined;
+  }
+
+  private selectLaunchResultByAttemptRow(
+    launchAttemptId: string,
+  ): ProjectTaskExecutionLaunchResultRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+             task_id, outcome_class, recorded_at
+      FROM project_task_execution_launch_results WHERE launch_attempt_id = ?
+    `).get(launchAttemptId) as unknown as ProjectTaskExecutionLaunchResultRow | undefined;
+  }
+
+  private selectLaunchResultByInvocationRow(
+    invocationId: string,
+  ): ProjectTaskExecutionLaunchResultRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+             task_id, outcome_class, recorded_at
+      FROM project_task_execution_launch_results WHERE invocation_id = ?
+    `).get(invocationId) as unknown as ProjectTaskExecutionLaunchResultRow | undefined;
+  }
+
+  private selectLaunchResultByRunRow(
+    executionRunId: string,
+  ): ProjectTaskExecutionLaunchResultRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+             task_id, outcome_class, recorded_at
+      FROM project_task_execution_launch_results WHERE execution_run_id = ?
+    `).get(executionRunId) as unknown as ProjectTaskExecutionLaunchResultRow | undefined;
+  }
+
+  private selectLaunchResultByTaskRow(
+    taskId: string,
+  ): ProjectTaskExecutionLaunchResultRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+             task_id, outcome_class, recorded_at
+      FROM project_task_execution_launch_results WHERE task_id = ?
+    `).get(taskId) as unknown as ProjectTaskExecutionLaunchResultRow | undefined;
   }
 
   private decodeDispatchRow(row: ProjectTaskDispatchRow): ProjectTaskDispatchRecord {
@@ -787,6 +864,59 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       launchLeaseId: row.launch_lease_id,
       launchFencingToken: row.launch_fencing_token,
       boundaryCrossedAt: row.boundary_crossed_at,
+    };
+  }
+
+  private decodeLaunchResultRow(
+    row: ProjectTaskExecutionLaunchResultRow,
+  ): ProjectTaskExecutionLaunchResultRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.corruptRecord);
+    if (typeof row.launch_result_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_result_id)) throw corrupt();
+    if (typeof row.launch_attempt_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_attempt_id)) throw corrupt();
+    if (typeof row.invocation_id !== 'string' || !PROJECT_TASK_ID.test(row.invocation_id)) throw corrupt();
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (
+      typeof row.outcome_class !== 'string'
+      || !PROJECT_TASK_EXECUTION_LAUNCH_RESULT_OUTCOME_SET.has(row.outcome_class)
+    ) throw corrupt();
+    if (
+      typeof row.recorded_at !== 'number'
+      || !Number.isSafeInteger(row.recorded_at)
+      || row.recorded_at < 0
+    ) throw corrupt();
+
+    const attemptRow = this.selectLaunchAttemptRow(row.launch_attempt_id);
+    if (attemptRow === undefined) throw corrupt();
+    const attempt = this.decodeLaunchAttemptRow(attemptRow);
+    if (
+      attempt.invocationId !== row.invocation_id
+      || attempt.executionRunId !== row.execution_run_id
+      || attempt.taskId !== row.task_id
+      || row.recorded_at < attempt.boundaryCrossedAt
+    ) throw corrupt();
+    const invocationRow = this.selectExecutionInvocationRow(row.invocation_id);
+    if (invocationRow === undefined) throw corrupt();
+    const invocation = this.decodeExecutionInvocationRow(invocationRow);
+    if (
+      invocation.executionRunId !== row.execution_run_id
+      || invocation.taskId !== row.task_id
+    ) throw corrupt();
+    const executionRunRow = this.selectExecutionRunRow(row.execution_run_id);
+    if (executionRunRow === undefined) throw corrupt();
+    const executionRun = this.decodeExecutionRunRow(executionRunRow);
+    if (executionRun.taskId !== row.task_id) throw corrupt();
+    const taskRow = this.selectRow(row.task_id);
+    if (taskRow === undefined) throw corrupt();
+
+    return {
+      launchResultId: row.launch_result_id,
+      launchAttemptId: row.launch_attempt_id,
+      invocationId: row.invocation_id,
+      executionRunId: row.execution_run_id,
+      taskId: row.task_id,
+      outcomeClass: row.outcome_class as ProjectTaskExecutionLaunchResultOutcome,
+      recordedAt: row.recorded_at,
     };
   }
 
@@ -2338,8 +2468,13 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
    * prepared execution run are preserved. A task with a durable launch attempt
    * is treated as an AMBIGUOUS EXTERNAL LAUNCH boundary and fails closed with
    * external_launch_outcome_unknown; it is never relaunched and no attempt,
-   * dispatch, run, or lease operation is performed. Terminal tasks are
-   * untouched.
+   * dispatch, run, or lease operation is performed. When a durable launch
+   * result exists the external outcome is KNOWN: the task fails closed with
+   * the same safe outcome error (workflow_interrupted for proposal_valid
+   * because no automatic local resume exists), still with zero Hermes, zero
+   * Codex, zero lease/attempt/result operations. Terminal tasks are untouched.
+   * All launch-result relationships are validated before any task state is
+   * mutated; corrupt relationships abort the whole transaction atomically.
    */
   reconcileRestartSafeTasks(): ProjectTaskRestartRecoveryResult {
     return this.inTransaction(() => {
@@ -2377,6 +2512,12 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         FROM project_task_execution_launch_attempts
         ORDER BY task_id ASC
       `).all() as unknown as ProjectTaskExecutionLaunchAttemptRow[];
+      const launchResultRows = this.database.prepare(`
+        SELECT launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+               task_id, outcome_class, recorded_at
+        FROM project_task_execution_launch_results
+        ORDER BY task_id ASC
+      `).all() as unknown as ProjectTaskExecutionLaunchResultRow[];
 
       // Validate ordinary durable read shapes before making any change. Also
       // reject outbox references that do not resolve to exactly one task.
@@ -2460,9 +2601,33 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         launchAttemptInvocationIds.add(attempt.invocationId);
         launchAttemptRunIds.add(attempt.executionRunId);
       }
+      const launchResultByTask = new Map<string, ProjectTaskExecutionLaunchResultRecord>();
+      const launchResultAttemptIds = new Set<string>();
+      const launchResultInvocationIds = new Set<string>();
+      const launchResultRunIds = new Set<string>();
+      for (const row of launchResultRows) {
+        const result = this.decodeLaunchResultRow(row);
+        const attempt = launchAttemptByTask.get(result.taskId);
+        if (
+          !taskIds.has(result.taskId)
+          || attempt === undefined
+          || attempt.launchAttemptId !== result.launchAttemptId
+          || attempt.invocationId !== result.invocationId
+          || attempt.executionRunId !== result.executionRunId
+          || launchResultByTask.has(result.taskId)
+          || launchResultAttemptIds.has(result.launchAttemptId)
+          || launchResultInvocationIds.has(result.invocationId)
+          || launchResultRunIds.has(result.executionRunId)
+        ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.corruptRecord);
+        launchResultByTask.set(result.taskId, result);
+        launchResultAttemptIds.add(result.launchAttemptId);
+        launchResultInvocationIds.add(result.invocationId);
+        launchResultRunIds.add(result.executionRunId);
+      }
 
       let failedTaskIds: string[] = [];
       let ambiguousLaunchTaskIds: string[] = [];
+      let knownOutcomeTaskIds: Array<{ taskId: string; outcomeClass: ProjectTaskExecutionLaunchResultOutcome }> = [];
       let preservedRecoverable = 0;
       let terminalUnchanged = 0;
       for (const row of rows) {
@@ -2480,7 +2645,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         }
         // A launch attempt marks the AMBIGUOUS EXTERNAL LAUNCH boundary: the
         // external launch MAY have occurred before the crash, so the task must
-        // never be preserved for automatic relaunch.
+        // never be preserved for automatic relaunch. With a durable launch
+        // result the external outcome is KNOWN: recovery still performs zero
+        // Hermes/Codex/lease/attempt/result operations and only surfaces the
+        // same safe failure (workflow_interrupted for proposal_valid, which
+        // has no automatic local resume).
         const isAmbiguousLaunch = typeof row.task_id === 'string'
           && launchAttemptByTask.has(row.task_id);
         const couldBePreserved = !isAmbiguousLaunch
@@ -2512,7 +2681,15 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           continue;
         }
         if (launchAttemptByTask.has(task.taskId)) {
-          ambiguousLaunchTaskIds = [...ambiguousLaunchTaskIds, task.taskId];
+          const result = launchResultByTask.get(task.taskId);
+          if (result === undefined) {
+            ambiguousLaunchTaskIds = [...ambiguousLaunchTaskIds, task.taskId];
+          } else {
+            knownOutcomeTaskIds = [
+              ...knownOutcomeTaskIds,
+              { taskId: task.taskId, outcomeClass: result.outcomeClass },
+            ];
+          }
           continue;
         }
         const dispatch = dispatchByTask.get(task.taskId);
@@ -2535,6 +2712,24 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       const ambiguousLaunch: SafeTaskError = {
         code: 'external_launch_outcome_unknown',
         message: SAFE_TASK_ERROR_MESSAGES.external_launch_outcome_unknown,
+      };
+      const knownOutcomeError = (outcomeClass: ProjectTaskExecutionLaunchResultOutcome): SafeTaskError => {
+        switch (outcomeClass) {
+          case 'timeout':
+            return { code: 'timeout', message: SAFE_TASK_ERROR_MESSAGES.timeout };
+          case 'execution_failed':
+            return { code: 'execution_failed', message: SAFE_TASK_ERROR_MESSAGES.execution_failed };
+          case 'empty_response':
+            return { code: 'empty_response', message: SAFE_TASK_ERROR_MESSAGES.empty_response };
+          case 'invalid_hermes_json':
+            return { code: 'invalid_hermes_json', message: SAFE_TASK_ERROR_MESSAGES.invalid_hermes_json };
+          case 'invalid_hermes_proposal':
+            return { code: 'invalid_hermes_proposal', message: SAFE_TASK_ERROR_MESSAGES.invalid_hermes_proposal };
+          case 'proposal_valid':
+            // The external phase completed, but Layer 12 deliberately adds no
+            // automatic local resume: fail safe with workflow_interrupted.
+            return { code: 'workflow_interrupted', message: SAFE_TASK_ERROR_MESSAGES.workflow_interrupted };
+        }
       };
       const now = this.now();
       const fail = this.database.prepare(`
@@ -2560,10 +2755,18 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         }
         clearTrace.run(taskId);
       }
+      for (const { taskId, outcomeClass } of knownOutcomeTaskIds) {
+        const result = fail.run(JSON.stringify(knownOutcomeError(outcomeClass)), now, now, taskId);
+        if (Number(result.changes) !== 1) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        clearTrace.run(taskId);
+      }
 
       return {
         preservedRecoverable,
-        failedInterrupted: failedTaskIds.length + ambiguousLaunchTaskIds.length,
+        failedInterrupted:
+          failedTaskIds.length + ambiguousLaunchTaskIds.length + knownOutcomeTaskIds.length,
         terminalUnchanged,
       };
     });
@@ -3255,6 +3458,160 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         LIMIT ?
       `).all(limit) as unknown as ProjectTaskExecutionLaunchAttemptRow[];
       return rows.map((row) => this.decodeLaunchAttemptRow(row));
+    });
+  }
+
+  recordTaskExecutionLaunchResult(
+    input: RecordProjectTaskExecutionLaunchResultInput,
+  ): RecordProjectTaskExecutionLaunchResultResult {
+    return this.inTransaction(() => {
+      if (
+        !isRecord(input)
+        || Object.keys(input).length !== 5
+        || !Object.keys(input).every((key) => [
+          'launchAttemptId', 'invocationId', 'executionRunId', 'taskId', 'outcomeClass',
+        ].includes(key))
+        || typeof input.launchAttemptId !== 'string'
+        || !PROJECT_TASK_ID.test(input.launchAttemptId)
+        || typeof input.invocationId !== 'string'
+        || !PROJECT_TASK_ID.test(input.invocationId)
+        || typeof input.executionRunId !== 'string'
+        || !PROJECT_TASK_ID.test(input.executionRunId)
+        || typeof input.taskId !== 'string'
+        || !PROJECT_TASK_ID.test(input.taskId)
+        || typeof input.outcomeClass !== 'string'
+        || !PROJECT_TASK_EXECUTION_LAUNCH_RESULT_OUTCOME_SET.has(input.outcomeClass)
+      ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.invalidInput);
+
+      const existingByAttempt = this.selectLaunchResultByAttemptRow(input.launchAttemptId);
+      if (existingByAttempt !== undefined) {
+        const existing = this.decodeLaunchResultRow(existingByAttempt);
+        if (
+          existing.invocationId !== input.invocationId
+          || existing.executionRunId !== input.executionRunId
+          || existing.taskId !== input.taskId
+          || existing.outcomeClass !== input.outcomeClass
+        ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.contradictory);
+        return { launchResult: existing, created: false };
+      }
+      const existingByInvocation = this.selectLaunchResultByInvocationRow(input.invocationId);
+      const existingByRun = this.selectLaunchResultByRunRow(input.executionRunId);
+      const existingByTask = this.selectLaunchResultByTaskRow(input.taskId);
+      if (
+        existingByInvocation !== undefined
+        || existingByRun !== undefined
+        || existingByTask !== undefined
+      ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.contradictory);
+
+      const attemptRow = this.selectLaunchAttemptRow(input.launchAttemptId);
+      if (attemptRow === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.launchAttemptNotFound);
+      }
+      const attempt = this.decodeLaunchAttemptRow(attemptRow);
+      if (
+        attempt.invocationId !== input.invocationId
+        || attempt.executionRunId !== input.executionRunId
+        || attempt.taskId !== input.taskId
+      ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.lineageMismatch);
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.invalidInput);
+      }
+      // Recording an already-observed result is NOT authorization for a new
+      // external action and does NOT require the launch lease to still be
+      // current/unexpired; the Launch Attempt already binds the admitted
+      // launch provenance. The result time must never precede the boundary.
+      const recordedAt = Math.max(now, attempt.boundaryCrossedAt);
+      const launchResultId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_execution_launch_results (
+          launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+          task_id, outcome_class, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        launchResultId,
+        input.launchAttemptId,
+        input.invocationId,
+        input.executionRunId,
+        input.taskId,
+        input.outcomeClass,
+        recordedAt,
+      );
+      const inserted = this.selectLaunchResultRow(launchResultId);
+      if (inserted === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.corruptRecord);
+      }
+      return { launchResult: this.decodeLaunchResultRow(inserted), created: true };
+    });
+  }
+
+  readTaskExecutionLaunchResult(
+    launchResultId: string,
+  ): ProjectTaskExecutionLaunchResultRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof launchResultId !== 'string' || !PROJECT_TASK_ID.test(launchResultId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.invalidInput);
+      }
+      const row = this.selectLaunchResultRow(launchResultId);
+      return row === undefined ? undefined : this.decodeLaunchResultRow(row);
+    });
+  }
+
+  readTaskExecutionLaunchResultByLaunchAttempt(
+    launchAttemptId: string,
+  ): ProjectTaskExecutionLaunchResultRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof launchAttemptId !== 'string' || !PROJECT_TASK_ID.test(launchAttemptId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.invalidInput);
+      }
+      const row = this.selectLaunchResultByAttemptRow(launchAttemptId);
+      return row === undefined ? undefined : this.decodeLaunchResultRow(row);
+    });
+  }
+
+  readTaskExecutionLaunchResultByInvocation(
+    invocationId: string,
+  ): ProjectTaskExecutionLaunchResultRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof invocationId !== 'string' || !PROJECT_TASK_ID.test(invocationId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.invalidInput);
+      }
+      const row = this.selectLaunchResultByInvocationRow(invocationId);
+      return row === undefined ? undefined : this.decodeLaunchResultRow(row);
+    });
+  }
+
+  readTaskExecutionLaunchResultByTask(
+    taskId: string,
+  ): ProjectTaskExecutionLaunchResultRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.invalidInput);
+      }
+      const row = this.selectLaunchResultByTaskRow(taskId);
+      return row === undefined ? undefined : this.decodeLaunchResultRow(row);
+    });
+  }
+
+  listTaskExecutionLaunchResults(
+    limit: number,
+  ): ProjectTaskExecutionLaunchResultRecord[] {
+    return this.inTransaction(() => {
+      if (
+        typeof limit !== 'number'
+        || !Number.isSafeInteger(limit)
+        || limit < 1
+        || limit > PROJECT_TASK_EXECUTION_LAUNCH_RESULT_MAX_LIST_LIMIT
+      ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_RESULT_ERRORS.invalidInput);
+      const rows = this.database.prepare(`
+        SELECT launch_result_id, launch_attempt_id, invocation_id, execution_run_id,
+               task_id, outcome_class, recorded_at
+        FROM project_task_execution_launch_results
+        ORDER BY recorded_at ASC, launch_result_id ASC
+        LIMIT ?
+      `).all(limit) as unknown as ProjectTaskExecutionLaunchResultRow[];
+      return rows.map((row) => this.decodeLaunchResultRow(row));
     });
   }
 
