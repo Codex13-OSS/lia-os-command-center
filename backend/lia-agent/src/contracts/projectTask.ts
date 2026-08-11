@@ -115,8 +115,9 @@ export const SAFE_TASK_ERROR_MESSAGES = {
   git_revision_failed: 'No se pudo validar el commit local.',
   workflow_failed: 'La ejecución no pudo completarse.',
   workflow_interrupted: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.',
+  external_launch_outcome_unknown: 'El lanzamiento externo quedó interrumpido y su resultado es desconocido; LÍA no lo relanza automáticamente.',
 } as const satisfies Record<
-  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted',
+  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown',
   string
 >;
 export type SafeTaskErrorCode = keyof typeof SAFE_TASK_ERROR_MESSAGES;

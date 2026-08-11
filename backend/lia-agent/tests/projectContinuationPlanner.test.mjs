@@ -522,7 +522,7 @@ test('legacy V4 database migrates additively and legacy tasks remain unchanged',
     store.close();
 
     const legacy = new DatabaseSync(databasePath);
-    // Remove V10/V9/V8/V7/V6 additive relations before reconstructing an authentic V4 fixture.
+    // Remove V11/V10/V9/V8/V7/V6 additive relations before reconstructing an authentic V4 fixture.
     legacy.exec(`
       DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release;
       DROP TABLE project_task_execution_invocations;
@@ -533,6 +533,12 @@ test('legacy V4 database migrates additively and legacy tasks remain unchanged',
       DROP TRIGGER project_task_lease_expiry_monotonic;
       DROP TRIGGER project_task_lease_release_once;
       DROP TRIGGER project_task_lease_generation_immutable_delete;
+      DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release;
+      DROP TRIGGER project_task_execution_launch_attempts_validate_insert;
+      DROP TRIGGER project_task_execution_launch_attempts_immutable_update;
+      DROP TRIGGER project_task_execution_launch_attempts_immutable_delete;
+      DROP INDEX project_task_execution_launch_attempts_crossed;
+      DROP TABLE project_task_execution_launch_attempts;
       DROP TABLE project_task_lease_generations;
     `);
     legacy.exec('DROP TABLE project_goal_continuation_consumptions');

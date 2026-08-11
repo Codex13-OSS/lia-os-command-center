@@ -336,7 +336,7 @@ test('read-by-id/run/task are side-effect free and list is bounded and determini
   });
 });
 
-test('V9 to V10 migration preserves the complete durable chain and manufactures no tickets', async () => {
+test('V9 to V11 migration preserves the complete durable chain and manufactures no tickets', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-task-invocation-v9-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {
@@ -386,18 +386,19 @@ test('V9 to V10 migration preserves the complete durable chain and manufactures 
       table,
       JSON.stringify(v9.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()),
     ]));
-    v9.exec('DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; UPDATE project_task_meta SET schema_version = 9 WHERE singleton = 1');
+    v9.exec('DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release; DROP TRIGGER project_task_execution_launch_attempts_validate_insert; DROP TRIGGER project_task_execution_launch_attempts_immutable_update; DROP TRIGGER project_task_execution_launch_attempts_immutable_delete; DROP INDEX project_task_execution_launch_attempts_crossed; DROP TABLE project_task_execution_launch_attempts; UPDATE project_task_meta SET schema_version = 9 WHERE singleton = 1');
     v9.close();
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 10);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 11);
     assert.equal(migrated.listReservedTaskExecutionInvocations(10).length, 0);
     migrated.close();
     const check = new DatabaseSync(databasePath);
     for (const [table, snapshot] of Object.entries(before)) {
       assert.equal(JSON.stringify(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), snapshot, table);
     }
-    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 10);
+    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 11);
     assert.equal(check.prepare('SELECT COUNT(*) AS total FROM project_task_execution_invocations').get().total, 0);
+    assert.equal(check.prepare('SELECT COUNT(*) AS total FROM project_task_execution_launch_attempts').get().total, 0);
     check.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

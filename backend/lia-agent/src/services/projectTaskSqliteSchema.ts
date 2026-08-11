@@ -11,7 +11,9 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION = 6;
 export const PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION = 7;
 export const PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION = 8;
 export const PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION = 9;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 10;
+export const PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION = 10;
+export const PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION = 11;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 11;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -99,6 +101,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
@@ -788,7 +791,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
   }
 
   if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION) {
-    migrate(PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION, PROJECT_TASK_SQLITE_SCHEMA_VERSION, `
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION, `
       CREATE TABLE project_task_execution_invocations (
         invocation_id TEXT PRIMARY KEY CHECK (
           length(invocation_id) = 36
@@ -859,6 +862,91 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
         SELECT RAISE(ABORT, 'project_task_execution_invocation_incompatible');
       END
     `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION, `
+      CREATE TABLE project_task_execution_launch_attempts (
+        launch_attempt_id TEXT PRIMARY KEY CHECK (
+          length(launch_attempt_id) = 36
+          AND substr(launch_attempt_id, 9, 1) = '-'
+          AND substr(launch_attempt_id, 14, 1) = '-'
+          AND substr(launch_attempt_id, 19, 1) = '-'
+          AND substr(launch_attempt_id, 24, 1) = '-'
+          AND launch_attempt_id = lower(launch_attempt_id)
+          AND replace(launch_attempt_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        launch_lease_id TEXT NOT NULL CHECK (length(launch_lease_id) = 36),
+        launch_fencing_token INTEGER NOT NULL CHECK (
+          launch_fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        boundary_crossed_at INTEGER NOT NULL CHECK (
+          boundary_crossed_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (invocation_id) REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (execution_run_id) REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (launch_lease_id) REFERENCES project_task_lease_generations(lease_id),
+        FOREIGN KEY (task_id, launch_fencing_token)
+          REFERENCES project_task_lease_generations(task_id, fencing_token)
+      ) STRICT;
+
+      CREATE INDEX project_task_execution_launch_attempts_crossed
+      ON project_task_execution_launch_attempts(boundary_crossed_at ASC, launch_attempt_id ASC);
+
+      CREATE TRIGGER project_task_execution_launch_attempts_validate_insert
+      BEFORE INSERT ON project_task_execution_launch_attempts
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_invocations AS invocation
+          JOIN project_task_execution_runs AS execution_run
+            ON execution_run.execution_run_id = invocation.execution_run_id
+          JOIN project_task_lease_generations AS lease
+            ON lease.task_id = invocation.task_id
+           AND lease.lease_id = NEW.launch_lease_id
+           AND lease.fencing_token = NEW.launch_fencing_token
+          WHERE invocation.invocation_id = NEW.invocation_id
+            AND invocation.execution_run_id = NEW.execution_run_id
+            AND invocation.task_id = NEW.task_id
+            AND execution_run.task_id = NEW.task_id
+            AND NEW.boundary_crossed_at >= invocation.reserved_at
+            AND NEW.boundary_crossed_at >= lease.acquired_at
+            AND NEW.boundary_crossed_at < lease.lease_expires_at
+            AND (lease.released_at IS NULL OR NEW.boundary_crossed_at <= lease.released_at)
+        ) THEN RAISE(ABORT, 'project_task_execution_launch_attempt_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_attempts_immutable_update
+      BEFORE UPDATE ON project_task_execution_launch_attempts
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_attempt_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_attempts_immutable_delete
+      BEFORE DELETE ON project_task_execution_launch_attempts
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_attempt_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release
+      BEFORE UPDATE OF released_at ON project_task_lease_generations
+      WHEN NEW.released_at IS NOT NULL AND EXISTS (
+        SELECT 1 FROM project_task_execution_launch_attempts AS attempt
+        WHERE attempt.task_id = OLD.task_id
+          AND attempt.launch_lease_id = OLD.lease_id
+          AND attempt.launch_fencing_token = OLD.fencing_token
+          AND NEW.released_at < attempt.boundary_crossed_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_attempt_incompatible');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION;
   }
 }
 

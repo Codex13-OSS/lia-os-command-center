@@ -334,7 +334,7 @@ test('authentic V7 shape migrates additively to V8 and preserves task and lease 
     const lease = initial.acquireTaskLease({ taskId: TASK_A, leaseOwner: 'legacy-worker', durationMs: 10_000 });
     initial.close();
     const v7 = new DatabaseSync(databasePath);
-    v7.exec('DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; DROP TABLE project_task_execution_runs; DROP TABLE project_task_dispatch_outbox; UPDATE project_task_meta SET schema_version = 7 WHERE singleton = 1');
+    v7.exec('DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; DROP TABLE project_task_execution_runs; DROP TABLE project_task_dispatch_outbox; DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release; DROP TRIGGER project_task_execution_launch_attempts_validate_insert; DROP TRIGGER project_task_execution_launch_attempts_immutable_update; DROP TRIGGER project_task_execution_launch_attempts_immutable_delete; DROP INDEX project_task_execution_launch_attempts_crossed; DROP TABLE project_task_execution_launch_attempts; UPDATE project_task_meta SET schema_version = 7 WHERE singleton = 1');
     v7.close();
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
     assert.equal(migrated.get(TASK_A).fingerprint, 'legacy-fp');
@@ -344,7 +344,7 @@ test('authentic V7 shape migrates additively to V8 and preserves task and lease 
     migrated.close();
     const check = new DatabaseSync(databasePath);
     assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, PROJECT_TASK_SQLITE_SCHEMA_VERSION);
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 10);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 11);
     check.close();
   } finally {
     await rm(directory, { recursive: true, force: true });

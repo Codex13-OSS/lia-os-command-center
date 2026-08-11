@@ -373,7 +373,7 @@ test('fencing counter fails closed at the JavaScript safe-integer ceiling', asyn
   });
 });
 
-test('an authentic V6-shaped database migrates additively to V8 and keeps legacy task data', async () => {
+test('an authentic V6-shaped database migrates additively to V11 and keeps legacy task data', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-task-lease-v6-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {
@@ -391,6 +391,12 @@ test('an authentic V6-shaped database migrates additively to V8 and keeps legacy
       DROP TRIGGER project_task_lease_expiry_monotonic;
       DROP TRIGGER project_task_lease_release_once;
       DROP TRIGGER project_task_lease_generation_immutable_delete;
+      DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release;
+      DROP TRIGGER project_task_execution_launch_attempts_validate_insert;
+      DROP TRIGGER project_task_execution_launch_attempts_immutable_update;
+      DROP TRIGGER project_task_execution_launch_attempts_immutable_delete;
+      DROP INDEX project_task_execution_launch_attempts_crossed;
+      DROP TABLE project_task_execution_launch_attempts;
       DROP TABLE project_task_lease_generations;
       UPDATE project_task_meta SET schema_version = 6 WHERE singleton = 1;
     `);

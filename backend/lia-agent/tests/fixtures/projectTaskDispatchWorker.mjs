@@ -17,6 +17,8 @@ try {
     result = store.prepareTaskExecutionRun(workerData.input);
   } else if (workerData.action === 'reserve') {
     result = store.reserveTaskExecutionInvocation(workerData.input);
+  } else if (workerData.action === 'launch') {
+    result = store.beginTaskExecutionLaunchAttempt(workerData.input);
   } else {
     throw new Error('invalid_worker_action');
   }

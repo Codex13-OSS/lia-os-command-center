@@ -83,6 +83,16 @@ import {
   PROJECT_TASK_EXECUTION_INVOCATION_MAX_LIST_LIMIT,
 } from '../contracts/projectTaskExecutionInvocation.js';
 import type {
+  BeginProjectTaskExecutionLaunchAttemptInput,
+  BeginProjectTaskExecutionLaunchAttemptResult,
+  ProjectTaskExecutionLaunchAttemptRecord,
+  ProjectTaskExecutionLaunchAttemptStore,
+} from '../contracts/projectTaskExecutionLaunchAttempt.js';
+import {
+  PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS,
+  PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_MAX_LIST_LIMIT,
+} from '../contracts/projectTaskExecutionLaunchAttempt.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -257,6 +267,16 @@ type ProjectTaskExecutionInvocationRow = {
   reserved_at: unknown;
 };
 
+type ProjectTaskExecutionLaunchAttemptRow = {
+  launch_attempt_id: unknown;
+  invocation_id: unknown;
+  execution_run_id: unknown;
+  task_id: unknown;
+  launch_lease_id: unknown;
+  launch_fencing_token: unknown;
+  boundary_crossed_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -302,7 +322,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -434,6 +454,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
                reservation_fencing_token, reserved_at
         FROM project_task_execution_invocations LIMIT 1
       `).all();
+      this.database.prepare(`
+        SELECT launch_attempt_id, invocation_id, execution_run_id, task_id,
+               launch_lease_id, launch_fencing_token, boundary_crossed_at
+        FROM project_task_execution_launch_attempts LIMIT 1
+      `).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
     }
@@ -555,6 +580,46 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     `).get(taskId) as unknown as ProjectTaskExecutionInvocationRow | undefined;
   }
 
+  private selectLaunchAttemptRow(
+    launchAttemptId: string,
+  ): ProjectTaskExecutionLaunchAttemptRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_attempt_id, invocation_id, execution_run_id, task_id,
+             launch_lease_id, launch_fencing_token, boundary_crossed_at
+      FROM project_task_execution_launch_attempts WHERE launch_attempt_id = ?
+    `).get(launchAttemptId) as unknown as ProjectTaskExecutionLaunchAttemptRow | undefined;
+  }
+
+  private selectLaunchAttemptByInvocationRow(
+    invocationId: string,
+  ): ProjectTaskExecutionLaunchAttemptRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_attempt_id, invocation_id, execution_run_id, task_id,
+             launch_lease_id, launch_fencing_token, boundary_crossed_at
+      FROM project_task_execution_launch_attempts WHERE invocation_id = ?
+    `).get(invocationId) as unknown as ProjectTaskExecutionLaunchAttemptRow | undefined;
+  }
+
+  private selectLaunchAttemptByRunRow(
+    executionRunId: string,
+  ): ProjectTaskExecutionLaunchAttemptRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_attempt_id, invocation_id, execution_run_id, task_id,
+             launch_lease_id, launch_fencing_token, boundary_crossed_at
+      FROM project_task_execution_launch_attempts WHERE execution_run_id = ?
+    `).get(executionRunId) as unknown as ProjectTaskExecutionLaunchAttemptRow | undefined;
+  }
+
+  private selectLaunchAttemptByTaskRow(
+    taskId: string,
+  ): ProjectTaskExecutionLaunchAttemptRow | undefined {
+    return this.database.prepare(`
+      SELECT launch_attempt_id, invocation_id, execution_run_id, task_id,
+             launch_lease_id, launch_fencing_token, boundary_crossed_at
+      FROM project_task_execution_launch_attempts WHERE task_id = ?
+    `).get(taskId) as unknown as ProjectTaskExecutionLaunchAttemptRow | undefined;
+  }
+
   private decodeDispatchRow(row: ProjectTaskDispatchRow): ProjectTaskDispatchRecord {
     const corrupt = (): Error => new Error(PROJECT_TASK_DISPATCH_ERRORS.corruptRecord);
     if (typeof row.dispatch_id !== 'string' || !PROJECT_TASK_ID.test(row.dispatch_id)) throw corrupt();
@@ -667,6 +732,61 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       reservationLeaseId: row.reservation_lease_id,
       reservationFencingToken: row.reservation_fencing_token,
       reservedAt: row.reserved_at,
+    };
+  }
+
+  private decodeLaunchAttemptRow(
+    row: ProjectTaskExecutionLaunchAttemptRow,
+  ): ProjectTaskExecutionLaunchAttemptRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.corruptRecord);
+    if (typeof row.launch_attempt_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_attempt_id)) throw corrupt();
+    if (typeof row.invocation_id !== 'string' || !PROJECT_TASK_ID.test(row.invocation_id)) throw corrupt();
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.launch_lease_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_lease_id)) throw corrupt();
+    if (
+      typeof row.launch_fencing_token !== 'number'
+      || !Number.isSafeInteger(row.launch_fencing_token)
+      || row.launch_fencing_token < PROJECT_TASK_LEASE_INITIAL_FENCING_TOKEN
+      || !isNonNegativeInteger(row.boundary_crossed_at)
+      || !Number.isSafeInteger(row.boundary_crossed_at)
+    ) throw corrupt();
+
+    const taskRow = this.selectRow(row.task_id);
+    if (taskRow === undefined) throw corrupt();
+    const invocationRow = this.selectExecutionInvocationRow(row.invocation_id);
+    if (invocationRow === undefined) throw corrupt();
+    const invocation = this.decodeExecutionInvocationRow(invocationRow);
+    if (
+      invocation.executionRunId !== row.execution_run_id
+      || invocation.taskId !== row.task_id
+    ) throw corrupt();
+    const executionRunRow = this.selectExecutionRunRow(row.execution_run_id);
+    if (executionRunRow === undefined) throw corrupt();
+    const executionRun = this.decodeExecutionRunRow(executionRunRow);
+    if (executionRun.taskId !== row.task_id) throw corrupt();
+    const leaseRow = this.selectLeaseGenerationRow(
+      row.task_id,
+      row.launch_lease_id,
+      row.launch_fencing_token,
+    );
+    if (leaseRow === undefined) throw corrupt();
+    const lease = this.decodeLeaseRow(leaseRow);
+    const releasedAt = leaseRow.released_at;
+    if (
+      row.boundary_crossed_at < lease.acquiredAt
+      || row.boundary_crossed_at >= lease.leaseExpiresAt
+      || (typeof releasedAt === 'number' && row.boundary_crossed_at > releasedAt)
+    ) throw corrupt();
+
+    return {
+      launchAttemptId: row.launch_attempt_id,
+      invocationId: row.invocation_id,
+      executionRunId: row.execution_run_id,
+      taskId: row.task_id,
+      launchLeaseId: row.launch_lease_id,
+      launchFencingToken: row.launch_fencing_token,
+      boundaryCrossedAt: row.boundary_crossed_at,
     };
   }
 
@@ -2215,8 +2335,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
   /**
    * Atomically applies the conservative restart-safe recovery matrix.
    * Accepted tasks with an intact pending dispatch or a structurally valid
-   * prepared execution run are preserved. No dispatch, run, or lease operation
-   * is performed and terminal tasks are untouched.
+   * prepared execution run are preserved. A task with a durable launch attempt
+   * is treated as an AMBIGUOUS EXTERNAL LAUNCH boundary and fails closed with
+   * external_launch_outcome_unknown; it is never relaunched and no attempt,
+   * dispatch, run, or lease operation is performed. Terminal tasks are
+   * untouched.
    */
   reconcileRestartSafeTasks(): ProjectTaskRestartRecoveryResult {
     return this.inTransaction(() => {
@@ -2248,6 +2371,12 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         FROM project_task_execution_invocations
         ORDER BY task_id ASC
       `).all() as unknown as ProjectTaskExecutionInvocationRow[];
+      const launchAttemptRows = this.database.prepare(`
+        SELECT launch_attempt_id, invocation_id, execution_run_id, task_id,
+               launch_lease_id, launch_fencing_token, boundary_crossed_at
+        FROM project_task_execution_launch_attempts
+        ORDER BY task_id ASC
+      `).all() as unknown as ProjectTaskExecutionLaunchAttemptRow[];
 
       // Validate ordinary durable read shapes before making any change. Also
       // reject outbox references that do not resolve to exactly one task.
@@ -2314,8 +2443,26 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         invocationRunIds.add(invocation.executionRunId);
         invocationTaskIds.add(invocation.taskId);
       }
+      const launchAttemptByTask = new Map<string, ProjectTaskExecutionLaunchAttemptRecord>();
+      const launchAttemptInvocationIds = new Set<string>();
+      const launchAttemptRunIds = new Set<string>();
+      for (const row of launchAttemptRows) {
+        const attempt = this.decodeLaunchAttemptRow(row);
+        if (
+          !taskIds.has(attempt.taskId)
+          || !invocationIds.has(attempt.invocationId)
+          || !invocationRunIds.has(attempt.executionRunId)
+          || launchAttemptByTask.has(attempt.taskId)
+          || launchAttemptInvocationIds.has(attempt.invocationId)
+          || launchAttemptRunIds.has(attempt.executionRunId)
+        ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.corruptRecord);
+        launchAttemptByTask.set(attempt.taskId, attempt);
+        launchAttemptInvocationIds.add(attempt.invocationId);
+        launchAttemptRunIds.add(attempt.executionRunId);
+      }
 
       let failedTaskIds: string[] = [];
+      let ambiguousLaunchTaskIds: string[] = [];
       let preservedRecoverable = 0;
       let terminalUnchanged = 0;
       for (const row of rows) {
@@ -2331,7 +2478,13 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         if (rawDispatch?.consumedAt === undefined && rawExecutionRun !== undefined) {
           throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
         }
-        const couldBePreserved = row.status === 'accepted'
+        // A launch attempt marks the AMBIGUOUS EXTERNAL LAUNCH boundary: the
+        // external launch MAY have occurred before the crash, so the task must
+        // never be preserved for automatic relaunch.
+        const isAmbiguousLaunch = typeof row.task_id === 'string'
+          && launchAttemptByTask.has(row.task_id);
+        const couldBePreserved = !isAmbiguousLaunch
+          && row.status === 'accepted'
           && rawDispatch !== undefined
           && (
             rawDispatch.consumedAt === undefined
@@ -2358,6 +2511,10 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           terminalUnchanged += 1;
           continue;
         }
+        if (launchAttemptByTask.has(task.taskId)) {
+          ambiguousLaunchTaskIds = [...ambiguousLaunchTaskIds, task.taskId];
+          continue;
+        }
         const dispatch = dispatchByTask.get(task.taskId);
         const executionRun = executionRunByTask.get(task.taskId);
         if (
@@ -2374,6 +2531,10 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       const interrupted: SafeTaskError = {
         code: 'workflow_interrupted',
         message: SAFE_TASK_ERROR_MESSAGES.workflow_interrupted,
+      };
+      const ambiguousLaunch: SafeTaskError = {
+        code: 'external_launch_outcome_unknown',
+        message: SAFE_TASK_ERROR_MESSAGES.external_launch_outcome_unknown,
       };
       const now = this.now();
       const fail = this.database.prepare(`
@@ -2392,10 +2553,17 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         }
         clearTrace.run(taskId);
       }
+      for (const taskId of ambiguousLaunchTaskIds) {
+        const result = fail.run(JSON.stringify(ambiguousLaunch), now, now, taskId);
+        if (Number(result.changes) !== 1) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        clearTrace.run(taskId);
+      }
 
       return {
         preservedRecoverable,
-        failedInterrupted: failedTaskIds.length,
+        failedInterrupted: failedTaskIds.length + ambiguousLaunchTaskIds.length,
         terminalUnchanged,
       };
     });
@@ -2897,6 +3065,196 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         LIMIT ?
       `).all(limit) as unknown as ProjectTaskExecutionInvocationRow[];
       return rows.map((row) => this.decodeExecutionInvocationRow(row));
+    });
+  }
+
+  beginTaskExecutionLaunchAttempt(
+    input: BeginProjectTaskExecutionLaunchAttemptInput,
+  ): BeginProjectTaskExecutionLaunchAttemptResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invalidInput);
+      }
+      const keys = Object.keys(input);
+      if (
+        keys.length !== 6
+        || !keys.every((key) => [
+          'invocationId', 'executionRunId', 'taskId', 'leaseOwner', 'leaseId', 'fencingToken',
+        ].includes(key))
+        || typeof input.invocationId !== 'string'
+        || !PROJECT_TASK_ID.test(input.invocationId)
+        || typeof input.executionRunId !== 'string'
+        || !PROJECT_TASK_ID.test(input.executionRunId)
+        || !this.validLeaseAuthority({
+          taskId: input.taskId,
+          leaseOwner: input.leaseOwner,
+          leaseId: input.leaseId,
+          fencingToken: input.fencingToken,
+        })
+      ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invalidInput);
+
+      const existingByInvocation = this.selectLaunchAttemptByInvocationRow(input.invocationId);
+      const existingByRun = this.selectLaunchAttemptByRunRow(input.executionRunId);
+      const existingByTask = this.selectLaunchAttemptByTaskRow(input.taskId);
+      if (
+        existingByInvocation !== undefined
+        || existingByRun !== undefined
+        || existingByTask !== undefined
+      ) {
+        if (
+          existingByInvocation === undefined
+          || existingByRun === undefined
+          || existingByTask === undefined
+        ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.authorityMismatch);
+        const byInvocation = this.decodeLaunchAttemptRow(existingByInvocation);
+        const byRun = this.decodeLaunchAttemptRow(existingByRun);
+        const byTask = this.decodeLaunchAttemptRow(existingByTask);
+        if (
+          byInvocation.launchAttemptId !== byRun.launchAttemptId
+          || byInvocation.launchAttemptId !== byTask.launchAttemptId
+          || byInvocation.executionRunId !== input.executionRunId
+          || byInvocation.taskId !== input.taskId
+          || byInvocation.launchLeaseId !== input.leaseId
+          || byInvocation.launchFencingToken !== input.fencingToken
+        ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.authorityMismatch);
+        const generationRow = this.selectLeaseGenerationRow(
+          byInvocation.taskId,
+          byInvocation.launchLeaseId,
+          byInvocation.launchFencingToken,
+        );
+        if (generationRow === undefined) {
+          throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.corruptRecord);
+        }
+        const generation = this.decodeLeaseRow(generationRow);
+        if (generation.leaseOwner !== input.leaseOwner) {
+          throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.authorityMismatch);
+        }
+        return { launchAttempt: byInvocation, created: false };
+      }
+
+      const task = this.selectRow(input.taskId);
+      if (task === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.taskNotFound);
+      }
+      if (task.status !== 'accepted' || task.terminal_at !== null) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.taskUnavailable);
+      }
+      const invocationRow = this.selectExecutionInvocationRow(input.invocationId);
+      if (invocationRow === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invocationNotFound);
+      }
+      const invocation = this.decodeExecutionInvocationRow(invocationRow);
+      if (invocation.executionRunId !== input.executionRunId || invocation.taskId !== input.taskId) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invocationRunMismatch);
+      }
+
+      const authority: ProjectTaskLeaseAuthority = {
+        taskId: input.taskId,
+        leaseOwner: input.leaseOwner,
+        leaseId: input.leaseId,
+        fencingToken: input.fencingToken,
+      };
+      const currentRow = this.selectCurrentLeaseRow(input.taskId);
+      if (currentRow === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.authorityMismatch);
+      }
+      const current = this.decodeLeaseRow(currentRow);
+      if (!this.leaseAuthorityMatches(current, authority)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.authorityMismatch);
+      }
+      const latest = this.database.prepare(`
+        SELECT MAX(fencing_token) AS latest_token
+        FROM project_task_lease_generations WHERE task_id = ?
+      `).get(input.taskId) as unknown as { latest_token: unknown };
+      if (latest.latest_token !== input.fencingToken) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.authorityMismatch);
+      }
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invalidInput);
+      }
+      const boundaryCrossedAt = Math.max(now, invocation.reservedAt, current.acquiredAt);
+      if (boundaryCrossedAt >= current.leaseExpiresAt) {
+        throw new Error(PROJECT_TASK_LEASE_ERRORS.expired);
+      }
+
+      const launchAttemptId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_execution_launch_attempts (
+          launch_attempt_id, invocation_id, execution_run_id, task_id,
+          launch_lease_id, launch_fencing_token, boundary_crossed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        launchAttemptId,
+        input.invocationId,
+        input.executionRunId,
+        input.taskId,
+        input.leaseId,
+        input.fencingToken,
+        boundaryCrossedAt,
+      );
+      const inserted = this.selectLaunchAttemptRow(launchAttemptId);
+      if (inserted === undefined) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.corruptRecord);
+      }
+      return { launchAttempt: this.decodeLaunchAttemptRow(inserted), created: true };
+    });
+  }
+
+  readTaskExecutionLaunchAttempt(
+    launchAttemptId: string,
+  ): ProjectTaskExecutionLaunchAttemptRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof launchAttemptId !== 'string' || !PROJECT_TASK_ID.test(launchAttemptId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invalidInput);
+      }
+      const row = this.selectLaunchAttemptRow(launchAttemptId);
+      return row === undefined ? undefined : this.decodeLaunchAttemptRow(row);
+    });
+  }
+
+  readTaskExecutionLaunchAttemptByInvocation(
+    invocationId: string,
+  ): ProjectTaskExecutionLaunchAttemptRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof invocationId !== 'string' || !PROJECT_TASK_ID.test(invocationId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invalidInput);
+      }
+      const row = this.selectLaunchAttemptByInvocationRow(invocationId);
+      return row === undefined ? undefined : this.decodeLaunchAttemptRow(row);
+    });
+  }
+
+  readTaskExecutionLaunchAttemptByTask(
+    taskId: string,
+  ): ProjectTaskExecutionLaunchAttemptRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invalidInput);
+      }
+      const row = this.selectLaunchAttemptByTaskRow(taskId);
+      return row === undefined ? undefined : this.decodeLaunchAttemptRow(row);
+    });
+  }
+
+  listTaskExecutionLaunchAttempts(
+    limit: number,
+  ): ProjectTaskExecutionLaunchAttemptRecord[] {
+    return this.inTransaction(() => {
+      if (
+        typeof limit !== 'number'
+        || !Number.isSafeInteger(limit)
+        || limit < 1
+        || limit > PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_MAX_LIST_LIMIT
+      ) throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.invalidInput);
+      const rows = this.database.prepare(`
+        SELECT launch_attempt_id, invocation_id, execution_run_id, task_id,
+               launch_lease_id, launch_fencing_token, boundary_crossed_at
+        FROM project_task_execution_launch_attempts
+        ORDER BY boundary_crossed_at ASC, launch_attempt_id ASC
+        LIMIT ?
+      `).all(limit) as unknown as ProjectTaskExecutionLaunchAttemptRow[];
+      return rows.map((row) => this.decodeLaunchAttemptRow(row));
     });
   }
 
