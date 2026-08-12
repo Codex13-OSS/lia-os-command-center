@@ -267,8 +267,8 @@ test('Layer 14: recovery terminalizes tasks with refused resume decisions', asyn
   });
 });
 
-test('Layer 15: schema version is V15', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
+test('Layer 15: schema version is V16', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 16);
 });
 
 test('Layer 14: migration adds resume_decisions table and triggers', async () => {
@@ -812,7 +812,7 @@ test('Layer 15: mapCodexResultToEvidence produces safe evidence vocabulary', asy
   assert.equal(failedEvidence.error, 'timeout');
 });
 
-test('Layer 15: V15 schema has codex evidence tables, indices, and triggers', async () => {
+test('Layer 15: V16 schema has codex evidence tables, indices, and triggers', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-v15-schema-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {
@@ -858,7 +858,7 @@ test('Layer 15: V15 schema has codex evidence tables, indices, and triggers', as
   }
 });
 
-test('Layer 15: V15 migration has zero manufactured codex evidence rows', async () => {
+test('Layer 15: V16 migration has zero manufactured codex evidence rows', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-v15-zero-evidence-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {
@@ -1399,11 +1399,11 @@ test('Layer 16: no authority/capability expansion in the codex-skip branch', asy
 // Layer 16: Migration compatibility
 // ===========================================================================
 
-test('Layer 16: schema version unchanged at V15', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
+test('Layer 16: schema version unchanged at V16', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 16);
 });
 
-test('Layer 16: V15 database has codex evidence tables with zero manufactured rows', async () => {
+test('Layer 16: V16 database has codex evidence tables with zero manufactured rows', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-l16-v15-compat-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {

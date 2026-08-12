@@ -121,8 +121,13 @@ export const SAFE_TASK_ERROR_MESSAGES = {
   codex_start_not_recorded: 'LÍA no pudo registrar el inicio de la ejecución de Codex de forma duradera.',
   codex_result_not_recorded: 'Codex inició su ejecución pero LÍA no pudo registrar su resultado de forma duradera.',
   codex_failed: 'Codex no pudo completar la ejecución.',
+  verification_failed: 'Verification checks did not pass.',
+  verification_result_not_recorded: 'LÍA inició la verificación pero no pudo registrar el resultado.',
+  commit_failed: 'The local commit could not be created.',
+  commit_result_not_recorded: 'LÍA inició el commit local pero no pudo registrar el resultado.',
+  commit_contradictory_evidence: 'Commit evidence is contradictory.',
 } as const satisfies Record<
-  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown' | 'local_resume_available' | 'resume_refused' | 'codex_start_not_recorded' | 'codex_result_not_recorded' | 'codex_failed',
+  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown' | 'local_resume_available' | 'resume_refused' | 'codex_start_not_recorded' | 'codex_result_not_recorded' | 'codex_failed' | 'verification_failed' | 'verification_result_not_recorded' | 'commit_failed' | 'commit_result_not_recorded' | 'commit_contradictory_evidence',
   string
 >;
 export type SafeTaskErrorCode = keyof typeof SAFE_TASK_ERROR_MESSAGES;

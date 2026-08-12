@@ -8,18 +8,22 @@ import type { ProjectTaskExecutionLaunchResultStore } from './projectTaskExecuti
 import type { ProjectTaskValidatedProposalSnapshotStore } from './projectTaskValidatedProposalSnapshot.js';
 import type { ProjectTaskResumeDecisionStore } from './projectTaskResumeDecision.js';
 import type { ProjectTaskCodexEvidenceStore } from './projectTaskCodexEvidence.js';
+import type { ProjectTaskVerificationEvidenceStore } from './projectTaskVerificationEvidence.js';
+import type { ProjectTaskCommitEvidenceStore } from './projectTaskCommitEvidence.js';
 
 /**
  * Narrow composite durable-execution capability assembled from the existing
  * Layers 5-10 store interfaces plus the Layer 12 launch-result evidence store,
  * the Layer 13 validated-proposal snapshot store, the Layer 14 resume-decision
- * store, and the Layer 15 Codex evidence store.
+ * store, the Layer 15 Codex evidence store, and the Layer 17 verification/commit
+ * evidence stores.
  *
  * It is worker/lease/dispatch/run/invocation provenance plus observed-outcome
  * evidence plus validated-proposal snapshot evidence plus resume-decision
- * evidence plus Codex execution evidence only. It grants no workflow,
- * external-execution, project, capability, approval, Codex or retry authority,
- * and it adds no authority metadata of its own.
+ * evidence plus Codex execution evidence plus verification/commit evidence
+ * only. It grants no workflow, external-execution, project, capability,
+ * approval, Codex, or retry authority, and it adds no authority metadata of
+ * its own.
  */
 export type ProjectTaskDurableExecutionStore = ProjectTaskStore
   & ProjectTaskLeaseStore
@@ -30,7 +34,9 @@ export type ProjectTaskDurableExecutionStore = ProjectTaskStore
   & ProjectTaskExecutionLaunchResultStore
   & ProjectTaskValidatedProposalSnapshotStore
   & ProjectTaskResumeDecisionStore
-  & ProjectTaskCodexEvidenceStore;
+  & ProjectTaskCodexEvidenceStore
+  & ProjectTaskVerificationEvidenceStore
+  & ProjectTaskCommitEvidenceStore;
 
 export const PROJECT_TASK_DURABLE_EXECUTION_ERRORS = {
   unsupportedStore: 'project_task_durable_execution_store_unsupported',

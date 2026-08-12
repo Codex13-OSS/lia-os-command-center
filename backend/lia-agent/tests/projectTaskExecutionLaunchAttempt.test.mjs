@@ -710,7 +710,7 @@ test('V10 to V12 migration preserves the complete existing chain', async () => {
     v10.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 16);
     assert.equal(migrated.readTaskExecutionInvocationByRun(prepared.run.executionRunId).invocationId, invocation.invocationId);
     assert.equal(migrated.readTaskExecutionRunByTask(continuation.createdTaskId).executionRunId, prepared.run.executionRunId);
     migrated.close();

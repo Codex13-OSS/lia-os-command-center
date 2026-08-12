@@ -144,6 +144,34 @@ import {
   PROJECT_TASK_CODEX_EVIDENCE_ERRORS,
 } from '../contracts/projectTaskCodexEvidence.js';
 import type {
+  VerificationStartEvidenceRecord,
+  VerificationResultEvidenceRecord,
+  RecordVerificationStartInput,
+  RecordVerificationStartResult,
+  RecordVerificationResultInput,
+  RecordVerificationResultResult,
+  ProjectTaskVerificationEvidenceStore,
+} from '../contracts/projectTaskVerificationEvidence.js';
+import {
+  VERIFICATION_RESULT_STATUSES,
+  VERIFICATION_FAILURE_ERRORS,
+  PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS,
+} from '../contracts/projectTaskVerificationEvidence.js';
+import type {
+  CommitStartEvidenceRecord,
+  CommitResultEvidenceRecord,
+  RecordCommitStartInput,
+  RecordCommitStartResult,
+  RecordCommitResultInput,
+  RecordCommitResultResult,
+  ProjectTaskCommitEvidenceStore,
+} from '../contracts/projectTaskCommitEvidence.js';
+import {
+  COMMIT_RESULT_STATUSES,
+  COMMIT_FAILURE_ERRORS,
+  PROJECT_TASK_COMMIT_EVIDENCE_ERRORS,
+} from '../contracts/projectTaskCommitEvidence.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -395,6 +423,58 @@ type CodexResultEvidenceRow = {
   result_recorded_at: unknown;
 };
 
+type VerificationStartEvidenceRow = {
+  verification_start_id: unknown;
+  task_id: unknown;
+  execution_run_id: unknown;
+  invocation_id: unknown;
+  launch_attempt_id: unknown;
+  launch_result_id: unknown;
+  snapshot_id: unknown;
+  codex_start_id: unknown;
+  execution_id: unknown;
+  start_recorded_at: unknown;
+};
+
+type VerificationResultEvidenceRow = {
+  verification_result_id: unknown;
+  verification_start_id: unknown;
+  status: unknown;
+  checks_passed: unknown;
+  total_checks: unknown;
+  technical_checks_passed: unknown;
+  technical_total_checks: unknown;
+  visual_checks_passed: unknown;
+  visual_total_checks: unknown;
+  failure_error: unknown;
+  failure_summary: unknown;
+  result_recorded_at: unknown;
+};
+
+type CommitStartEvidenceRow = {
+  commit_start_id: unknown;
+  task_id: unknown;
+  execution_run_id: unknown;
+  invocation_id: unknown;
+  launch_attempt_id: unknown;
+  launch_result_id: unknown;
+  snapshot_id: unknown;
+  codex_start_id: unknown;
+  verification_start_id: unknown;
+  execution_id: unknown;
+  start_recorded_at: unknown;
+};
+
+type CommitResultEvidenceRow = {
+  commit_result_id: unknown;
+  commit_start_id: unknown;
+  status: unknown;
+  commit_sha: unknown;
+  error: unknown;
+  summary: unknown;
+  result_recorded_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -452,7 +532,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore, ProjectTaskVerificationEvidenceStore, ProjectTaskCommitEvidenceStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -3050,6 +3130,132 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         codexResultIds.add(result.codexResultId);
       }
 
+      // Layer 17 verification evidence pre-pass: query and validate start and
+      // result evidence. EVERY start must resolve to a complete lineage chain
+      // including codex_success. EVERY result must reference an existing start.
+      // ONE start per task, ONE result per start. ANY violation aborts the
+      // WHOLE recovery transaction atomically.
+      const verifyStartRows = this.database.prepare(`
+        SELECT verification_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               execution_id, start_recorded_at
+        FROM project_task_verification_start_evidence
+        ORDER BY task_id ASC
+      `).all() as unknown as VerificationStartEvidenceRow[];
+      const verifyResultRows = this.database.prepare(`
+        SELECT verification_result_id, verification_start_id, status,
+               checks_passed, total_checks, technical_checks_passed,
+               technical_total_checks, visual_checks_passed, visual_total_checks,
+               failure_error, failure_summary, result_recorded_at
+        FROM project_task_verification_result_evidence
+        ORDER BY verification_start_id ASC
+      `).all() as unknown as VerificationResultEvidenceRow[];
+
+      const verifyStartByTask = new Map<string, VerificationStartEvidenceRecord>();
+      const verifyStartIds = new Set<string>();
+      for (const row of verifyStartRows) {
+        const start = this.decodeVerificationStartEvidenceRow(row);
+        if (
+          !taskIds.has(start.taskId)
+          || verifyStartByTask.has(start.taskId)
+          || verifyStartIds.has(start.verificationStartId)
+        ) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        // Must reference a valid task with compatible status
+        const verifyTask = rows.find((r) => r.task_id === start.taskId);
+        if (
+          verifyTask === undefined
+          || (verifyTask.status !== 'codex' && verifyTask.status !== 'verification')
+          || verifyTask.terminal_at !== null
+        ) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        // Must reference a valid codex start with codex_success
+        if (!codexStartByTask.has(start.taskId)) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        const codexStart = codexStartByTask.get(start.taskId)!;
+        if (codexStart.codexStartId !== start.codexStartId) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        const codexResult = codexResultByStart.get(start.codexStartId);
+        if (codexResult === undefined || codexResult.outcome !== 'codex_success') throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        if (codexResult.executionId !== start.executionId) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        // Must reference complete lineage
+        if (!launchAttemptByTask.has(start.taskId)) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        const launchResult = launchResultByTask.get(start.taskId);
+        if (launchResult === undefined || launchResult.outcomeClass !== 'proposal_valid' || launchResult.launchResultId !== start.launchResultId) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        if (!snapshotByTask.has(start.taskId) || snapshotByTask.get(start.taskId)!.snapshotId !== start.snapshotId) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        verifyStartByTask.set(start.taskId, start);
+        verifyStartIds.add(start.verificationStartId);
+      }
+
+      const verifyResultByStart = new Map<string, VerificationResultEvidenceRecord>();
+      const verifyResultIds = new Set<string>();
+      for (const row of verifyResultRows) {
+        const result = this.decodeVerificationResultEvidenceRow(row);
+        if (
+          !verifyStartIds.has(result.verificationStartId)
+          || verifyResultByStart.has(result.verificationStartId)
+          || verifyResultIds.has(result.verificationResultId)
+        ) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        verifyResultByStart.set(result.verificationStartId, result);
+        verifyResultIds.add(result.verificationResultId);
+      }
+
+      // Layer 17 commit evidence pre-pass: query and validate start and result
+      // evidence. EVERY start must reference verified verification + codex_success.
+      // EVERY result must reference an existing start. ONE start per task, ONE
+      // result per start. ANY violation aborts the WHOLE recovery transaction.
+      const commitStartRows = this.database.prepare(`
+        SELECT commit_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               verification_start_id, execution_id, start_recorded_at
+        FROM project_task_commit_start_evidence
+        ORDER BY task_id ASC
+      `).all() as unknown as CommitStartEvidenceRow[];
+      const commitResultRows = this.database.prepare(`
+        SELECT commit_result_id, commit_start_id, status, commit_sha, error,
+               summary, result_recorded_at
+        FROM project_task_commit_result_evidence
+        ORDER BY commit_start_id ASC
+      `).all() as unknown as CommitResultEvidenceRow[];
+
+      const commitStartByTask = new Map<string, CommitStartEvidenceRecord>();
+      const commitStartIds = new Set<string>();
+      for (const row of commitStartRows) {
+        const start = this.decodeCommitStartEvidenceRow(row);
+        if (
+          !taskIds.has(start.taskId)
+          || commitStartByTask.has(start.taskId)
+          || commitStartIds.has(start.commitStartId)
+        ) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        // Must reference verified verification
+        if (!verifyStartByTask.has(start.taskId)) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        const verifyStart = verifyStartByTask.get(start.taskId)!;
+        if (verifyStart.verificationStartId !== start.verificationStartId) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        const verifyResult = verifyResultByStart.get(start.verificationStartId);
+        if (verifyResult === undefined || verifyResult.status !== 'verified') throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        // Must reference codex_start with codex_success
+        if (!codexStartByTask.has(start.taskId) || codexStartByTask.get(start.taskId)!.codexStartId !== start.codexStartId) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        if (verifyStart.executionId !== start.executionId) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        // Task must have compatible status
+        const commitTask = rows.find((r) => r.task_id === start.taskId);
+        if (
+          commitTask === undefined
+          || (commitTask.status !== 'codex' && commitTask.status !== 'verification' && commitTask.status !== 'commit')
+          || commitTask.terminal_at !== null
+        ) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        commitStartByTask.set(start.taskId, start);
+        commitStartIds.add(start.commitStartId);
+      }
+
+      const commitResultByStart = new Map<string, CommitResultEvidenceRecord>();
+      const commitResultIds = new Set<string>();
+      for (const row of commitResultRows) {
+        const result = this.decodeCommitResultEvidenceRow(row);
+        if (
+          !commitStartIds.has(result.commitStartId)
+          || commitResultByStart.has(result.commitStartId)
+          || commitResultIds.has(result.commitResultId)
+        ) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        commitResultByStart.set(result.commitStartId, result);
+        commitResultIds.add(result.commitResultId);
+      }
+
       let codexStartNotRecordedTaskIds: string[] = [];
       let codexResultNotRecordedTaskIds: string[] = [];
       let codexSuccessTaskIds: Array<{ taskId: string; codexStartId: string }> = [];
@@ -3210,6 +3416,73 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
             codexFailedTaskIds = [...codexFailedTaskIds, task.taskId];
           continue;
         }
+        // Layer 17: verification/commit status recovery.
+        if (task.status === 'verification') {
+          const verifyStart = verifyStartByTask.get(task.taskId);
+          if (verifyStart === undefined) {
+            // M9: pre-L17 task at verification, no evidence.
+            // Terminalize as workflow_interrupted (pre-existing behavior).
+            knownOutcomeTaskIds = [
+              ...knownOutcomeTaskIds,
+              { taskId: task.taskId, outcomeClass: 'proposal_valid' },
+            ];
+            continue;
+          }
+          const verifyResult = verifyResultByStart.get(verifyStart.verificationStartId);
+          if (verifyResult === undefined) {
+            // M1/C1: start evidence exists, no result. Verification was initiated
+            // but outcome unknown. Terminalize as verification_result_not_recorded.
+            failedTaskIds = [...failedTaskIds, task.taskId];
+            continue;
+          }
+          if (verifyResult.status === 'verified') {
+            // M2/M3: verification passed. Preserve resumable.
+            const codexStart = codexStartByTask.get(task.taskId);
+            if (codexStart !== undefined) {
+              codexSuccessTaskIds = [
+                ...codexSuccessTaskIds,
+                { taskId: task.taskId, codexStartId: codexStart.codexStartId },
+              ];
+            }
+            continue;
+          }
+          // M4: verification_failed. Terminalize.
+          failedTaskIds = [...failedTaskIds, task.taskId];
+          continue;
+        }
+        if (task.status === 'commit') {
+          const commitStart = commitStartByTask.get(task.taskId);
+          if (commitStart === undefined) {
+            // M9: pre-L17 task at commit, no evidence.
+            // Terminalize as workflow_interrupted.
+            knownOutcomeTaskIds = [
+              ...knownOutcomeTaskIds,
+              { taskId: task.taskId, outcomeClass: 'proposal_valid' },
+            ];
+            continue;
+          }
+          const commitResult = commitResultByStart.get(commitStart.commitStartId);
+          if (commitResult === undefined) {
+            // M5: start evidence exists, no result. Commit initiated but
+            // outcome unknown. Terminalize as commit_result_not_recorded.
+            failedTaskIds = [...failedTaskIds, task.taskId];
+            continue;
+          }
+          if (commitResult.status === 'committed') {
+            // M6: committed. Preserve resumable.
+            const codexStart = codexStartByTask.get(task.taskId);
+            if (codexStart !== undefined) {
+              codexSuccessTaskIds = [
+                ...codexSuccessTaskIds,
+                { taskId: task.taskId, codexStartId: codexStart.codexStartId },
+              ];
+            }
+            continue;
+          }
+          // M7: commit_failed or nothing_to_commit. Terminalize.
+          failedTaskIds = [...failedTaskIds, task.taskId];
+          continue;
+        }
         const dispatch = dispatchByTask.get(task.taskId);
         const executionRun = executionRunByTask.get(task.taskId);
         if (
@@ -3332,6 +3605,32 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         }
         clearTrace.run(taskId);
       }
+      // Layer 17: terminalize verification_result_not_recorded tasks.
+      // These are tasks with verification_start evidence but no result.
+      const verificationResultNotRecorded: SafeTaskError = {
+        code: 'verification_result_not_recorded',
+        message: 'LÍA inició la verificación pero no pudo registrar el resultado.',
+        stage: 'verification',
+      };
+      // Layer 17: terminalize commit_result_not_recorded tasks.
+      // These are tasks with commit_start evidence but no result.
+      const commitResultNotRecorded: SafeTaskError = {
+        code: 'commit_result_not_recorded',
+        message: 'LÍA inició el commit local pero no pudo registrar el resultado.',
+        stage: 'commit',
+      };
+      // Layer 17: terminalize verification_failed tasks.
+      const verificationFailed: SafeTaskError = {
+        code: 'verification_failed',
+        message: 'Verification checks did not pass.',
+        stage: 'verification',
+      };
+      // Layer 17: terminalize commit_failed tasks.
+      const commitFailed: SafeTaskError = {
+        code: 'commit_failed',
+        message: 'The local commit could not be created.',
+        stage: 'commit',
+      };
       // Layer 15: codex success tasks are preserved (not terminalized).
       // non-terminal (no terminal_at, no error); status is normalized to
       // 'hermes' and the active trace to ['planning'] (the stage BEFORE
@@ -4929,6 +5228,522 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         WHERE codex_start_id = ?
       `).get(codexStartId) as unknown as CodexResultEvidenceRow | undefined;
       return row === undefined ? undefined : this.decodeCodexResultEvidenceRow(row);
+    });
+  }
+
+  // --- Verification Evidence Decode Helpers ---
+
+  private decodeVerificationStartEvidenceRow(row: VerificationStartEvidenceRow): VerificationStartEvidenceRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+    if (typeof row.verification_start_id !== 'string' || !PROJECT_TASK_ID.test(row.verification_start_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.invocation_id !== 'string' || !PROJECT_TASK_ID.test(row.invocation_id)) throw corrupt();
+    if (typeof row.launch_attempt_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_attempt_id)) throw corrupt();
+    if (typeof row.launch_result_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_result_id)) throw corrupt();
+    if (typeof row.snapshot_id !== 'string' || !PROJECT_TASK_ID.test(row.snapshot_id)) throw corrupt();
+    if (typeof row.codex_start_id !== 'string' || !PROJECT_TASK_ID.test(row.codex_start_id)) throw corrupt();
+    if (typeof row.execution_id !== 'string' || row.execution_id.length < 1 || row.execution_id.length > 36) throw corrupt();
+    if (
+      !isNonNegativeInteger(row.start_recorded_at)
+      || !Number.isSafeInteger(row.start_recorded_at)
+      || row.start_recorded_at > 9007199254740991
+    ) throw corrupt();
+    return {
+      verificationStartId: row.verification_start_id,
+      taskId: row.task_id,
+      executionRunId: row.execution_run_id,
+      invocationId: row.invocation_id,
+      launchAttemptId: row.launch_attempt_id,
+      launchResultId: row.launch_result_id,
+      snapshotId: row.snapshot_id,
+      codexStartId: row.codex_start_id,
+      executionId: row.execution_id,
+      startRecordedAt: row.start_recorded_at,
+    };
+  }
+
+  private decodeVerificationResultEvidenceRow(row: VerificationResultEvidenceRow): VerificationResultEvidenceRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+    if (typeof row.verification_result_id !== 'string' || !PROJECT_TASK_ID.test(row.verification_result_id)) throw corrupt();
+    if (typeof row.verification_start_id !== 'string' || !PROJECT_TASK_ID.test(row.verification_start_id)) throw corrupt();
+    if (typeof row.status !== 'string' || !VERIFICATION_RESULT_STATUSES.includes(row.status as typeof VERIFICATION_RESULT_STATUSES[number])) throw corrupt();
+    if (typeof row.checks_passed !== 'number' || !Number.isInteger(row.checks_passed) || row.checks_passed < 0) throw corrupt();
+    if (typeof row.total_checks !== 'number' || !Number.isInteger(row.total_checks) || row.total_checks <= 0 || row.checks_passed > row.total_checks) throw corrupt();
+    if (typeof row.technical_checks_passed !== 'number' || !Number.isInteger(row.technical_checks_passed) || row.technical_checks_passed < 0) throw corrupt();
+    if (typeof row.technical_total_checks !== 'number' || !Number.isInteger(row.technical_total_checks) || row.technical_total_checks < 0) throw corrupt();
+    if (typeof row.visual_checks_passed !== 'number' || !Number.isInteger(row.visual_checks_passed) || row.visual_checks_passed < 0) throw corrupt();
+    if (typeof row.visual_total_checks !== 'number' || !Number.isInteger(row.visual_total_checks) || row.visual_total_checks < 0) throw corrupt();
+    if (row.checks_passed !== row.technical_checks_passed + row.visual_checks_passed) throw corrupt();
+    if (row.total_checks !== row.technical_total_checks + row.visual_total_checks) throw corrupt();
+    if (row.technical_checks_passed > row.technical_total_checks) throw corrupt();
+    if (row.visual_checks_passed > row.visual_total_checks) throw corrupt();
+    if (row.status === 'verified' && row.failure_error !== null) throw corrupt();
+    if (row.status === 'verified' && row.failure_summary !== null) throw corrupt();
+    if (row.status === 'verification_failed') {
+      if (typeof row.failure_error !== 'string' || !VERIFICATION_FAILURE_ERRORS.includes(row.failure_error as typeof VERIFICATION_FAILURE_ERRORS[number])) throw corrupt();
+      if (typeof row.failure_summary !== 'string' || row.failure_summary.length < 1 || row.failure_summary.length > 500 || row.failure_summary !== row.failure_summary.trim()) throw corrupt();
+    }
+    if (
+      !isNonNegativeInteger(row.result_recorded_at)
+      || !Number.isSafeInteger(row.result_recorded_at)
+      || row.result_recorded_at > 9007199254740991
+    ) throw corrupt();
+    return {
+      verificationResultId: row.verification_result_id,
+      verificationStartId: row.verification_start_id,
+      status: row.status as VerificationResultEvidenceRecord['status'],
+      checksPassed: row.checks_passed,
+      totalChecks: row.total_checks,
+      technicalChecksPassed: row.technical_checks_passed,
+      technicalTotalChecks: row.technical_total_checks,
+      visualChecksPassed: row.visual_checks_passed,
+      visualTotalChecks: row.visual_total_checks,
+      failureError: row.failure_error as string | null,
+      failureSummary: row.failure_summary as string | null,
+      resultRecordedAt: row.result_recorded_at,
+    };
+  }
+
+  private decodeCommitStartEvidenceRow(row: CommitStartEvidenceRow): CommitStartEvidenceRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+    if (typeof row.commit_start_id !== 'string' || !PROJECT_TASK_ID.test(row.commit_start_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.invocation_id !== 'string' || !PROJECT_TASK_ID.test(row.invocation_id)) throw corrupt();
+    if (typeof row.launch_attempt_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_attempt_id)) throw corrupt();
+    if (typeof row.launch_result_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_result_id)) throw corrupt();
+    if (typeof row.snapshot_id !== 'string' || !PROJECT_TASK_ID.test(row.snapshot_id)) throw corrupt();
+    if (typeof row.codex_start_id !== 'string' || !PROJECT_TASK_ID.test(row.codex_start_id)) throw corrupt();
+    if (typeof row.verification_start_id !== 'string' || !PROJECT_TASK_ID.test(row.verification_start_id)) throw corrupt();
+    if (typeof row.execution_id !== 'string' || row.execution_id.length < 1 || row.execution_id.length > 36) throw corrupt();
+    if (
+      !isNonNegativeInteger(row.start_recorded_at)
+      || !Number.isSafeInteger(row.start_recorded_at)
+      || row.start_recorded_at > 9007199254740991
+    ) throw corrupt();
+    return {
+      commitStartId: row.commit_start_id,
+      taskId: row.task_id,
+      executionRunId: row.execution_run_id,
+      invocationId: row.invocation_id,
+      launchAttemptId: row.launch_attempt_id,
+      launchResultId: row.launch_result_id,
+      snapshotId: row.snapshot_id,
+      codexStartId: row.codex_start_id,
+      verificationStartId: row.verification_start_id,
+      executionId: row.execution_id,
+      startRecordedAt: row.start_recorded_at,
+    };
+  }
+
+  private decodeCommitResultEvidenceRow(row: CommitResultEvidenceRow): CommitResultEvidenceRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+    if (typeof row.commit_result_id !== 'string' || !PROJECT_TASK_ID.test(row.commit_result_id)) throw corrupt();
+    if (typeof row.commit_start_id !== 'string' || !PROJECT_TASK_ID.test(row.commit_start_id)) throw corrupt();
+    if (typeof row.status !== 'string' || !COMMIT_RESULT_STATUSES.includes(row.status as typeof COMMIT_RESULT_STATUSES[number])) throw corrupt();
+    if (row.status === 'committed') {
+      if (typeof row.commit_sha !== 'string' || row.commit_sha.length < 40 || row.commit_sha.length > 64 || !/^[0-9a-fA-F]+$/.test(row.commit_sha)) throw corrupt();
+      if (row.error !== null) throw corrupt();
+      if (row.summary !== 'The verified workspace was committed locally.') throw corrupt();
+    }
+    if (row.status === 'commit_failed') {
+      if (row.commit_sha !== null) throw corrupt();
+      if (typeof row.error !== 'string' || !COMMIT_FAILURE_ERRORS.includes(row.error as typeof COMMIT_FAILURE_ERRORS[number])) throw corrupt();
+      if (typeof row.summary !== 'string' || row.summary.length < 1 || row.summary.length > 500 || row.summary !== row.summary.trim()) throw corrupt();
+    }
+    if (row.status === 'nothing_to_commit') {
+      if (row.commit_sha !== null) throw corrupt();
+      if (row.error !== 'nothing_to_commit') throw corrupt();
+      if (typeof row.summary !== 'string' || row.summary.length < 1 || row.summary.length > 500 || row.summary !== row.summary.trim()) throw corrupt();
+    }
+    if (
+      !isNonNegativeInteger(row.result_recorded_at)
+      || !Number.isSafeInteger(row.result_recorded_at)
+      || row.result_recorded_at > 9007199254740991
+    ) throw corrupt();
+    return {
+      commitResultId: row.commit_result_id,
+      commitStartId: row.commit_start_id,
+      status: row.status as CommitResultEvidenceRecord['status'],
+      commitSha: row.commit_sha as string | null,
+      error: row.error as string | null,
+      summary: row.summary as string | null,
+      resultRecordedAt: row.result_recorded_at,
+    };
+  }
+
+  // --- Verification Evidence Store API ---
+
+  recordVerificationStartEvidence(input: RecordVerificationStartInput): RecordVerificationStartResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      const { taskId, executionRunId, invocationId, launchAttemptId, launchResultId, snapshotId, codexStartId, executionId } = input;
+      if (Object.keys(input).length !== 8) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (![taskId, executionRunId, invocationId, launchAttemptId, launchResultId, snapshotId, codexStartId].every(
+        (id) => typeof id === 'string' && PROJECT_TASK_ID.test(id),
+      )) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof executionId !== 'string' || executionId.length < 1 || executionId.length > 36) {
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      }
+
+      const existingRow = this.database.prepare(`
+        SELECT verification_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               execution_id, start_recorded_at
+        FROM project_task_verification_start_evidence
+        WHERE task_id = ?
+      `).get(taskId) as unknown as VerificationStartEvidenceRow | undefined;
+
+      if (existingRow !== undefined) {
+        const existing = this.decodeVerificationStartEvidenceRow(existingRow);
+        if (
+          existing.executionRunId === executionRunId
+          && existing.invocationId === invocationId
+          && existing.launchAttemptId === launchAttemptId
+          && existing.launchResultId === launchResultId
+          && existing.snapshotId === snapshotId
+          && existing.codexStartId === codexStartId
+          && existing.executionId === executionId
+        ) {
+          return { verificationStart: existing, created: false };
+        }
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.contradictory);
+      }
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > 9007199254740991) {
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const verificationStartId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_verification_start_evidence
+          (verification_start_id, task_id, execution_run_id, invocation_id,
+           launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+           execution_id, start_recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(verificationStartId, taskId, executionRunId, invocationId,
+        launchAttemptId, launchResultId, snapshotId, codexStartId, executionId, now);
+
+      const inserted = this.database.prepare(`
+        SELECT verification_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               execution_id, start_recorded_at
+        FROM project_task_verification_start_evidence
+        WHERE verification_start_id = ?
+      `).get(verificationStartId) as unknown as VerificationStartEvidenceRow | undefined;
+
+      if (inserted === undefined) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      return { verificationStart: this.decodeVerificationStartEvidenceRow(inserted), created: true };
+    });
+  }
+
+  readVerificationStartEvidence(verificationStartId: string): VerificationStartEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof verificationStartId !== 'string' || !PROJECT_TASK_ID.test(verificationStartId)) {
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT verification_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               execution_id, start_recorded_at
+        FROM project_task_verification_start_evidence
+        WHERE verification_start_id = ?
+      `).get(verificationStartId) as unknown as VerificationStartEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeVerificationStartEvidenceRow(row);
+    });
+  }
+
+  readVerificationStartEvidenceByTask(taskId: string): VerificationStartEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT verification_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               execution_id, start_recorded_at
+        FROM project_task_verification_start_evidence
+        WHERE task_id = ?
+      `).get(taskId) as unknown as VerificationStartEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeVerificationStartEvidenceRow(row);
+    });
+  }
+
+  recordVerificationResultEvidence(input: RecordVerificationResultInput): RecordVerificationResultResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      const { verificationStartId, status, checksPassed, totalChecks, technicalChecksPassed, technicalTotalChecks, visualChecksPassed, visualTotalChecks, failureError, failureSummary } = input;
+      if (Object.keys(input).length !== 10) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof verificationStartId !== 'string' || !PROJECT_TASK_ID.test(verificationStartId)) {
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (typeof status !== 'string' || !VERIFICATION_RESULT_STATUSES.includes(status as typeof VERIFICATION_RESULT_STATUSES[number])) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof checksPassed !== 'number' || !Number.isInteger(checksPassed) || checksPassed < 0) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof totalChecks !== 'number' || !Number.isInteger(totalChecks) || totalChecks <= 0 || checksPassed > totalChecks) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof technicalChecksPassed !== 'number' || !Number.isInteger(technicalChecksPassed) || technicalChecksPassed < 0) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof technicalTotalChecks !== 'number' || !Number.isInteger(technicalTotalChecks) || technicalTotalChecks < 0) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof visualChecksPassed !== 'number' || !Number.isInteger(visualChecksPassed) || visualChecksPassed < 0) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof visualTotalChecks !== 'number' || !Number.isInteger(visualTotalChecks) || visualTotalChecks < 0) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (checksPassed !== technicalChecksPassed + visualChecksPassed) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (totalChecks !== technicalTotalChecks + visualTotalChecks) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (status === 'verified' && failureError !== null) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (status === 'verified' && failureSummary !== null) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      if (status === 'verification_failed') {
+        if (typeof failureError !== 'string' || !VERIFICATION_FAILURE_ERRORS.includes(failureError as typeof VERIFICATION_FAILURE_ERRORS[number])) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+        if (typeof failureSummary !== 'string' || failureSummary.length < 1 || failureSummary.length > 500 || failureSummary !== failureSummary.trim()) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      }
+
+      const existingRow = this.database.prepare(`
+        SELECT verification_result_id, verification_start_id, status, checks_passed,
+               total_checks, technical_checks_passed, technical_total_checks,
+               visual_checks_passed, visual_total_checks, failure_error,
+               failure_summary, result_recorded_at
+        FROM project_task_verification_result_evidence
+        WHERE verification_start_id = ?
+      `).get(verificationStartId) as unknown as VerificationResultEvidenceRow | undefined;
+
+      if (existingRow !== undefined) {
+        const existing = this.decodeVerificationResultEvidenceRow(existingRow);
+        if (
+          existing.status === status
+          && existing.checksPassed === checksPassed
+          && existing.totalChecks === totalChecks
+          && existing.failureError === failureError
+          && existing.failureSummary === failureSummary
+        ) {
+          return { verificationResult: existing, created: false };
+        }
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.resultContradictory);
+      }
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > 9007199254740991) {
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const verificationResultId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_verification_result_evidence
+          (verification_result_id, verification_start_id, status, checks_passed,
+           total_checks, technical_checks_passed, technical_total_checks,
+           visual_checks_passed, visual_total_checks, failure_error,
+           failure_summary, result_recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(verificationResultId, verificationStartId, status, checksPassed,
+        totalChecks, technicalChecksPassed, technicalTotalChecks,
+        visualChecksPassed, visualTotalChecks, failureError, failureSummary, now);
+
+      const inserted = this.database.prepare(`
+        SELECT verification_result_id, verification_start_id, status, checks_passed,
+               total_checks, technical_checks_passed, technical_total_checks,
+               visual_checks_passed, visual_total_checks, failure_error,
+               failure_summary, result_recorded_at
+        FROM project_task_verification_result_evidence
+        WHERE verification_result_id = ?
+      `).get(verificationResultId) as unknown as VerificationResultEvidenceRow | undefined;
+
+      if (inserted === undefined) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      return { verificationResult: this.decodeVerificationResultEvidenceRow(inserted), created: true };
+    });
+  }
+
+  readVerificationResultEvidence(verificationStartId: string): VerificationResultEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof verificationStartId !== 'string' || !PROJECT_TASK_ID.test(verificationStartId)) {
+        throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT verification_result_id, verification_start_id, status, checks_passed,
+               total_checks, technical_checks_passed, technical_total_checks,
+               visual_checks_passed, visual_total_checks, failure_error,
+               failure_summary, result_recorded_at
+        FROM project_task_verification_result_evidence
+        WHERE verification_start_id = ?
+      `).get(verificationStartId) as unknown as VerificationResultEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeVerificationResultEvidenceRow(row);
+    });
+  }
+
+  // --- Commit Evidence Store API ---
+
+  recordCommitStartEvidence(input: RecordCommitStartInput): RecordCommitStartResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      const { taskId, executionRunId, invocationId, launchAttemptId, launchResultId, snapshotId, codexStartId, verificationStartId, executionId } = input;
+      if (Object.keys(input).length !== 9) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      if (![taskId, executionRunId, invocationId, launchAttemptId, launchResultId, snapshotId, codexStartId, verificationStartId].every(
+        (id) => typeof id === 'string' && PROJECT_TASK_ID.test(id),
+      )) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof executionId !== 'string' || executionId.length < 1 || executionId.length > 36) {
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+
+      const existingRow = this.database.prepare(`
+        SELECT commit_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               verification_start_id, execution_id, start_recorded_at
+        FROM project_task_commit_start_evidence
+        WHERE task_id = ?
+      `).get(taskId) as unknown as CommitStartEvidenceRow | undefined;
+
+      if (existingRow !== undefined) {
+        const existing = this.decodeCommitStartEvidenceRow(existingRow);
+        if (
+          existing.executionRunId === executionRunId
+          && existing.invocationId === invocationId
+          && existing.launchAttemptId === launchAttemptId
+          && existing.launchResultId === launchResultId
+          && existing.snapshotId === snapshotId
+          && existing.codexStartId === codexStartId
+          && existing.verificationStartId === verificationStartId
+          && existing.executionId === executionId
+        ) {
+          return { commitStart: existing, created: false };
+        }
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.contradictory);
+      }
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > 9007199254740991) {
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const commitStartId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_commit_start_evidence
+          (commit_start_id, task_id, execution_run_id, invocation_id,
+           launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+           verification_start_id, execution_id, start_recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(commitStartId, taskId, executionRunId, invocationId,
+        launchAttemptId, launchResultId, snapshotId, codexStartId,
+        verificationStartId, executionId, now);
+
+      const inserted = this.database.prepare(`
+        SELECT commit_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               verification_start_id, execution_id, start_recorded_at
+        FROM project_task_commit_start_evidence
+        WHERE commit_start_id = ?
+      `).get(commitStartId) as unknown as CommitStartEvidenceRow | undefined;
+
+      if (inserted === undefined) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      return { commitStart: this.decodeCommitStartEvidenceRow(inserted), created: true };
+    });
+  }
+
+  readCommitStartEvidence(commitStartId: string): CommitStartEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof commitStartId !== 'string' || !PROJECT_TASK_ID.test(commitStartId)) {
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT commit_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               verification_start_id, execution_id, start_recorded_at
+        FROM project_task_commit_start_evidence
+        WHERE commit_start_id = ?
+      `).get(commitStartId) as unknown as CommitStartEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeCommitStartEvidenceRow(row);
+    });
+  }
+
+  readCommitStartEvidenceByTask(taskId: string): CommitStartEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT commit_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+               verification_start_id, execution_id, start_recorded_at
+        FROM project_task_commit_start_evidence
+        WHERE task_id = ?
+      `).get(taskId) as unknown as CommitStartEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeCommitStartEvidenceRow(row);
+    });
+  }
+
+  recordCommitResultEvidence(input: RecordCommitResultInput): RecordCommitResultResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      const { commitStartId, status, commitSha, error, summary } = input;
+      if (Object.keys(input).length !== 5) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof commitStartId !== 'string' || !PROJECT_TASK_ID.test(commitStartId)) {
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (typeof status !== 'string' || !COMMIT_RESULT_STATUSES.includes(status as typeof COMMIT_RESULT_STATUSES[number])) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      if (status === 'committed') {
+        if (typeof commitSha !== 'string' || commitSha.length < 40 || commitSha.length > 64 || !/^[0-9a-fA-F]+$/.test(commitSha)) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        if (error !== null) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        if (summary !== 'The verified workspace was committed locally.') throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (status === 'commit_failed') {
+        if (commitSha !== null) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        if (typeof error !== 'string' || !COMMIT_FAILURE_ERRORS.includes(error as typeof COMMIT_FAILURE_ERRORS[number])) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        if (typeof summary !== 'string' || summary.length < 1 || summary.length > 500 || summary !== summary.trim()) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (status === 'nothing_to_commit') {
+        if (commitSha !== null) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        if (error !== 'nothing_to_commit') throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+        if (typeof summary !== 'string' || summary.length < 1 || summary.length > 500 || summary !== summary.trim()) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+
+      const existingRow = this.database.prepare(`
+        SELECT commit_result_id, commit_start_id, status, commit_sha, error,
+               summary, result_recorded_at
+        FROM project_task_commit_result_evidence
+        WHERE commit_start_id = ?
+      `).get(commitStartId) as unknown as CommitResultEvidenceRow | undefined;
+
+      if (existingRow !== undefined) {
+        const existing = this.decodeCommitResultEvidenceRow(existingRow);
+        if (
+          existing.status === status
+          && existing.commitSha === commitSha
+          && existing.error === error
+          && existing.summary === summary
+        ) {
+          return { commitResult: existing, created: false };
+        }
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.resultContradictory);
+      }
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > 9007199254740991) {
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const commitResultId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_commit_result_evidence
+          (commit_result_id, commit_start_id, status, commit_sha, error,
+           summary, result_recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(commitResultId, commitStartId, status, commitSha, error, summary, now);
+
+      const inserted = this.database.prepare(`
+        SELECT commit_result_id, commit_start_id, status, commit_sha, error,
+               summary, result_recorded_at
+        FROM project_task_commit_result_evidence
+        WHERE commit_result_id = ?
+      `).get(commitResultId) as unknown as CommitResultEvidenceRow | undefined;
+
+      if (inserted === undefined) throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      return { commitResult: this.decodeCommitResultEvidenceRow(inserted), created: true };
+    });
+  }
+
+  readCommitResultEvidence(commitStartId: string): CommitResultEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof commitStartId !== 'string' || !PROJECT_TASK_ID.test(commitStartId)) {
+        throw new Error(PROJECT_TASK_COMMIT_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT commit_result_id, commit_start_id, status, commit_sha, error,
+               summary, result_recorded_at
+        FROM project_task_commit_result_evidence
+        WHERE commit_start_id = ?
+      `).get(commitStartId) as unknown as CommitResultEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeCommitResultEvidenceRow(row);
     });
   }
 

@@ -344,7 +344,7 @@ test('authentic V7 shape migrates additively to V8 and preserves task and lease 
     migrated.close();
     const check = new DatabaseSync(databasePath);
     assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, PROJECT_TASK_SQLITE_SCHEMA_VERSION);
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 16);
     check.close();
   } finally {
     await rm(directory, { recursive: true, force: true });

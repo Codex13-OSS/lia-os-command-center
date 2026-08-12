@@ -17,7 +17,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION = 12;
 export const PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION = 13;
 export const PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION = 14;
 export const PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION = 15;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 15;
+export const PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION = 16;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 16;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -111,6 +112,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
   }
@@ -1384,6 +1386,368 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       END
     `);
     meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION) {
+    // Layer 17: Durable Verification Evidence + Commit Idempotency V1.
+    // Purely additive: four new tables (verification start/result, commit
+    // start/result) with indices and triggers. ZERO rows are manufactured
+    // for existing data. IF NOT EXISTS keeps migration idempotent so test
+    // rewind scripts that set schema_version back to 15 do not crash when
+    // the V16 tables (created during initial store construction) already
+    // exist.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_task_verification_start_evidence (
+        verification_start_id TEXT PRIMARY KEY CHECK (
+          length(verification_start_id) = 36
+          AND substr(verification_start_id, 9, 1) = '-'
+          AND substr(verification_start_id, 14, 1) = '-'
+          AND substr(verification_start_id, 19, 1) = '-'
+          AND substr(verification_start_id, 24, 1) = '-'
+          AND verification_start_id = lower(verification_start_id)
+          AND replace(verification_start_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        launch_result_id TEXT NOT NULL UNIQUE CHECK (length(launch_result_id) = 36),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (length(snapshot_id) = 36),
+        codex_start_id TEXT NOT NULL CHECK (length(codex_start_id) = 36),
+        execution_id TEXT NOT NULL CHECK (
+          length(execution_id) BETWEEN 1 AND 36
+        ),
+        start_recorded_at INTEGER NOT NULL CHECK (
+          start_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id),
+        FOREIGN KEY (codex_start_id)
+          REFERENCES project_task_codex_start_evidence(codex_start_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_verification_start_recorded
+      ON project_task_verification_start_evidence(start_recorded_at ASC, verification_start_id ASC);
+
+      CREATE TABLE IF NOT EXISTS project_task_verification_result_evidence (
+        verification_result_id TEXT PRIMARY KEY CHECK (
+          length(verification_result_id) = 36
+          AND substr(verification_result_id, 9, 1) = '-'
+          AND substr(verification_result_id, 14, 1) = '-'
+          AND substr(verification_result_id, 19, 1) = '-'
+          AND substr(verification_result_id, 24, 1) = '-'
+          AND verification_result_id = lower(verification_result_id)
+          AND replace(verification_result_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        verification_start_id TEXT NOT NULL UNIQUE CHECK (length(verification_start_id) = 36),
+        status TEXT NOT NULL CHECK (status IN ('verified', 'verification_failed')),
+        checks_passed INTEGER NOT NULL CHECK (checks_passed >= 0),
+        total_checks INTEGER NOT NULL CHECK (total_checks > 0 AND checks_passed <= total_checks),
+        technical_checks_passed INTEGER NOT NULL CHECK (technical_checks_passed >= 0),
+        technical_total_checks INTEGER NOT NULL CHECK (technical_total_checks >= 0),
+        visual_checks_passed INTEGER NOT NULL CHECK (visual_checks_passed >= 0),
+        visual_total_checks INTEGER NOT NULL CHECK (visual_total_checks >= 0),
+        failure_error TEXT CHECK (
+          (status = 'verified' AND failure_error IS NULL)
+          OR (status = 'verification_failed' AND failure_error IN (
+            'check_failed', 'check_timeout', 'visual_check_failed',
+            'visual_check_timeout', 'visual_verification_unavailable',
+            'verification_unavailable', 'invalid_generated_path'
+          ))
+        ),
+        failure_summary TEXT CHECK (
+          (status = 'verified' AND failure_summary IS NULL)
+          OR (status = 'verification_failed'
+              AND length(failure_summary) BETWEEN 1 AND 500
+              AND failure_summary = trim(failure_summary))
+        ),
+        result_recorded_at INTEGER NOT NULL CHECK (
+          result_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (verification_start_id)
+          REFERENCES project_task_verification_start_evidence(verification_start_id),
+        CHECK (checks_passed = technical_checks_passed + visual_checks_passed),
+        CHECK (total_checks = technical_total_checks + visual_total_checks),
+        CHECK (technical_checks_passed <= technical_total_checks),
+        CHECK (visual_checks_passed <= visual_total_checks)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_verification_result_recorded
+      ON project_task_verification_result_evidence(result_recorded_at ASC, verification_result_id ASC);
+
+      CREATE TABLE IF NOT EXISTS project_task_commit_start_evidence (
+        commit_start_id TEXT PRIMARY KEY CHECK (
+          length(commit_start_id) = 36
+          AND substr(commit_start_id, 9, 1) = '-'
+          AND substr(commit_start_id, 14, 1) = '-'
+          AND substr(commit_start_id, 19, 1) = '-'
+          AND substr(commit_start_id, 24, 1) = '-'
+          AND commit_start_id = lower(commit_start_id)
+          AND replace(commit_start_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        launch_result_id TEXT NOT NULL UNIQUE CHECK (length(launch_result_id) = 36),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (length(snapshot_id) = 36),
+        codex_start_id TEXT NOT NULL CHECK (length(codex_start_id) = 36),
+        verification_start_id TEXT NOT NULL CHECK (length(verification_start_id) = 36),
+        execution_id TEXT NOT NULL CHECK (
+          length(execution_id) BETWEEN 1 AND 36
+        ),
+        start_recorded_at INTEGER NOT NULL CHECK (
+          start_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id),
+        FOREIGN KEY (codex_start_id)
+          REFERENCES project_task_codex_start_evidence(codex_start_id),
+        FOREIGN KEY (verification_start_id)
+          REFERENCES project_task_verification_start_evidence(verification_start_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_commit_start_recorded
+      ON project_task_commit_start_evidence(start_recorded_at ASC, commit_start_id ASC);
+
+      CREATE TABLE IF NOT EXISTS project_task_commit_result_evidence (
+        commit_result_id TEXT PRIMARY KEY CHECK (
+          length(commit_result_id) = 36
+          AND substr(commit_result_id, 9, 1) = '-'
+          AND substr(commit_result_id, 14, 1) = '-'
+          AND substr(commit_result_id, 19, 1) = '-'
+          AND substr(commit_result_id, 24, 1) = '-'
+          AND commit_result_id = lower(commit_result_id)
+          AND replace(commit_result_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        commit_start_id TEXT NOT NULL UNIQUE CHECK (length(commit_start_id) = 36),
+        status TEXT NOT NULL CHECK (status IN ('committed', 'commit_failed', 'nothing_to_commit')),
+        commit_sha TEXT CHECK (
+          (status = 'committed' AND commit_sha IS NOT NULL
+           AND length(commit_sha) BETWEEN 40 AND 64
+           AND commit_sha NOT GLOB '*[^0-9a-fA-F]*')
+          OR (status <> 'committed' AND commit_sha IS NULL)
+        ),
+        error TEXT CHECK (
+          (status = 'committed' AND error IS NULL)
+          OR (status = 'commit_failed' AND error IN (
+            'git_status_failed', 'git_stage_failed', 'git_commit_failed',
+            'git_revision_failed', 'nothing_to_commit', 'invalid_generated_path',
+            'workspace_not_verified', 'local_commit_not_approved',
+            'commit_contradictory_evidence'
+          ))
+          OR (status = 'nothing_to_commit' AND error = 'nothing_to_commit')
+        ),
+        summary TEXT CHECK (
+          (status = 'committed' AND summary = 'The verified workspace was committed locally.')
+          OR (status <> 'committed' AND length(summary) BETWEEN 1 AND 500
+              AND summary = trim(summary))
+        ),
+        result_recorded_at INTEGER NOT NULL CHECK (
+          result_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (commit_start_id)
+          REFERENCES project_task_commit_start_evidence(commit_start_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_commit_result_recorded
+      ON project_task_commit_result_evidence(result_recorded_at ASC, commit_result_id ASC);
+
+      -- Verification start evidence insert validation trigger
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_start_evidence_validate_insert
+      BEFORE INSERT ON project_task_verification_start_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_codex_start_evidence AS codex_start
+          JOIN project_task_codex_result_evidence AS codex_result
+            ON codex_result.codex_start_id = codex_start.codex_start_id
+          JOIN project_task_execution_runs AS run
+            ON run.execution_run_id = codex_start.execution_run_id
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.invocation_id = codex_start.invocation_id
+          JOIN project_task_execution_launch_attempts AS attempt
+            ON attempt.launch_attempt_id = codex_start.launch_attempt_id
+          JOIN project_task_execution_launch_results AS result
+            ON result.launch_result_id = codex_start.launch_result_id
+          JOIN project_task_validated_proposal_snapshots AS snapshot
+            ON snapshot.snapshot_id = codex_start.snapshot_id
+          JOIN project_tasks AS task ON task.task_id = codex_start.task_id
+          WHERE codex_start.codex_start_id = NEW.codex_start_id
+            AND codex_start.task_id = NEW.task_id
+            AND codex_result.outcome = 'codex_success'
+            AND codex_result.execution_id = NEW.execution_id
+            AND run.execution_run_id = NEW.execution_run_id
+            AND invocation.invocation_id = NEW.invocation_id
+            AND attempt.launch_attempt_id = NEW.launch_attempt_id
+            AND result.launch_result_id = NEW.launch_result_id
+            AND result.outcome_class = 'proposal_valid'
+            AND snapshot.snapshot_id = NEW.snapshot_id
+            AND snapshot.task_id = NEW.task_id
+            AND task.task_id = NEW.task_id
+            AND task.status IN ('codex', 'verification')
+            AND task.terminal_at IS NULL
+            AND run.task_id = NEW.task_id
+            AND invocation.task_id = NEW.task_id
+            AND attempt.task_id = NEW.task_id
+            AND result.task_id = NEW.task_id
+            AND NEW.start_recorded_at >= codex_result.result_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_verification_start_evidence_incompatible') END;
+      END;
+
+      -- Verification result evidence insert validation trigger
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_result_evidence_validate_insert
+      BEFORE INSERT ON project_task_verification_result_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_verification_start_evidence AS start
+          JOIN project_tasks AS task ON task.task_id = start.task_id
+          WHERE start.verification_start_id = NEW.verification_start_id
+            AND task.status NOT IN ('completed', 'failed')
+            AND NEW.result_recorded_at >= start.start_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          NEW.checks_passed <> NEW.technical_checks_passed + NEW.visual_checks_passed
+        THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          NEW.total_checks <> NEW.technical_total_checks + NEW.visual_total_checks
+        THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          NEW.technical_checks_passed > NEW.technical_total_checks
+        THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          NEW.visual_checks_passed > NEW.visual_total_checks
+        THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+      END;
+
+      -- Commit start evidence insert validation trigger
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_start_evidence_validate_insert
+      BEFORE INSERT ON project_task_commit_start_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_verification_start_evidence AS verify_start
+          JOIN project_task_verification_result_evidence AS verify_result
+            ON verify_result.verification_start_id = verify_start.verification_start_id
+          JOIN project_task_codex_start_evidence AS codex_start
+            ON codex_start.codex_start_id = verify_start.codex_start_id
+          JOIN project_task_execution_runs AS run
+            ON run.execution_run_id = verify_start.execution_run_id
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.invocation_id = verify_start.invocation_id
+          JOIN project_task_execution_launch_attempts AS attempt
+            ON attempt.launch_attempt_id = verify_start.launch_attempt_id
+          JOIN project_task_execution_launch_results AS result
+            ON result.launch_result_id = verify_start.launch_result_id
+          JOIN project_task_validated_proposal_snapshots AS snapshot
+            ON snapshot.snapshot_id = verify_start.snapshot_id
+          JOIN project_tasks AS task ON task.task_id = verify_start.task_id
+          WHERE verify_start.verification_start_id = NEW.verification_start_id
+            AND verify_start.task_id = NEW.task_id
+            AND verify_result.status = 'verified'
+            AND verify_start.codex_start_id = NEW.codex_start_id
+            AND verify_start.execution_id = NEW.execution_id
+            AND run.execution_run_id = NEW.execution_run_id
+            AND invocation.invocation_id = NEW.invocation_id
+            AND attempt.launch_attempt_id = NEW.launch_attempt_id
+            AND result.launch_result_id = NEW.launch_result_id
+            AND result.outcome_class = 'proposal_valid'
+            AND snapshot.snapshot_id = NEW.snapshot_id
+            AND snapshot.task_id = NEW.task_id
+            AND task.task_id = NEW.task_id
+            AND task.status IN ('codex', 'verification', 'commit')
+            AND task.terminal_at IS NULL
+            AND run.task_id = NEW.task_id
+            AND invocation.task_id = NEW.task_id
+            AND attempt.task_id = NEW.task_id
+            AND result.task_id = NEW.task_id
+            AND NEW.start_recorded_at >= verify_result.result_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_commit_start_evidence_incompatible') END;
+      END;
+
+      -- Commit result evidence insert validation trigger
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_result_evidence_validate_insert
+      BEFORE INSERT ON project_task_commit_result_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_commit_start_evidence AS start
+          JOIN project_tasks AS task ON task.task_id = start.task_id
+          WHERE start.commit_start_id = NEW.commit_start_id
+            AND task.status NOT IN ('completed', 'failed')
+            AND NEW.result_recorded_at >= start.start_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_commit_result_evidence_incompatible') END;
+      END;
+
+      -- Immutability triggers for all four tables
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_start_evidence_immutable_update
+      BEFORE UPDATE ON project_task_verification_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_verification_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_start_evidence_immutable_delete
+      BEFORE DELETE ON project_task_verification_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_verification_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_result_evidence_immutable_update
+      BEFORE UPDATE ON project_task_verification_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_verification_result_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_result_evidence_immutable_delete
+      BEFORE DELETE ON project_task_verification_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_verification_result_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_start_evidence_immutable_update
+      BEFORE UPDATE ON project_task_commit_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_commit_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_start_evidence_immutable_delete
+      BEFORE DELETE ON project_task_commit_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_commit_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_result_evidence_immutable_update
+      BEFORE UPDATE ON project_task_commit_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_commit_result_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_result_evidence_immutable_delete
+      BEFORE DELETE ON project_task_commit_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_commit_result_evidence_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION;
   }
 }
 

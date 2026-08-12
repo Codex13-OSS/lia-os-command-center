@@ -31,6 +31,8 @@ import { buildProjectCodexHandoff } from './projectCodexHandoff.js';
 import { executeProjectCodexHandoff } from './projectCodexExecutor.js';
 import { mapCodexResultToEvidence, hasCodexSuccessEvidence } from '../contracts/projectTaskCodexEvidence.js';
 import type { RecordCodexStartInput, RecordCodexResultInput } from '../contracts/projectTaskCodexEvidence.js';
+import { hasVerificationSuccessEvidence } from '../contracts/projectTaskVerificationEvidence.js';
+import { hasCommitSuccessEvidence } from '../contracts/projectTaskCommitEvidence.js';
 import { verifyProjectCodexWorkspace } from './projectCodexVerification.js';
 import { verifyProjectVisualWorkspace } from './projectVisualVerification.js';
 import { commitVerifiedProjectCodexWorkspace } from './projectCodexCommit.js';
@@ -68,7 +70,18 @@ export function hasProjectTaskDurableExecutionPrimitives(
     && typeof store.recordValidatedProposalResult === 'function'
     && typeof store.readValidatedProposalSnapshotByLaunchResult === 'function'
     && typeof store.recordResumeDecision === 'function'
-    && typeof store.readResumeDecisionByTask === 'function';
+    && typeof store.readResumeDecisionByTask === 'function'
+    && typeof store.recordCodexStartEvidence === 'function'
+    && typeof store.recordCodexResultEvidence === 'function'
+    && typeof store.readCodexStartEvidenceByTask === 'function'
+    && typeof store.recordVerificationStartEvidence === 'function'
+    && typeof store.recordVerificationResultEvidence === 'function'
+    && typeof store.readVerificationStartEvidenceByTask === 'function'
+    && typeof store.readVerificationResultEvidence === 'function'
+    && typeof store.recordCommitStartEvidence === 'function'
+    && typeof store.recordCommitResultEvidence === 'function'
+    && typeof store.readCommitStartEvidenceByTask === 'function'
+    && typeof store.readCommitResultEvidence === 'function';
 }
 
 export type ProjectTaskDurableExecutionRunnerOptions = {
@@ -854,69 +867,181 @@ export function createProjectTaskDurableExecutionRunner(
       };
     }
 
-    // Verification
-    let verificationResult: ProjectCodexVerificationResult;
-    await options.onStage('verification');
-    try {
-      verificationResult = await verifyProjectCodexWorkspace(
-        plan.repositoryRoot,
-        plan.projectId,
-        codexResult.executionId,
-        options.verificationRegistry,
-      );
-    } catch {
-      return {
-        ok: false, status: 'failed', stage: 'verification',
-        error: 'verification_unavailable',
-        summary: 'Verification is not available for this project.',
-      };
-    }
-    if (!verificationResult.success) {
-      return {
-        ok: false, status: 'failed', stage: 'verification',
-        error: verificationResult.error,
-        summary: verificationResult.summary,
-      };
-    }
-    if (verificationResult.executionId !== codexResult.executionId) {
-      return {
-        ok: false, status: 'failed', stage: 'verification',
-        error: 'invalid_generated_path',
-        summary: 'The retained workspace could not be resolved safely.',
-      };
+    // Layer 17: Check for existing durable verification evidence.
+    // When known verification succeeded, skip verification entirely.
+    const existingVerifyStart = store.readVerificationStartEvidenceByTask(snapshot.taskId);
+    let verificationResult: ProjectCodexVerificationResult | undefined;
+    let visualResult: ProjectVisualVerificationResult | undefined;
+
+    if (existingVerifyStart !== undefined) {
+      const existingVerifyResult = store.readVerificationResultEvidence(existingVerifyStart.verificationStartId);
+      if (hasVerificationSuccessEvidence(existingVerifyStart, existingVerifyResult)) {
+        // Known durable verification success. Skip verification.
+        await options.onStage('verification');
+
+        verificationResult = {
+          success: true,
+          status: 'verified',
+          executionId: existingVerifyStart.executionId,
+          checksPassed: existingVerifyResult.technicalChecksPassed,
+          totalChecks: existingVerifyResult.technicalTotalChecks,
+          summary: 'Verification previously completed successfully.',
+        };
+
+        visualResult = {
+          success: true,
+          status: 'visual_verified',
+          executionId: existingVerifyStart.executionId,
+          checksPassed: existingVerifyResult.visualChecksPassed,
+          totalChecks: existingVerifyResult.visualTotalChecks,
+          summary: 'Visual QA previously completed successfully.',
+        };
+      }
     }
 
-    // Visual QA
-    let visualResult: ProjectVisualVerificationResult;
-    try {
-      visualResult = await verifyProjectVisualWorkspace(
-        plan.projectId,
-        codexResult.executionId,
-      );
-    } catch {
-      return {
-        ok: false, status: 'failed', stage: 'verification',
-        error: 'verification_unavailable',
-        summary: 'Visual verification is not available for this project.',
-      };
-    }
-    if (!visualResult.success) {
-      return {
-        ok: false, status: 'failed', stage: 'verification',
-        error: visualResult.error === 'visual_check_failed'
-          ? 'visual_check_failed'
-          : visualResult.error === 'visual_check_timeout'
-            ? 'visual_check_timeout'
-            : 'visual_verification_unavailable',
-        summary: visualResult.summary,
-      };
-    }
-    if (visualResult.executionId !== codexResult.executionId) {
-      return {
-        ok: false, status: 'failed', stage: 'verification',
-        error: 'invalid_generated_path',
-        summary: 'The retained workspace could not be resolved safely.',
-      };
+    if (verificationResult === undefined || visualResult === undefined) {
+      // No known durable verification success — run verification fresh.
+      await options.onStage('verification');
+
+      // Layer 17: durably record verification start evidence BEFORE verification.
+      try {
+        const codexStart = store.readCodexStartEvidenceByTask(snapshot.taskId);
+        if (codexStart !== undefined) {
+          store.recordVerificationStartEvidence({
+            taskId: snapshot.taskId,
+            executionRunId: snapshot.executionRunId,
+            invocationId: snapshot.invocationId,
+            launchAttemptId: snapshot.launchAttemptId,
+            launchResultId: snapshot.launchResultId,
+            snapshotId: snapshot.snapshotId,
+            codexStartId: codexStart.codexStartId,
+            executionId: codexResult.executionId,
+          });
+        }
+      } catch { /* Evidence must not gate execution. */ }
+
+      try {
+        verificationResult = await verifyProjectCodexWorkspace(
+          plan.repositoryRoot,
+          plan.projectId,
+          codexResult.executionId,
+          options.verificationRegistry,
+        );
+      } catch {
+        return {
+          ok: false, status: 'failed', stage: 'verification',
+          error: 'verification_unavailable',
+          summary: 'Verification is not available for this project.',
+        };
+      }
+
+      if (!verificationResult.success) {
+        // Layer 17: record verification failure evidence
+        try {
+          const verifyStart = store.readVerificationStartEvidenceByTask(snapshot.taskId);
+          if (verifyStart !== undefined) {
+            store.recordVerificationResultEvidence({
+              verificationStartId: verifyStart.verificationStartId,
+              status: 'verification_failed',
+              checksPassed: verificationResult.checksPassed,
+              totalChecks: verificationResult.totalChecks,
+              technicalChecksPassed: verificationResult.checksPassed,
+              technicalTotalChecks: verificationResult.totalChecks,
+              visualChecksPassed: 0,
+              visualTotalChecks: 0,
+              failureError: verificationResult.error as 'check_failed' | 'check_timeout',
+              failureSummary: verificationResult.summary.slice(0, 500),
+            });
+          }
+        } catch { /* Evidence must not gate execution. */ }
+
+        return {
+          ok: false, status: 'failed', stage: 'verification',
+          error: verificationResult.error,
+          summary: verificationResult.summary,
+        };
+      }
+      if (verificationResult.executionId !== codexResult.executionId) {
+        return {
+          ok: false, status: 'failed', stage: 'verification',
+          error: 'invalid_generated_path',
+          summary: 'The retained workspace could not be resolved safely.',
+        };
+      }
+
+      // Visual QA
+      try {
+        visualResult = await verifyProjectVisualWorkspace(
+          plan.projectId,
+          codexResult.executionId,
+        );
+      } catch {
+        return {
+          ok: false, status: 'failed', stage: 'verification',
+          error: 'verification_unavailable',
+          summary: 'Visual verification is not available for this project.',
+        };
+      }
+      if (!visualResult.success) {
+        // Layer 17: record verification failure evidence (visual)
+        try {
+          const verifyStart = store.readVerificationStartEvidenceByTask(snapshot.taskId);
+          if (verifyStart !== undefined) {
+            store.recordVerificationResultEvidence({
+              verificationStartId: verifyStart.verificationStartId,
+              status: 'verification_failed',
+              checksPassed: verificationResult.checksPassed,
+              totalChecks: verificationResult.totalChecks + visualResult.totalChecks,
+              technicalChecksPassed: verificationResult.checksPassed,
+              technicalTotalChecks: verificationResult.totalChecks,
+              visualChecksPassed: visualResult.checksPassed,
+              visualTotalChecks: visualResult.totalChecks,
+              failureError: visualResult.error === 'visual_check_failed'
+                ? 'visual_check_failed'
+                : visualResult.error === 'visual_check_timeout'
+                  ? 'visual_check_timeout'
+                  : 'visual_verification_unavailable',
+              failureSummary: visualResult.summary.slice(0, 500),
+            });
+          }
+        } catch { /* Evidence must not gate execution. */ }
+
+        return {
+          ok: false, status: 'failed', stage: 'verification',
+          error: visualResult.error === 'visual_check_failed'
+            ? 'visual_check_failed'
+            : visualResult.error === 'visual_check_timeout'
+              ? 'visual_check_timeout'
+              : 'visual_verification_unavailable',
+          summary: visualResult.summary,
+        };
+      }
+      if (visualResult.executionId !== codexResult.executionId) {
+        return {
+          ok: false, status: 'failed', stage: 'verification',
+          error: 'invalid_generated_path',
+          summary: 'The retained workspace could not be resolved safely.',
+        };
+      }
+
+      // Layer 17: record verification success evidence
+      try {
+        const verifyStart = store.readVerificationStartEvidenceByTask(snapshot.taskId);
+        if (verifyStart !== undefined) {
+          store.recordVerificationResultEvidence({
+            verificationStartId: verifyStart.verificationStartId,
+            status: 'verified',
+            checksPassed: verificationResult.checksPassed + visualResult.checksPassed,
+            totalChecks: verificationResult.totalChecks + visualResult.totalChecks,
+            technicalChecksPassed: verificationResult.checksPassed,
+            technicalTotalChecks: verificationResult.totalChecks,
+            visualChecksPassed: visualResult.checksPassed,
+            visualTotalChecks: visualResult.totalChecks,
+            failureError: null,
+            failureSummary: null,
+          });
+        }
+      } catch { /* Evidence must not gate execution. */ }
     }
 
     const verification = {
@@ -943,8 +1068,52 @@ export function createProjectTaskDurableExecutionRunner(
     }
 
     // Commit
+    // Layer 17: Check for existing durable commit evidence.
+    // When known commit succeeded, skip commit entirely.
+    const existingCommitStart = store.readCommitStartEvidenceByTask(snapshot.taskId);
     let commitResult: ProjectCodexCommitResult;
+
+    if (existingCommitStart !== undefined) {
+      const existingCommitResult = store.readCommitResultEvidence(existingCommitStart.commitStartId);
+      if (hasCommitSuccessEvidence(existingCommitStart, existingCommitResult)) {
+        // Known durable commit success. Skip commit entirely.
+        await options.onStage('commit');
+
+        return {
+          ok: true,
+          projectId: plan.projectId,
+          executionId: `resume-${taskId}`,
+          status: 'committed',
+          executionSummary: codexResult.summary,
+          resultText: codexResult.resultText,
+          verification,
+          commit: existingCommitResult.commitSha!,
+          stages: ['planning', 'hermes', 'codex', 'verification', 'visualQa', 'commit'] as readonly SafeTaskStage[],
+        };
+      }
+    }
+
     await options.onStage('commit');
+
+    // Layer 17: durably record commit start evidence BEFORE git mutation.
+    try {
+      const codexStart = store.readCodexStartEvidenceByTask(snapshot.taskId);
+      const verifyStart = store.readVerificationStartEvidenceByTask(snapshot.taskId);
+      if (codexStart !== undefined && verifyStart !== undefined) {
+        store.recordCommitStartEvidence({
+          taskId: snapshot.taskId,
+          executionRunId: snapshot.executionRunId,
+          invocationId: snapshot.invocationId,
+          launchAttemptId: snapshot.launchAttemptId,
+          launchResultId: snapshot.launchResultId,
+          snapshotId: snapshot.snapshotId,
+          codexStartId: codexStart.codexStartId,
+          verificationStartId: verifyStart.verificationStartId,
+          executionId: codexResult.executionId,
+        });
+      }
+    } catch { /* Evidence must not gate execution. */ }
+
     try {
       commitResult = await commitVerifiedProjectCodexWorkspace(
         plan.repositoryRoot,
@@ -953,6 +1122,20 @@ export function createProjectTaskDurableExecutionRunner(
         verificationResult,
       );
     } catch {
+      // Layer 17: record commit failure evidence
+      try {
+        const commitStart = store.readCommitStartEvidenceByTask(snapshot.taskId);
+        if (commitStart !== undefined) {
+          store.recordCommitResultEvidence({
+            commitStartId: commitStart.commitStartId,
+            status: 'commit_failed',
+            commitSha: null,
+            error: 'git_commit_failed',
+            summary: 'The local commit could not be created.',
+          });
+        }
+      } catch { /* Evidence must not gate execution. */ }
+
       return {
         ok: false, status: 'failed', stage: 'commit',
         error: 'git_commit_failed',
@@ -960,6 +1143,20 @@ export function createProjectTaskDurableExecutionRunner(
       };
     }
     if (!commitResult.success) {
+      // Layer 17: record commit failure evidence
+      try {
+        const commitStart = store.readCommitStartEvidenceByTask(snapshot.taskId);
+        if (commitStart !== undefined) {
+          store.recordCommitResultEvidence({
+            commitStartId: commitStart.commitStartId,
+            status: 'commit_failed',
+            commitSha: null,
+            error: commitResult.error as 'git_commit_failed' | 'git_status_failed' | 'git_stage_failed' | 'git_revision_failed' | 'nothing_to_commit' | 'invalid_generated_path' | 'workspace_not_verified' | 'local_commit_not_approved',
+            summary: commitResult.summary.slice(0, 500),
+          });
+        }
+      } catch { /* Evidence must not gate execution. */ }
+
       return {
         ok: false, status: 'failed', stage: 'commit',
         error: commitResult.error,
@@ -976,6 +1173,20 @@ export function createProjectTaskDurableExecutionRunner(
         summary: 'The local commit revision could not be validated.',
       };
     }
+
+    // Layer 17: record commit success evidence
+    try {
+      const commitStart = store.readCommitStartEvidenceByTask(snapshot.taskId);
+      if (commitStart !== undefined) {
+        store.recordCommitResultEvidence({
+          commitStartId: commitStart.commitStartId,
+          status: 'committed',
+          commitSha: commitResult.commit,
+          error: null,
+          summary: 'The verified workspace was committed locally.',
+        });
+      }
+    } catch { /* Evidence must not gate execution. */ }
 
     return {
       ok: true,
