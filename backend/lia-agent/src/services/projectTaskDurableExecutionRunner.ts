@@ -390,6 +390,120 @@ export function createProjectTaskDurableExecutionRunner(
     store.recordCodexResultEvidence(input);
   };
 
+  /**
+   * Layer 17: durable verification start evidence seam. Invoked at most
+   * once per live workflow, after the observable `verification` stage
+   * transition and BEFORE the first real verification check. Records
+   * the exact execution lineage and Codex execution ID. Evidence only —
+   * never gates execution (verification is safely idempotent).
+   */
+  const recordVerificationStart = async (executionId: string): Promise<void> => {
+    if (!gateFired) return;
+    const snapshot = store.readValidatedProposalSnapshotByTask(taskId);
+    if (snapshot === undefined) return;
+    const codexStart = store.readCodexStartEvidenceByTask(taskId);
+    if (codexStart === undefined) return;
+    store.recordVerificationStartEvidence({
+      taskId,
+      executionRunId: snapshot.executionRunId,
+      invocationId: snapshot.invocationId,
+      launchAttemptId: snapshot.launchAttemptId,
+      launchResultId: snapshot.launchResultId,
+      snapshotId: snapshot.snapshotId,
+      codexStartId: codexStart.codexStartId,
+      executionId,
+    });
+  };
+
+  /**
+   * Layer 17: durable verification result evidence seam. Invoked at most
+   * once per live workflow after BOTH technical and visual verification
+   * complete. Records the aggregate verification outcome. Evidence only —
+   * never gates execution.
+   */
+  const recordVerificationResult = async (result: {
+    success: boolean;
+    checksPassed: number;
+    totalChecks: number;
+    technicalChecksPassed: number;
+    technicalTotalChecks: number;
+    visualChecksPassed: number;
+    visualTotalChecks: number;
+    error?: string;
+    summary?: string;
+  }): Promise<void> => {
+    const verifyStart = store.readVerificationStartEvidenceByTask(taskId);
+    if (verifyStart === undefined) return;
+    store.recordVerificationResultEvidence({
+      verificationStartId: verifyStart.verificationStartId,
+      status: result.success ? 'verified' : 'verification_failed',
+      checksPassed: result.checksPassed,
+      totalChecks: result.totalChecks,
+      technicalChecksPassed: result.technicalChecksPassed,
+      technicalTotalChecks: result.technicalTotalChecks,
+      visualChecksPassed: result.visualChecksPassed,
+      visualTotalChecks: result.visualTotalChecks,
+      failureError: result.error ?? null,
+      failureSummary: result.summary?.slice(0, 500) ?? null,
+    });
+  };
+
+  /**
+   * Layer 17: durable commit start evidence seam. Invoked at most once
+   * per live workflow, after the observable `commit` stage transition
+   * and BEFORE the git commit mutation. MUST throw on failure — commit
+   * is non-idempotent, so failure to record start evidence before the
+   * mutation means the boundary must fail closed.
+   */
+  const recordCommitStart = async (executionId: string): Promise<void> => {
+    if (!gateFired) return;
+    const snapshot = store.readValidatedProposalSnapshotByTask(taskId);
+    if (snapshot === undefined) {
+      throw new Error('commit_start_evidence_lineage_incomplete: no snapshot');
+    }
+    const codexStart = store.readCodexStartEvidenceByTask(taskId);
+    if (codexStart === undefined) {
+      throw new Error('commit_start_evidence_lineage_incomplete: no codex start');
+    }
+    const verifyStart = store.readVerificationStartEvidenceByTask(taskId);
+    if (verifyStart === undefined) {
+      throw new Error('commit_start_evidence_lineage_incomplete: no verification start');
+    }
+    store.recordCommitStartEvidence({
+      taskId,
+      executionRunId: snapshot.executionRunId,
+      invocationId: snapshot.invocationId,
+      launchAttemptId: snapshot.launchAttemptId,
+      launchResultId: snapshot.launchResultId,
+      snapshotId: snapshot.snapshotId,
+      codexStartId: codexStart.codexStartId,
+      verificationStartId: verifyStart.verificationStartId,
+      executionId,
+    });
+  };
+
+  /**
+   * Layer 17: durable commit result evidence seam. Invoked at most once
+   * per live workflow after the git commit operation completes. Records
+   * the commit outcome. Evidence only — never gates execution.
+   */
+  const recordCommitResult = async (result: {
+    success: boolean;
+    commitSha?: string;
+    error?: string;
+    summary?: string;
+  }): Promise<void> => {
+    const commitStart = store.readCommitStartEvidenceByTask(taskId);
+    if (commitStart === undefined) return;
+    store.recordCommitResultEvidence({
+      commitStartId: commitStart.commitStartId,
+      status: result.success ? 'committed' : 'commit_failed',
+      commitSha: result.commitSha ?? null,
+      error: result.error ?? null,
+      summary: result.summary?.slice(0, 500) ?? null,
+    });
+  };
+
   /** Known durable outcome for the task, if the Launch Attempt already has a result. */
   const knownOutcomeForTask = (): ProjectTaskWorkflowResult | undefined => {
     const attempt = store.readTaskExecutionLaunchAttemptByTask(taskId);
@@ -1289,6 +1403,10 @@ export function createProjectTaskDurableExecutionRunner(
           recordValidatedProposalResult,
           recordCodexStart,
           recordCodexResult,
+          recordVerificationStart,
+          recordVerificationResult,
+          recordCommitStart,
+          recordCommitResult,
         },
       );
     } catch (error) {

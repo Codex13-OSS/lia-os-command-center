@@ -346,11 +346,12 @@ test('terminal and noneligible tasks cannot create a first attempt', async () =>
   await fixture(({ store, databasePath }) => {
     const { run, lease, invocation } = chain(store);
     store.transition(TASK_A, 'planning');
-    assert.throws(
+    // planning is now a valid status for a first launch attempt — the live
+    // workflow transitions to planning before the gate fires.
+    assert.doesNotThrow(
       () => store.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease)),
-      /project_task_execution_launch_attempt_task_unavailable/,
     );
-    assert.equal(tableRows(databasePath, 'project_task_execution_launch_attempts').length, 0);
+    assert.equal(tableRows(databasePath, 'project_task_execution_launch_attempts').length, 1);
   });
   await fixture(({ store, databasePath }) => {
     const { run, lease, invocation } = chain(store);
@@ -364,6 +365,34 @@ test('terminal and noneligible tasks cannot create a first attempt', async () =>
   await fixture(({ store, databasePath }) => {
     const { run, lease, invocation } = chain(store);
     store.fail(TASK_A, { code: 'workflow_failed', message: SAFE_TASK_ERROR_MESSAGES.workflow_failed });
+    assert.throws(
+      () => store.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease)),
+      /project_task_execution_launch_attempt_task_unavailable/,
+    );
+    assert.equal(tableRows(databasePath, 'project_task_execution_launch_attempts').length, 0);
+  });
+  await fixture(({ store, databasePath }) => {
+    const { run, lease, invocation } = chain(store);
+    // Later stages beyond planning/hermes are not eligible for a first attempt.
+    store.transition(TASK_A, 'codex');
+    assert.throws(
+      () => store.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease)),
+      /project_task_execution_launch_attempt_task_unavailable/,
+    );
+    assert.equal(tableRows(databasePath, 'project_task_execution_launch_attempts').length, 0);
+  });
+  await fixture(({ store, databasePath }) => {
+    const { run, lease, invocation } = chain(store);
+    store.transition(TASK_A, 'verification');
+    assert.throws(
+      () => store.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease)),
+      /project_task_execution_launch_attempt_task_unavailable/,
+    );
+    assert.equal(tableRows(databasePath, 'project_task_execution_launch_attempts').length, 0);
+  });
+  await fixture(({ store, databasePath }) => {
+    const { run, lease, invocation } = chain(store);
+    store.transition(TASK_A, 'commit');
     assert.throws(
       () => store.beginTaskExecutionLaunchAttempt(launchInput(invocation, run, lease)),
       /project_task_execution_launch_attempt_task_unavailable/,

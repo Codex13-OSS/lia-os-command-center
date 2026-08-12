@@ -122,6 +122,53 @@ export interface ProjectTaskWorkflowDependencies {
    * recorded but execution continues (evidence is state only, never authority).
    */
   recordCodexResult?: (result: ProjectCodexExecutionResult) => void | Promise<void>;
+  /**
+   * Optional durable verification start evidence seam (Layer 17). Invoked
+   * at most once per live workflow, after the observable `verification`
+   * stage transition and immediately BEFORE the first real verification
+   * check. Records the exact execution lineage and Codex execution ID.
+   * The callback receives the codex executionId. Evidence only — never
+   * gates execution (verification is safely idempotent).
+   */
+  recordVerificationStart?: (executionId: string) => void | Promise<void>;
+  /**
+   * Optional durable verification result evidence seam (Layer 17). Invoked
+   * at most once per live workflow after BOTH technical and visual
+   * verification complete. Receives ONLY the safe aggregate verification
+   * result — never raw output, paths, or transcripts. Evidence only —
+   * never gates execution.
+   */
+  recordVerificationResult?: (result: {
+    success: boolean;
+    checksPassed: number;
+    totalChecks: number;
+    technicalChecksPassed: number;
+    technicalTotalChecks: number;
+    visualChecksPassed: number;
+    visualTotalChecks: number;
+    error?: string;
+    summary?: string;
+  }) => void | Promise<void>;
+  /**
+   * Optional durable commit start evidence seam (Layer 17). Invoked at
+   * most once per live workflow, after the observable `commit` stage
+   * transition and immediately BEFORE the git commit mutation. MUST throw
+   * on failure — commit is non-idempotent, so failure to record durable
+   * start evidence before the mutation means the boundary must fail closed.
+   */
+  recordCommitStart?: (executionId: string) => void | Promise<void>;
+  /**
+   * Optional durable commit result evidence seam (Layer 17). Invoked at
+   * most once per live workflow after the git commit operation completes.
+   * Receives ONLY the safe commit outcome — never raw output or paths.
+   * Evidence only — never gates execution.
+   */
+  recordCommitResult?: (result: {
+    success: boolean;
+    commitSha?: string;
+    error?: string;
+    summary?: string;
+  }) => void | Promise<void>;
 }
 
 const observe = async (dependencies: ProjectTaskWorkflowDependencies, stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => {
@@ -448,6 +495,9 @@ export async function executeProjectTaskWorkflow(
 
   let verificationResult: ProjectCodexVerificationResult;
   await observe(dependencies, 'verification');
+  // Layer 17: durably record verification start evidence BEFORE verification.
+  // Verification is idempotent — evidence recording is best-effort, never gates.
+  try { await dependencies.recordVerificationStart?.(codexResult.executionId); } catch { /* Evidence recording is best-effort. */ }
   try {
     verificationResult = await (dependencies.executeVerification ?? verifyProjectCodexWorkspace)(
       plan.repositoryRoot,
@@ -464,6 +514,7 @@ export async function executeProjectTaskWorkflow(
     );
   }
   if (!verificationResult.success) {
+    try { await dependencies.recordVerificationResult?.({ success: false, checksPassed: verificationResult.checksPassed, totalChecks: verificationResult.totalChecks, technicalChecksPassed: verificationResult.checksPassed, technicalTotalChecks: verificationResult.totalChecks, visualChecksPassed: 0, visualTotalChecks: 0, error: verificationResult.error, summary: verificationResult.summary }); } catch { /* Evidence only */ }
     return fail('verification', verificationResult.error, verificationResult.summary, executionIdentifiers);
   }
   if (verificationResult.executionId !== codexResult.executionId) {
@@ -494,6 +545,7 @@ export async function executeProjectTaskWorkflow(
   }
 
   if (!visualVerificationResult.success) {
+    try { await dependencies.recordVerificationResult?.({ success: false, checksPassed: verificationResult.checksPassed + visualVerificationResult.checksPassed, totalChecks: verificationResult.totalChecks + visualVerificationResult.totalChecks, technicalChecksPassed: verificationResult.checksPassed, technicalTotalChecks: verificationResult.totalChecks, visualChecksPassed: visualVerificationResult.checksPassed, visualTotalChecks: visualVerificationResult.totalChecks, error: visualVerificationResult.error, summary: visualVerificationResult.summary }); } catch { /* Evidence only */ }
     return fail(
       'verification',
       visualVerificationResult.error === 'visual_check_failed'
@@ -525,6 +577,8 @@ export async function executeProjectTaskWorkflow(
       verificationResult.totalChecks
       + visualVerificationResult.totalChecks,
   };
+  // Layer 17: durably record verification success evidence.
+  try { await dependencies.recordVerificationResult?.({ success: true, checksPassed: verification.checksPassed, totalChecks: verification.totalChecks, technicalChecksPassed: verificationResult.checksPassed, technicalTotalChecks: verificationResult.totalChecks, visualChecksPassed: visualVerificationResult.checksPassed, visualTotalChecks: visualVerificationResult.totalChecks }); } catch { /* Evidence only */ }
   if (!effectiveCapabilities.includes('local_commit')) {
     return {
       ok: true,
@@ -539,6 +593,9 @@ export async function executeProjectTaskWorkflow(
 
   let commitResult: ProjectCodexCommitResult;
   await observe(dependencies, 'commit');
+  // Layer 17: durably record commit start evidence BEFORE git mutation.
+  // Commit is non-idempotent — failure to record start evidence is a hard gate.
+  await dependencies.recordCommitStart?.(codexResult.executionId);
   try {
     commitResult = await (dependencies.executeCommit ?? commitVerifiedProjectCodexWorkspace)(
       plan.repositoryRoot,
@@ -547,9 +604,11 @@ export async function executeProjectTaskWorkflow(
       verificationResult,
     );
   } catch {
+    try { await dependencies.recordCommitResult?.({ success: false, error: 'git_commit_failed', summary: 'The local commit could not be created.' }); } catch { /* Evidence only */ }
     return fail('commit', 'git_commit_failed', 'The local commit could not be created.', executionIdentifiers);
   }
   if (!commitResult.success) {
+    try { await dependencies.recordCommitResult?.({ success: false, error: commitResult.error, summary: commitResult.summary }); } catch { /* Evidence only */ }
     return fail('commit', commitResult.error, commitResult.summary, executionIdentifiers);
   }
   if (
@@ -564,6 +623,9 @@ export async function executeProjectTaskWorkflow(
     );
   }
   markStage('commit');
+
+  // Layer 17: durably record commit success evidence.
+  try { await dependencies.recordCommitResult?.({ success: true, commitSha: commitResult.commit, summary: 'The verified workspace was committed locally.' }); } catch { /* Evidence only */ }
 
   return {
     ok: true,

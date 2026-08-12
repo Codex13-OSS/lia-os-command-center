@@ -4434,7 +4434,7 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       if (task === undefined) {
         throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.taskNotFound);
       }
-      if (task.status !== 'accepted' || task.terminal_at !== null) {
+      if ((task.status !== 'accepted' && task.status !== 'planning') || task.terminal_at !== null) {
         throw new Error(PROJECT_TASK_EXECUTION_LAUNCH_ATTEMPT_ERRORS.taskUnavailable);
       }
       const invocationRow = this.selectExecutionInvocationRow(input.invocationId);
