@@ -103,5 +103,71 @@ export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: P
       completedStages,
     });
   }).all(methodNotAllowed(['GET']));
+
+  // Layer 14: Controlled Local Resume Decision route.
+  // POST /api/projects/tasks/:taskId/resume
+  // Triggers the resume path for a task in local_resume_available state.
+  router.route('/api/projects/tasks/:taskId/resume').post(async (req, res) => {
+    const { taskId } = req.params;
+    if (!PROJECT_TASK_ID.test(taskId)) return void res.status(400).json({ ok: false, integration: 'project_task', error: 'invalid_task_id' });
+
+    const task = dependencies.store.get(taskId);
+    if (!task) return void res.status(404).json({ ok: false, integration: 'project_task', error: 'task_not_found' });
+
+    // Check task is in a resumable state
+    if (
+      task.terminalAt !== undefined
+      || task.status === 'completed'
+      || task.status === 'failed'
+    ) {
+      return void res.status(409).json({
+        ok: false,
+        integration: 'project_task',
+        error: 'task_not_resumable',
+        status: task.status,
+      });
+    }
+
+    if (!dependencies.registry) return void res.status(503).json({ ok: false, integration: 'project_task', error: 'registry_unavailable' });
+    const authorization = await resolveAuthorizedProject(task.intent.projectId, dependencies.registry);
+    if (!authorization.ok) return void res.status(authorization.error === 'project_not_found' ? 404 : authorization.error === 'project_disabled' ? 403 : 503).json({ ok: false, integration: 'project_task', error: authorization.error });
+
+    // Run the resume path
+    const observe = (stage: ObservableStage) => dependencies.store.transition(taskId, stage);
+    const run = runProjectTaskDurableExecution({
+      store: dependencies.store,
+      taskId,
+      workerId: `lia-resume-runner-${randomUUID()}`,
+      config,
+      request: task.intent,
+      registry: dependencies.registry!,
+      verificationRegistry: dependencies.verificationRegistry,
+      onStage: observe,
+      resume: true,
+      ...(dependencies.executeWorkflow !== undefined ? { executeWorkflow: dependencies.executeWorkflow } : {}),
+    });
+
+    void run.then((result) => {
+      if (result.ok) {
+        const receipt = safeReceipt(result);
+        if (receipt) dependencies.store.complete(taskId, receipt);
+        else dependencies.store.fail(taskId, genericFailure());
+      } else if (result.error === 'local_resume_available') {
+        // Still resumable — resume decision hasn't been reached.
+        return;
+      } else {
+        dependencies.store.fail(taskId, safeFailure(result));
+      }
+    }).catch(() => dependencies.store.fail(taskId, genericFailure()));
+
+    res.status(202).json({
+      ok: true,
+      integration: 'project_task',
+      taskId,
+      status: task.status,
+      message: 'Resume decision in progress.',
+    });
+  }).all(methodNotAllowed(['POST']));
+
   return router;
 }

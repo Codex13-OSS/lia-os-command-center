@@ -119,6 +119,18 @@ import {
   PROJECT_TASK_VALIDATED_PROPOSAL_SNAPSHOT_MAX_LIST_LIMIT,
 } from '../contracts/projectTaskValidatedProposalSnapshot.js';
 import type {
+  ProjectTaskResumeDecisionRecord,
+  ProjectTaskResumeDecisionStore,
+  RecordResumeDecisionInput,
+  RecordResumeDecisionResult,
+} from '../contracts/projectTaskResumeDecision.js';
+import {
+  PROJECT_TASK_RESUME_DECISION_ERRORS,
+  PROJECT_TASK_RESUME_DECISION_MAX_LIST_LIMIT,
+  PROJECT_TASK_RESUME_DECISIONS,
+  PROJECT_TASK_RESUME_REFUSAL_REASONS,
+} from '../contracts/projectTaskResumeDecision.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -194,6 +206,8 @@ const SNAPSHOT_COMPLETION_MODES = new Set<string>(['analyze', 'ready_for_review'
 const SNAPSHOT_BLOCKED_ACTIONS = new Set<string>([
   'push', 'merge', 'deploy', 'production_write', 'database_write', 'secret_access',
 ]);
+const RESUME_DECISIONS = new Set<string>(PROJECT_TASK_RESUME_DECISIONS);
+const RESUME_REFUSAL_REASONS = new Set<string>(PROJECT_TASK_RESUME_REFUSAL_REASONS);
 
 type ProjectTaskRow = {
   task_id: unknown;
@@ -335,6 +349,16 @@ type ProjectTaskValidatedProposalSnapshotRow = {
   recorded_at: unknown;
 };
 
+type ProjectTaskResumeDecisionRow = {
+  decision_id: unknown;
+  task_id: unknown;
+  snapshot_id: unknown;
+  decision: unknown;
+  refusal_reason: unknown;
+  policy_fingerprint: unknown;
+  recorded_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -392,7 +416,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -541,6 +565,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
                requires_human_approval, blocked_actions_json, recorded_at
         FROM project_task_validated_proposal_snapshots LIMIT 1
       `).all();
+      this.database.prepare(`
+        SELECT decision_id, task_id, snapshot_id, decision, refusal_reason,
+               policy_fingerprint, recorded_at
+        FROM project_task_resume_decisions LIMIT 1
+      `).all();
     } catch {
       throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
     }
@@ -571,6 +600,7 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         AND task_id NOT IN (SELECT task_id FROM project_task_lineage)
         AND task_id NOT IN (SELECT task_id FROM project_task_dispatch_outbox)
         AND task_id NOT IN (SELECT task_id FROM project_task_validated_proposal_snapshots)
+        AND task_id NOT IN (SELECT task_id FROM project_task_resume_decisions)
     `).run(this.now(), this.options.terminalTtlMs);
 
     this.database.prepare(`
@@ -2847,6 +2877,12 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         FROM project_task_validated_proposal_snapshots
         ORDER BY task_id ASC
       `).all() as unknown as ProjectTaskValidatedProposalSnapshotRow[];
+      const resumeDecisionRows = this.database.prepare(`
+        SELECT decision_id, task_id, snapshot_id, decision, refusal_reason,
+               policy_fingerprint, recorded_at
+        FROM project_task_resume_decisions
+        ORDER BY task_id ASC
+      `).all() as unknown as ProjectTaskResumeDecisionRow[];
       // Layer 13 snapshot pre-pass: EVERY snapshot must resolve to a
       // proposal_valid result with identical lineage, a recomputed
       // sha256(canonical) matching proposal_sha256, and exactly one snapshot
@@ -2883,11 +2919,38 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         snapshotInvocationIds.add(snapshot.invocationId);
         snapshotRunIds.add(snapshot.executionRunId);
       }
+      // Layer 14 resume decision pre-pass: EVERY resume decision must
+      // reference an existing task and an existing snapshot that belongs to
+      // that task. One decision per task. Decision must be 'approved' or
+      // 'refused'. Policy fingerprint must be 64-char lowercase hex. ANY
+      // violation aborts the WHOLE recovery transaction atomically (fail
+      // closed, zero partial terminalization) before any task state is
+      // mutated.
+      const resumeDecisionByTask = new Map<string, ProjectTaskResumeDecisionRecord>();
+      const resumeDecisionIds = new Set<string>();
+      const resumeDecisionSnapshotIds = new Set<string>();
+      for (const row of resumeDecisionRows) {
+        const decision = this.decodeResumeDecisionRow(row);
+        if (
+          !taskIds.has(decision.taskId)
+          || !snapshotByTask.has(decision.taskId)
+          || snapshotByTask.get(decision.taskId)!.snapshotId !== decision.snapshotId
+          || resumeDecisionByTask.has(decision.taskId)
+          || resumeDecisionIds.has(decision.decisionId)
+          || resumeDecisionSnapshotIds.has(decision.snapshotId)
+          || decision.policyFingerprint.length !== 64
+          || !/^[0-9a-f]{64}$/.test(decision.policyFingerprint)
+        ) throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.corruptRecord);
+        resumeDecisionByTask.set(decision.taskId, decision);
+        resumeDecisionIds.add(decision.decisionId);
+        resumeDecisionSnapshotIds.add(decision.snapshotId);
+      }
 
       let failedTaskIds: string[] = [];
       let ambiguousLaunchTaskIds: string[] = [];
       let knownOutcomeTaskIds: Array<{ taskId: string; outcomeClass: ProjectTaskExecutionLaunchResultOutcome }> = [];
       let resumableTaskIds: string[] = [];
+      let refusedResumeTaskIds: string[] = [];
       let preservedRecoverable = 0;
       let terminalUnchanged = 0;
       for (const row of rows) {
@@ -2953,14 +3016,50 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
               || task.status === 'hermes'
             )
           ) {
-            // Layer 13 recovery case 4: a pre-Codex task (status below
-            // 'codex', so the Codex call is provably NOT started) carrying a
-            // validated proposal snapshot is PRESERVED non-terminal as
-            // durably resumable. Status is normalized to 'hermes' and the
-            // active trace to ['planning','hermes'] (idempotent). Zero Hermes,
-            // zero Codex, zero new attempt/result/lease operations. Approval
-            // and blocked-action facts stay gated via the snapshot.
-            resumableTaskIds = [...resumableTaskIds, task.taskId];
+            // Layer 13-14 recovery cases 4/10/11: a pre-Codex task (status
+            // below 'codex', so the Codex call is provably NOT started)
+            // carrying a validated proposal snapshot.
+            // - Case 4 (no resume decision): preserved resumable
+            // - Case 10 (refused decision): force-terminalize resume_refused
+            // - Case 11 (approved decision): preserved resumable
+            const resumeDecision = resumeDecisionByTask.get(task.taskId);
+            if (resumeDecision !== undefined && resumeDecision.decision === 'refused') {
+              // Case 10: resume decision 'refused' on pre-Codex task but
+              // not yet terminalized → force-terminalize with resume_refused.
+              refusedResumeTaskIds = [...refusedResumeTaskIds, task.taskId];
+            } else {
+              // Case 4 (no resume decision) or Case 11 (approved):
+              // preserved resumable. Status is normalized to 'hermes' and
+              // the active trace to ['planning','hermes'] (idempotent).
+              // Zero Hermes, zero Codex, zero new attempt/result/lease
+              // operations. Approval and blocked-action facts stay gated
+              // via the snapshot.
+              resumableTaskIds = [...resumableTaskIds, task.taskId];
+            }
+          } else if (
+            result.outcomeClass === 'proposal_valid'
+            && snapshotByTask.has(task.taskId)
+          ) {
+            // Layer 14 recovery case 12: proposal_valid + snapshot but task
+            // status >= 'codex' → Codex MAY have started. Check if there's an
+            // approved resume decision (which means we authorized resume but
+            // Codex may have started). Either way, fail closed.
+            const resumeDecision = resumeDecisionByTask.get(task.taskId);
+            if (
+              resumeDecision !== undefined
+              && resumeDecision.decision === 'approved'
+            ) {
+              // Case 12: approved + status >= 'codex' → workflow_interrupted.
+              knownOutcomeTaskIds = [
+                ...knownOutcomeTaskIds,
+                { taskId: task.taskId, outcomeClass: 'proposal_valid' },
+              ];
+            } else {
+              knownOutcomeTaskIds = [
+                ...knownOutcomeTaskIds,
+                { taskId: task.taskId, outcomeClass: result.outcomeClass },
+              ];
+            }
           } else {
             knownOutcomeTaskIds = [
               ...knownOutcomeTaskIds,
@@ -3008,6 +3107,11 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
             return { code: 'workflow_interrupted', message: SAFE_TASK_ERROR_MESSAGES.workflow_interrupted };
         }
       };
+      const resumeRefused: SafeTaskError = {
+        code: 'resume_refused',
+        message: SAFE_TASK_ERROR_MESSAGES.resume_refused,
+        stage: 'hermes',
+      };
       const now = this.now();
       const fail = this.database.prepare(`
         UPDATE project_tasks
@@ -3039,7 +3143,14 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         }
         clearTrace.run(taskId);
       }
-      // Case 4: normalize preserved resumable tasks. The task stays
+      for (const taskId of refusedResumeTaskIds) {
+        const result = fail.run(JSON.stringify(resumeRefused), now, now, taskId);
+        if (Number(result.changes) !== 1) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        clearTrace.run(taskId);
+      }
+      // Case 4/11: normalize preserved resumable tasks. The task stays
       // non-terminal (no terminal_at, no error); status is normalized to
       // 'hermes' and the active trace to ['planning'] (the stage BEFORE
       // the current active status; the decode invariant requires completed
@@ -3066,7 +3177,8 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       return {
         preservedRecoverable,
         failedInterrupted:
-          failedTaskIds.length + ambiguousLaunchTaskIds.length + knownOutcomeTaskIds.length,
+          failedTaskIds.length + ambiguousLaunchTaskIds.length
+          + knownOutcomeTaskIds.length + refusedResumeTaskIds.length,
         terminalUnchanged,
         resumableAvailable: resumableTaskIds.length,
       };
@@ -4169,6 +4281,216 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         LIMIT ?
       `).all(limit) as unknown as ProjectTaskValidatedProposalSnapshotRow[];
       return rows.map((row) => this.decodeValidatedProposalSnapshotRow(row));
+    });
+  }
+
+  // --- Resume Decision helpers ---
+
+  private selectResumeDecisionRow(
+    decisionId: string,
+  ): ProjectTaskResumeDecisionRow | undefined {
+    return this.database.prepare(`
+      SELECT decision_id, task_id, snapshot_id, decision, refusal_reason,
+             policy_fingerprint, recorded_at
+      FROM project_task_resume_decisions WHERE decision_id = ?
+    `).get(decisionId) as unknown as ProjectTaskResumeDecisionRow | undefined;
+  }
+
+  private selectResumeDecisionByTaskRow(
+    taskId: string,
+  ): ProjectTaskResumeDecisionRow | undefined {
+    return this.database.prepare(`
+      SELECT decision_id, task_id, snapshot_id, decision, refusal_reason,
+             policy_fingerprint, recorded_at
+      FROM project_task_resume_decisions WHERE task_id = ?
+    `).get(taskId) as unknown as ProjectTaskResumeDecisionRow | undefined;
+  }
+
+  private selectResumeDecisionBySnapshotRow(
+    snapshotId: string,
+  ): ProjectTaskResumeDecisionRow | undefined {
+    return this.database.prepare(`
+      SELECT decision_id, task_id, snapshot_id, decision, refusal_reason,
+             policy_fingerprint, recorded_at
+      FROM project_task_resume_decisions WHERE snapshot_id = ?
+    `).get(snapshotId) as unknown as ProjectTaskResumeDecisionRow | undefined;
+  }
+
+  private decodeResumeDecisionRow(row: ProjectTaskResumeDecisionRow): ProjectTaskResumeDecisionRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.corruptRecord);
+    if (typeof row.decision_id !== 'string' || !PROJECT_TASK_ID.test(row.decision_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.snapshot_id !== 'string' || !PROJECT_TASK_ID.test(row.snapshot_id)) throw corrupt();
+    if (typeof row.decision !== 'string' || !RESUME_DECISIONS.has(row.decision)) throw corrupt();
+    if (row.refusal_reason !== null) {
+      if (
+        row.decision !== 'refused'
+        || typeof row.refusal_reason !== 'string'
+        || !RESUME_REFUSAL_REASONS.has(row.refusal_reason)
+      ) throw corrupt();
+    } else if (row.decision !== 'approved') {
+      throw corrupt();
+    }
+    if (
+      typeof row.policy_fingerprint !== 'string'
+      || row.policy_fingerprint.length !== 64
+      || !/^[0-9a-f]{64}$/.test(row.policy_fingerprint)
+    ) throw corrupt();
+    if (
+      !isNonNegativeInteger(row.recorded_at)
+      || !Number.isSafeInteger(row.recorded_at)
+      || row.recorded_at > 9007199254740991
+    ) throw corrupt();
+    return {
+      decisionId: row.decision_id,
+      taskId: row.task_id,
+      snapshotId: row.snapshot_id,
+      decision: row.decision as ProjectTaskResumeDecisionRecord['decision'],
+      ...(row.refusal_reason !== null ? { refusalReason: row.refusal_reason as ProjectTaskResumeDecisionRecord['refusalReason'] } : {}),
+      policyFingerprint: row.policy_fingerprint,
+      recordedAt: row.recorded_at,
+    };
+  }
+
+  // --- Resume Decision Store API ---
+
+  recordResumeDecision(input: RecordResumeDecisionInput): RecordResumeDecisionResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      const { taskId, snapshotId, decision, refusalReason, policyFingerprint } = input;
+      if (Object.keys(input).length < 4 || Object.keys(input).length > 5) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      if (typeof snapshotId !== 'string' || !PROJECT_TASK_ID.test(snapshotId)) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      if (typeof decision !== 'string' || !RESUME_DECISIONS.has(decision)) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      if (decision === 'refused') {
+        if (typeof refusalReason !== 'string' || !RESUME_REFUSAL_REASONS.has(refusalReason)) {
+          throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+        }
+      } else if (refusalReason !== undefined) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      if (
+        typeof policyFingerprint !== 'string'
+        || policyFingerprint.length !== 64
+        || !/^[0-9a-f]{64}$/.test(policyFingerprint)
+      ) throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+
+      // Check task existence
+      const task = this.selectRow(taskId);
+      if (task === undefined) throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.taskNotFound);
+
+      // Check snapshot exists and belongs to task
+      const snapshot = this.selectValidatedProposalSnapshotByTaskRow(taskId);
+      if (snapshot === undefined || snapshot.snapshot_id !== snapshotId) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.snapshotNotFound);
+      }
+
+      // Check task is non-terminal and pre-Codex
+      if (
+        task.terminal_at !== null
+        || task.status === 'completed'
+        || task.status === 'failed'
+        || !(task.status === 'accepted' || task.status === 'planning' || task.status === 'hermes')
+      ) throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.taskNotResumable);
+
+      // Check for existing decision: exact replay or contradictory
+      const existing = this.selectResumeDecisionByTaskRow(taskId);
+      if (existing !== undefined) {
+        const decoded = this.decodeResumeDecisionRow(existing);
+        if (
+          decoded.decision === decision
+          && decoded.snapshotId === snapshotId
+          && decoded.policyFingerprint === policyFingerprint
+          && (decision === 'approved' || decoded.refusalReason === refusalReason)
+        ) {
+          // Exact replay
+          return { decision: decoded, created: false };
+        }
+        // Contradictory
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.contradictory);
+      }
+
+      const decisionId: string = randomUUID();
+      const recordedAt = this.now();
+      if (!Number.isSafeInteger(recordedAt) || recordedAt < 0 || recordedAt > 9007199254740991) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      const refusalValue: string | null = decision === 'refused' ? (refusalReason as string) : null;
+      const params: import('node:sqlite').SQLInputValue[] = [
+        decisionId,
+        taskId,
+        snapshotId,
+        decision,
+        refusalValue,
+        policyFingerprint,
+        recordedAt,
+      ];
+      this.database.prepare(`
+        INSERT INTO project_task_resume_decisions (
+          decision_id, task_id, snapshot_id, decision, refusal_reason,
+          policy_fingerprint, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(...params);
+      const inserted = this.selectResumeDecisionRow(decisionId);
+      if (inserted === undefined) throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.corruptRecord);
+      return { decision: this.decodeResumeDecisionRow(inserted), created: true };
+    });
+  }
+
+  readResumeDecision(decisionId: string): ProjectTaskResumeDecisionRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof decisionId !== 'string' || !PROJECT_TASK_ID.test(decisionId)) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      const row = this.selectResumeDecisionRow(decisionId);
+      return row === undefined ? undefined : this.decodeResumeDecisionRow(row);
+    });
+  }
+
+  readResumeDecisionByTask(taskId: string): ProjectTaskResumeDecisionRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      const row = this.selectResumeDecisionByTaskRow(taskId);
+      return row === undefined ? undefined : this.decodeResumeDecisionRow(row);
+    });
+  }
+
+  readResumeDecisionBySnapshot(snapshotId: string): ProjectTaskResumeDecisionRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof snapshotId !== 'string' || !PROJECT_TASK_ID.test(snapshotId)) {
+        throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      }
+      const row = this.selectResumeDecisionBySnapshotRow(snapshotId);
+      return row === undefined ? undefined : this.decodeResumeDecisionRow(row);
+    });
+  }
+
+  listResumeDecisions(limit: number): ProjectTaskResumeDecisionRecord[] {
+    return this.inTransaction(() => {
+      if (
+        typeof limit !== 'number'
+        || !Number.isSafeInteger(limit)
+        || limit < 1
+        || limit > PROJECT_TASK_RESUME_DECISION_MAX_LIST_LIMIT
+      ) throw new Error(PROJECT_TASK_RESUME_DECISION_ERRORS.invalidInput);
+      const rows = this.database.prepare(`
+        SELECT decision_id, task_id, snapshot_id, decision, refusal_reason,
+               policy_fingerprint, recorded_at
+        FROM project_task_resume_decisions
+        ORDER BY recorded_at ASC, decision_id ASC
+        LIMIT ?
+      `).all(limit) as unknown as ProjectTaskResumeDecisionRow[];
+      return rows.map((row) => this.decodeResumeDecisionRow(row));
     });
   }
 

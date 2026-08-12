@@ -38,6 +38,7 @@ export type ProjectTaskWorkflowError =
   | 'external_launch_outcome_unknown'
   | 'workflow_interrupted'
   | 'local_resume_available'
+  | 'resume_refused'
   | 'human_approval_required';
 
 /** Safe workflow receipt. Internal plans, paths, prompts, process output and commands are excluded. */

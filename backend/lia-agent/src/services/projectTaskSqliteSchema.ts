@@ -15,7 +15,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION = 10;
 export const PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION = 11;
 export const PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION = 12;
 export const PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION = 13;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 13;
+export const PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION = 14;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 14;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -107,6 +108,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
   }
@@ -1132,6 +1134,86 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       END
     `);
     meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION) {
+    // Layer 14: Durable Resume Decision V1. Purely additive: the resume
+    // decision table, its recorded index and its three triggers. ZERO rows are
+    // manufactured for existing data; a historical proposal_valid snapshot
+    // without a resume decision keeps its exact Layer 13 semantics and is
+    // NEVER silently upgraded into a resumable state.
+    // IF NOT EXISTS keeps migration idempotent so test rewind scripts that set
+    // schema_version back to 13 do not crash when the V14 table (created
+    // during the initial store construction) already exists.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_task_resume_decisions (
+        decision_id TEXT PRIMARY KEY CHECK (
+          length(decision_id) = 36
+          AND substr(decision_id, 9, 1) = '-'
+          AND substr(decision_id, 14, 1) = '-'
+          AND substr(decision_id, 19, 1) = '-'
+          AND substr(decision_id, 24, 1) = '-'
+          AND decision_id = lower(decision_id)
+          AND replace(decision_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (length(snapshot_id) = 36),
+        decision TEXT NOT NULL CHECK (decision IN ('approved','refused')),
+        refusal_reason TEXT CHECK (
+          (decision = 'refused'
+            AND refusal_reason IN (
+              'human_approval_required',
+              'blocked_actions',
+              'invalid_proposal_structure',
+              'proposal_sha256_mismatch',
+              'planning_failed',
+              'registry_unavailable'
+            ))
+          OR (decision = 'approved' AND refusal_reason IS NULL)
+        ),
+        policy_fingerprint TEXT NOT NULL CHECK (
+          length(policy_fingerprint) = 64
+          AND policy_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        recorded_at INTEGER NOT NULL CHECK (
+          recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_resume_decisions_recorded
+      ON project_task_resume_decisions(recorded_at ASC, decision_id ASC);
+
+      CREATE TRIGGER IF NOT EXISTS project_task_resume_decisions_validate_insert
+      BEFORE INSERT ON project_task_resume_decisions
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_validated_proposal_snapshots AS snapshot
+          JOIN project_tasks AS task ON task.task_id = snapshot.task_id
+          WHERE snapshot.snapshot_id = NEW.snapshot_id
+            AND snapshot.task_id = NEW.task_id
+            AND task.status NOT IN ('completed','failed')
+            AND task.status IN ('accepted','planning','hermes')
+            AND task.terminal_at IS NULL
+        ) THEN RAISE(ABORT, 'project_task_resume_decision_incompatible') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_resume_decisions_immutable_update
+      BEFORE UPDATE ON project_task_resume_decisions
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_resume_decision_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_resume_decisions_immutable_delete
+      BEFORE DELETE ON project_task_resume_decisions
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_resume_decision_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION;
   }
 }
 

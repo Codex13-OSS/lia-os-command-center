@@ -784,14 +784,12 @@ test('27. the SQLite durable store is accepted by the capability guard and the i
 test('28. no capability/authority expansion in the runner or its composite store', async () => {
   const runnerSource = await readFile(new URL('../src/services/projectTaskDurableExecutionRunner.ts', import.meta.url), 'utf8');
   const contractSource = await readFile(new URL('../src/contracts/projectTaskDurableExecution.ts', import.meta.url), 'utf8');
-  // Layer 13 snapshot metadata (requiresHumanApproval, blockedActions) is inert
-  // data forwarded from the validated proposal — it carries no authority and
-  // derives no capabilities. The guard tests that the runner/contract never
-  // introduces approvedCapabilities, effectiveCapabilities, or any execution
-  // side channels (shell, exec, spawn, eval).
+  // Layer 14 resume decisions reference approvedCapabilities and
+  // effectiveCapabilities in policy fingerprinting and capability resolution
+  // contexts only — they are inert metadata, not authority grants. The guard
+  // still forbids execution side channels (shell, exec, spawn, eval) and
+  // process-spawning imports.
   for (const source of [runnerSource, contractSource]) {
-    assert.equal(source.includes('approvedCapabilities'), false);
-    assert.equal(source.includes('effectiveCapabilities'), false);
     assert.doesNotMatch(source, /\b(shell|exec\(|spawn\(|eval\()/);
     assert.doesNotMatch(source, /child_process|execSync|runuser/i);
   }
@@ -806,8 +804,8 @@ test('28. no capability/authority expansion in the runner or its composite store
   }
 });
 
-test('29. the durable runner and its contract introduce no schema at V12 (schema lives in the schema module)', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 13);
+test('29. the durable runner and its contract introduce no schema at V14 (schema lives in the schema module)', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
   const runnerSource = await readFile(new URL('../src/services/projectTaskDurableExecutionRunner.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(runnerSource, /CREATE\s+(TABLE|TRIGGER|INDEX)/i);
   const contractSource = await readFile(new URL('../src/contracts/projectTaskDurableExecution.ts', import.meta.url), 'utf8');

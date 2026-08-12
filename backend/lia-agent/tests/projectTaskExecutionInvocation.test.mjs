@@ -389,7 +389,7 @@ test('V9 to V12 migration preserves the complete durable chain and manufactures 
     v9.exec('DROP TRIGGER project_task_validated_proposal_snapshots_validate_insert; DROP TRIGGER project_task_validated_proposal_snapshots_immutable_update; DROP TRIGGER project_task_validated_proposal_snapshots_immutable_delete; DROP INDEX project_task_validated_proposal_snapshots_recorded; DROP TABLE project_task_validated_proposal_snapshots; DROP TRIGGER project_task_execution_launch_results_validate_insert; DROP TRIGGER project_task_execution_launch_results_immutable_update; DROP TRIGGER project_task_execution_launch_results_immutable_delete; DROP INDEX project_task_execution_launch_results_recorded; DROP TABLE project_task_execution_launch_results; DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release; DROP TRIGGER project_task_execution_launch_attempts_validate_insert; DROP TRIGGER project_task_execution_launch_attempts_immutable_update; DROP TRIGGER project_task_execution_launch_attempts_immutable_delete; DROP INDEX project_task_execution_launch_attempts_crossed; DROP TABLE project_task_execution_launch_attempts; UPDATE project_task_meta SET schema_version = 9 WHERE singleton = 1');
     v9.close();
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 13);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
     assert.equal(migrated.listReservedTaskExecutionInvocations(10).length, 0);
     migrated.close();
     const check = new DatabaseSync(databasePath);

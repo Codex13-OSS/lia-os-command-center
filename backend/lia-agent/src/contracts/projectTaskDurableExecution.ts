@@ -6,6 +6,7 @@ import type { ProjectTaskExecutionInvocationStore } from './projectTaskExecution
 import type { ProjectTaskExecutionLaunchAttemptStore } from './projectTaskExecutionLaunchAttempt.js';
 import type { ProjectTaskExecutionLaunchResultStore } from './projectTaskExecutionLaunchResult.js';
 import type { ProjectTaskValidatedProposalSnapshotStore } from './projectTaskValidatedProposalSnapshot.js';
+import type { ProjectTaskResumeDecisionStore } from './projectTaskResumeDecision.js';
 
 /**
  * Narrow composite durable-execution capability assembled from the existing
@@ -24,7 +25,8 @@ export type ProjectTaskDurableExecutionStore = ProjectTaskStore
   & ProjectTaskExecutionInvocationStore
   & ProjectTaskExecutionLaunchAttemptStore
   & ProjectTaskExecutionLaunchResultStore
-  & ProjectTaskValidatedProposalSnapshotStore;
+  & ProjectTaskValidatedProposalSnapshotStore
+  & ProjectTaskResumeDecisionStore;
 
 export const PROJECT_TASK_DURABLE_EXECUTION_ERRORS = {
   unsupportedStore: 'project_task_durable_execution_store_unsupported',

@@ -117,8 +117,9 @@ export const SAFE_TASK_ERROR_MESSAGES = {
   workflow_interrupted: 'La tarea fue interrumpida por un reinicio del servicio y debe ejecutarse nuevamente.',
   external_launch_outcome_unknown: 'El lanzamiento externo quedó interrumpido y su resultado es desconocido; LÍA no lo relanza automáticamente.',
   local_resume_available: 'Existe una propuesta validada almacenada de forma duradera; la tarea permanece en estado resumible pendiente de reevaluación de LÍA.',
+  resume_refused: 'LÍA rechazó la continuación local después de reevaluar la política actual.',
 } as const satisfies Record<
-  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown' | 'local_resume_available',
+  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown' | 'local_resume_available' | 'resume_refused',
   string
 >;
 export type SafeTaskErrorCode = keyof typeof SAFE_TASK_ERROR_MESSAGES;
