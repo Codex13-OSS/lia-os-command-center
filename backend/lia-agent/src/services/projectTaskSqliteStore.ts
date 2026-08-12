@@ -52,6 +52,16 @@ import {
   PROJECT_GOAL_CONTINUATION_PLAN_REASON_CODES,
 } from '../contracts/projectGoalContinuationPlan.js';
 import type {
+  ApproveContinuationPlanInput,
+  ProjectGoalContinuationApprovalRecord,
+  ProjectGoalContinuationApprovalStore,
+} from '../contracts/projectGoalContinuationApproval.js';
+import {
+  CONTINUATION_APPROVAL_DEFAULT_TTL_MS,
+  CONTINUATION_APPROVAL_MAX_APPROVER_LENGTH,
+  PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS,
+} from '../contracts/projectGoalContinuationApproval.js';
+import type {
   ProjectContinuationMaterializationResult,
   ProjectContinuationRuntime,
 } from '../contracts/projectContinuationRuntime.js';
@@ -325,6 +335,19 @@ type ProjectGoalContinuationPlanRow = {
   cancelled_at: unknown;
 };
 
+type ProjectGoalContinuationApprovalRow = {
+  approval_id: unknown;
+  plan_id: unknown;
+  goal_id: unknown;
+  source_evaluation_id: unknown;
+  plan_fingerprint: unknown;
+  source_evidence_fingerprint: unknown;
+  approver: unknown;
+  created_at: unknown;
+  expires_at: unknown;
+  revoked_at: unknown;
+};
+
 type ProjectTaskLeaseRow = {
   task_id: unknown;
   lease_id: unknown;
@@ -556,7 +579,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore, ProjectTaskVerificationEvidenceStore, ProjectTaskCommitEvidenceStore, ProjectTaskCompletionEvidenceStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectGoalContinuationApprovalStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore, ProjectTaskVerificationEvidenceStore, ProjectTaskCommitEvidenceStore, ProjectTaskCompletionEvidenceStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -667,6 +690,9 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       ).all();
       this.database.prepare(
         'SELECT plan_id, created_task_id, consumed_at FROM project_goal_continuation_consumptions LIMIT 1',
+      ).all();
+      this.database.prepare(
+        'SELECT approval_id, plan_id, goal_id, source_evaluation_id, plan_fingerprint, source_evidence_fingerprint, approver, created_at, expires_at, revoked_at FROM project_goal_continuation_approvals LIMIT 1',
       ).all();
       this.database.prepare(`
         SELECT task_id, lease_id, lease_owner, fencing_token, acquired_at,
@@ -1804,6 +1830,50 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     };
   }
 
+  private selectContinuationApprovalRow(
+    planId: string,
+  ): ProjectGoalContinuationApprovalRow | undefined {
+    return this.database.prepare(`
+      SELECT approval_id, plan_id, goal_id, source_evaluation_id,
+             plan_fingerprint, source_evidence_fingerprint, approver,
+             created_at, expires_at, revoked_at
+      FROM project_goal_continuation_approvals WHERE plan_id = ?
+    `).get(planId) as unknown as ProjectGoalContinuationApprovalRow | undefined;
+  }
+
+  private decodeContinuationApprovalRow(
+    row: ProjectGoalContinuationApprovalRow,
+  ): ProjectGoalContinuationApprovalRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    if (typeof row.approval_id !== 'string' || !PROJECT_GOAL_ID.test(row.approval_id)) throw corrupt();
+    if (typeof row.plan_id !== 'string' || !PROJECT_GOAL_ID.test(row.plan_id)) throw corrupt();
+    if (typeof row.goal_id !== 'string' || !PROJECT_GOAL_ID.test(row.goal_id)) throw corrupt();
+    if (typeof row.source_evaluation_id !== 'string' || !PROJECT_GOAL_ID.test(row.source_evaluation_id)) throw corrupt();
+    if (typeof row.plan_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(row.plan_fingerprint)) throw corrupt();
+    if (typeof row.source_evidence_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(row.source_evidence_fingerprint)) throw corrupt();
+    if (
+      typeof row.approver !== 'string'
+      || row.approver.length < 1
+      || row.approver.length > CONTINUATION_APPROVAL_MAX_APPROVER_LENGTH
+      || row.approver !== row.approver.trim()
+    ) throw corrupt();
+    if (!isNonNegativeInteger(row.created_at)) throw corrupt();
+    if (row.expires_at !== null && (!isNonNegativeInteger(row.expires_at) || row.expires_at <= row.created_at)) throw corrupt();
+    if (row.revoked_at !== null && (!isNonNegativeInteger(row.revoked_at) || row.revoked_at < row.created_at)) throw corrupt();
+    return {
+      approvalId: row.approval_id,
+      planId: row.plan_id,
+      goalId: row.goal_id,
+      sourceEvaluationId: row.source_evaluation_id,
+      planFingerprint: row.plan_fingerprint,
+      sourceEvidenceFingerprint: row.source_evidence_fingerprint,
+      approver: row.approver,
+      createdAt: row.created_at,
+      ...(row.expires_at !== null ? { expiresAt: row.expires_at } : {}),
+      ...(row.revoked_at !== null ? { revokedAt: row.revoked_at } : {}),
+    };
+  }
+
   private prepareGoalEvaluation(input: EvaluateProjectGoalAttemptInput): ProjectGoalEvaluationRecord {
     if (
       !PROJECT_GOAL_ID.test(input.goalId)
@@ -2423,6 +2493,159 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       const cancelled = this.selectContinuationPlanRow(planId);
       if (cancelled === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
       return this.decodeContinuationPlanRow(cancelled);
+    });
+  }
+
+  approveContinuationPlan(
+    input: ApproveContinuationPlanInput,
+  ): ProjectGoalContinuationApprovalRecord {
+    return this.inTransaction(() => {
+      if (
+        !isRecord(input)
+        || !Object.keys(input).every((key) => ['planId', 'approver', 'expiresAt'].includes(key))
+        || typeof input.planId !== 'string'
+        || !PROJECT_GOAL_ID.test(input.planId)
+        || typeof input.approver !== 'string'
+        || input.approver.length < 1
+        || input.approver.length > CONTINUATION_APPROVAL_MAX_APPROVER_LENGTH
+        || input.approver !== input.approver.trim()
+        || (input.expiresAt !== undefined && !isNonNegativeInteger(input.expiresAt))
+      ) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.invalidInput);
+      }
+
+      const planRow = this.selectContinuationPlanRow(input.planId);
+      if (planRow === undefined) throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.planNotFound);
+      const plan = this.decodeContinuationPlanRow(planRow);
+      if (plan.status !== 'planned') {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.planNotApprovable);
+      }
+
+      const existingRow = this.selectContinuationApprovalRow(input.planId);
+      if (existingRow !== undefined) {
+        const existing = this.decodeContinuationApprovalRow(existingRow);
+        // Exact replay (same approver, same effective expiry) is idempotent;
+        // a contradictory re-approval (different approver or expiry) fails closed.
+        const effectiveExpiresAt = input.expiresAt
+          ?? existing.createdAt + CONTINUATION_APPROVAL_DEFAULT_TTL_MS;
+        if (existing.approver !== input.approver || existing.expiresAt !== effectiveExpiresAt) {
+          throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.contradictory);
+        }
+        return existing;
+      }
+
+      const approvalId = randomUUID();
+      const createdAt = Math.max(this.now(), plan.createdAt);
+      const expiresAt = input.expiresAt ?? createdAt + CONTINUATION_APPROVAL_DEFAULT_TTL_MS;
+      if (expiresAt <= createdAt) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.invalidInput);
+      }
+      this.database.prepare(`
+        INSERT INTO project_goal_continuation_approvals (
+          approval_id, plan_id, goal_id, source_evaluation_id, plan_fingerprint,
+          source_evidence_fingerprint, approver, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        approvalId,
+        plan.planId,
+        plan.goalId,
+        plan.sourceEvaluationId,
+        plan.fingerprint,
+        plan.sourceEvidenceFingerprint,
+        input.approver,
+        createdAt,
+        expiresAt,
+      );
+      const inserted = this.selectContinuationApprovalRow(plan.planId);
+      if (inserted === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeContinuationApprovalRow(inserted);
+    });
+  }
+
+  revokeContinuationApproval(planId: string): ProjectGoalContinuationApprovalRecord {
+    return this.inTransaction(() => {
+      if (typeof planId !== 'string' || !PROJECT_GOAL_ID.test(planId)) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.invalidInput);
+      }
+      const approvalRow = this.selectContinuationApprovalRow(planId);
+      if (approvalRow === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalNotFound);
+      }
+      const approval = this.decodeContinuationApprovalRow(approvalRow);
+      if (approval.revokedAt !== undefined) return approval;
+      const planRow = this.selectContinuationPlanRow(planId);
+      if (planRow === undefined) throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.planNotFound);
+      const plan = this.decodeContinuationPlanRow(planRow);
+      if (plan.status !== 'planned') {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.notRevocable);
+      }
+      const revokedAt = Math.max(this.now(), approval.createdAt);
+      const changed = this.database.prepare(`
+        UPDATE project_goal_continuation_approvals SET revoked_at = ?
+        WHERE plan_id = ? AND revoked_at IS NULL
+      `).run(revokedAt, planId);
+      if (Number(changed.changes) !== 1) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.notRevocable);
+      }
+      const updated = this.selectContinuationApprovalRow(planId);
+      if (updated === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeContinuationApprovalRow(updated);
+    });
+  }
+
+  readContinuationApproval(planId: string): ProjectGoalContinuationApprovalRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof planId !== 'string' || !PROJECT_GOAL_ID.test(planId)) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.invalidInput);
+      }
+      const row = this.selectContinuationApprovalRow(planId);
+      return row === undefined ? undefined : this.decodeContinuationApprovalRow(row);
+    });
+  }
+
+  assertContinuationApprovalValid(planId: string): ProjectGoalContinuationApprovalRecord {
+    return this.inTransaction(() => {
+      if (typeof planId !== 'string' || !PROJECT_GOAL_ID.test(planId)) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.invalidInput);
+      }
+      const approvalRow = this.selectContinuationApprovalRow(planId);
+      if (approvalRow === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalRequired);
+      }
+      const approval = this.decodeContinuationApprovalRow(approvalRow);
+      if (approval.revokedAt !== undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalRevoked);
+      }
+      if (approval.expiresAt !== undefined && this.now() >= approval.expiresAt) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalExpired);
+      }
+      const planRow = this.selectContinuationPlanRow(planId);
+      if (planRow === undefined) throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalInvalid);
+      const plan = this.decodeContinuationPlanRow(planRow);
+      if (
+        plan.status !== 'planned'
+        || approval.planFingerprint !== plan.fingerprint
+        || approval.goalId !== plan.goalId
+        || approval.sourceEvaluationId !== plan.sourceEvaluationId
+        || approval.sourceEvidenceFingerprint !== plan.sourceEvidenceFingerprint
+      ) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalInvalid);
+      }
+      const evaluationRow = this.selectEvaluationRow(plan.sourceEvaluationId);
+      if (evaluationRow === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalInvalid);
+      }
+      const evaluation = this.decodeEvaluationRow(evaluationRow);
+      if (evaluation.appliedAt === undefined || evaluation.decision !== 'retryable') {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalInvalid);
+      }
+      const goalRow = this.selectGoalRow(plan.goalId);
+      if (goalRow === undefined) throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalInvalid);
+      const goal = this.decodeGoalRow(goalRow);
+      if (goal.status !== 'active') {
+        throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalInvalid);
+      }
+      return approval;
     });
   }
 

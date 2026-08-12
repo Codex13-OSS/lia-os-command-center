@@ -310,7 +310,7 @@ test('recovery calls no claim/consume API and exposes no authority or capability
 });
 
 test('Recovery V2 remains conservative under schema V16 without execution or authority side channels', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
   const source = await readFile(new URL('../src/services/projectTaskSqliteStore.ts', import.meta.url), 'utf8');
   const start = source.indexOf('reconcileRestartSafeTasks()');
   const end = source.indexOf('  enqueueTaskDispatch(taskId:', start);

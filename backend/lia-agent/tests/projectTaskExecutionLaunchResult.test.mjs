@@ -722,7 +722,7 @@ test('27. V11 to V12 migration preserves all existing durable rows', async () =>
     v11.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
     // The preserved Launch Attempt is still readable and fully functional.
     assert.equal(
       migrated.readTaskExecutionLaunchAttempt(attempt.launchAttemptId).launchAttemptId,
@@ -804,7 +804,7 @@ test('29. the V9 -> V12 migration chain still reaches V12 and preserves every V9
     v9.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
     assert.equal(migrated.readTaskDispatchByTask(TASK_A).taskId, TASK_A);
     migrated.close();
 
@@ -1183,7 +1183,7 @@ test('58. Schema V12 only adds state/evidence', async () => {
   const databasePath = join(directory, 'tasks.sqlite');
   try {
     const store = new ProjectTaskSqliteStore({ databasePath });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
     assert.equal(store.readTaskExecutionLaunchResultByTask(TASK_A), undefined);
     const db = new DatabaseSync(databasePath);
     assert.equal(db.prepare('SELECT COUNT(*) AS total FROM project_task_execution_launch_results').get().total, 0);

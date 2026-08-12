@@ -356,7 +356,7 @@ test('Layer 14 resume decision: recovery V14 migration does not manufacture rows
     // Create a V13 store
     const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000 });
     // Schema version should be V14
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
     // Table should exist
     const db = new DatabaseSync(databasePath);
     const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_task_resume_decisions'").get();

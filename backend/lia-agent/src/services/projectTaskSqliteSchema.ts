@@ -19,7 +19,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION = 14;
 export const PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION = 15;
 export const PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION = 16;
 export const PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION = 17;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 17;
+export const PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION = 18;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 18;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -115,6 +116,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
   }
@@ -1816,6 +1818,96 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       END
     `);
     meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION) {
+    // Goal Continuation Execution Gating V1: Durable Human Approval V1.
+    // Purely additive: one new table (project_goal_continuation_approvals)
+    // with its insert-validation, identity-immutability, revoke-once and
+    // delete-immutability triggers. ZERO rows are manufactured for existing
+    // data. IF NOT EXISTS keeps migration idempotent so test rewind scripts
+    // that set schema_version back to 17 do not crash when the V18 table
+    // (created during initial store construction) already exists.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_goal_continuation_approvals (
+        approval_id TEXT PRIMARY KEY CHECK (
+          length(approval_id) = 36
+          AND substr(approval_id, 9, 1) = '-'
+          AND substr(approval_id, 14, 1) = '-'
+          AND substr(approval_id, 19, 1) = '-'
+          AND substr(approval_id, 24, 1) = '-'
+          AND approval_id = lower(approval_id)
+          AND replace(approval_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        plan_id TEXT NOT NULL UNIQUE CHECK (length(plan_id) = 36),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        source_evaluation_id TEXT NOT NULL CHECK (source_evaluation_id <> ''),
+        plan_fingerprint TEXT NOT NULL CHECK (
+          length(plan_fingerprint) = 64 AND plan_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        source_evidence_fingerprint TEXT NOT NULL CHECK (
+          length(source_evidence_fingerprint) = 64
+          AND source_evidence_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        approver TEXT NOT NULL CHECK (
+          length(approver) BETWEEN 1 AND 200 AND approver = trim(approver)
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        expires_at INTEGER CHECK (expires_at IS NULL OR expires_at > created_at),
+        revoked_at INTEGER CHECK (revoked_at IS NULL OR revoked_at >= created_at),
+        FOREIGN KEY (plan_id) REFERENCES project_goal_continuation_plans(plan_id),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (source_evaluation_id) REFERENCES project_goal_evaluations(evaluation_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_goal_continuation_approvals_plan
+      ON project_goal_continuation_approvals(plan_id, approval_id);
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_approvals_validate_insert
+      BEFORE INSERT ON project_goal_continuation_approvals
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_goal_continuation_plans AS plan
+          JOIN project_goal_evaluations AS evaluation
+            ON evaluation.evaluation_id = plan.source_evaluation_id
+          WHERE plan.plan_id = NEW.plan_id
+            AND plan.status = 'planned' AND plan.cancelled_at IS NULL
+            AND plan.goal_id = NEW.goal_id
+            AND plan.source_evaluation_id = NEW.source_evaluation_id
+            AND plan.fingerprint = NEW.plan_fingerprint
+            AND plan.source_evidence_fingerprint = NEW.source_evidence_fingerprint
+            AND evaluation.goal_id = NEW.goal_id
+            AND evaluation.applied_at IS NOT NULL
+            AND evaluation.decision = 'retryable'
+        ) THEN RAISE(ABORT, 'project_goal_continuation_approval_incompatible') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_approvals_identity_immutable
+      BEFORE UPDATE OF approval_id, plan_id, goal_id, source_evaluation_id,
+                       plan_fingerprint, source_evidence_fingerprint, approver, created_at
+      ON project_goal_continuation_approvals
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_approval_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_approvals_revoke_once
+      BEFORE UPDATE OF revoked_at ON project_goal_continuation_approvals
+      WHEN NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND NEW.revoked_at >= OLD.created_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_approval_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_approvals_immutable_delete
+      BEFORE DELETE ON project_goal_continuation_approvals
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_approval_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION;
   }
 }
 
