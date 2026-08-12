@@ -131,6 +131,19 @@ import {
   PROJECT_TASK_RESUME_REFUSAL_REASONS,
 } from '../contracts/projectTaskResumeDecision.js';
 import type {
+  CodexStartEvidenceRecord,
+  CodexResultEvidenceRecord,
+  RecordCodexStartInput,
+  RecordCodexStartResult,
+  RecordCodexResultInput,
+  RecordCodexResultResult,
+  ProjectTaskCodexEvidenceStore,
+} from '../contracts/projectTaskCodexEvidence.js';
+import {
+  CODEX_RESULT_OUTCOMES,
+  PROJECT_TASK_CODEX_EVIDENCE_ERRORS,
+} from '../contracts/projectTaskCodexEvidence.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -359,6 +372,29 @@ type ProjectTaskResumeDecisionRow = {
   recorded_at: unknown;
 };
 
+type CodexStartEvidenceRow = {
+  codex_start_id: unknown;
+  task_id: unknown;
+  execution_run_id: unknown;
+  invocation_id: unknown;
+  launch_attempt_id: unknown;
+  launch_result_id: unknown;
+  snapshot_id: unknown;
+  start_recorded_at: unknown;
+};
+
+type CodexResultEvidenceRow = {
+  codex_result_id: unknown;
+  codex_start_id: unknown;
+  execution_id: unknown;
+  outcome: unknown;
+  success: unknown;
+  error: unknown;
+  summary: unknown;
+  result_metadata_json: unknown;
+  result_recorded_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -416,7 +452,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -2946,6 +2982,79 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         resumeDecisionSnapshotIds.add(decision.snapshotId);
       }
 
+      // Layer 15 Codex evidence pre-pass: query and validate start and result
+      // evidence. EVERY start evidence row must resolve to a complete lineage
+      // chain. EVERY result evidence row must reference an existing start.
+      // ONE start per task, ONE result per start. ANY violation aborts the
+      // WHOLE recovery transaction atomically.
+      const startEvidenceRows = this.database.prepare(`
+        SELECT codex_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, start_recorded_at
+        FROM project_task_codex_start_evidence
+        ORDER BY task_id ASC
+      `).all() as unknown as CodexStartEvidenceRow[];
+      const resultEvidenceRows = this.database.prepare(`
+        SELECT codex_result_id, codex_start_id, execution_id, outcome, success,
+               error, summary, result_metadata_json, result_recorded_at
+        FROM project_task_codex_result_evidence
+        ORDER BY codex_start_id ASC
+      `).all() as unknown as CodexResultEvidenceRow[];
+      const codexStartByTask = new Map<string, CodexStartEvidenceRecord>();
+      const codexStartIds = new Set<string>();
+      const codexStartTaskIds = new Set<string>();
+      for (const row of startEvidenceRows) {
+        const start = this.decodeCodexStartEvidenceRow(row);
+        if (
+          !taskIds.has(start.taskId)
+          || codexStartByTask.has(start.taskId)
+          || codexStartIds.has(start.codexStartId)
+          || codexStartTaskIds.has(start.taskId)
+        ) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        // Validate lineage chain: the start must reference a task with status in ('hermes', 'codex')
+        // that has a launch attempt, a proposal_valid launch result, and a matching snapshot.
+        const startTask = rows.find((r) => r.task_id === start.taskId);
+        if (
+          startTask === undefined
+          || (startTask.status !== 'hermes' && startTask.status !== 'codex')
+          || startTask.terminal_at !== null
+        ) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        if (!launchAttemptByTask.has(start.taskId)) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        const startResult = launchResultByTask.get(start.taskId);
+        if (
+          startResult === undefined
+          || startResult.outcomeClass !== 'proposal_valid'
+          || startResult.launchResultId !== start.launchResultId
+        ) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        if (!snapshotByTask.has(start.taskId)) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        const startSnapshot = snapshotByTask.get(start.taskId)!;
+        if (startSnapshot.snapshotId !== start.snapshotId) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        codexStartByTask.set(start.taskId, start);
+        codexStartIds.add(start.codexStartId);
+        codexStartTaskIds.add(start.taskId);
+      }
+      const codexResultByStart = new Map<string, CodexResultEvidenceRecord>();
+      const codexResultIds = new Set<string>();
+      for (const row of resultEvidenceRows) {
+        const result = this.decodeCodexResultEvidenceRow(row);
+        const start = codexStartByTask.get(
+          // Result's start is identified by codex_start_id; find the task via start evidence
+          [...codexStartByTask.entries()].find(([, s]) => s.codexStartId === result.codexStartId)?.[0] ?? '',
+        );
+        if (
+          start === undefined
+          || !codexStartIds.has(result.codexStartId)
+          || codexResultByStart.has(result.codexStartId)
+          || codexResultIds.has(result.codexResultId)
+        ) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        codexResultByStart.set(result.codexStartId, result);
+        codexResultIds.add(result.codexResultId);
+      }
+
+      let codexStartNotRecordedTaskIds: string[] = [];
+      let codexResultNotRecordedTaskIds: string[] = [];
+      let codexSuccessTaskIds: Array<{ taskId: string; codexStartId: string }> = [];
+      let codexFailedTaskIds: string[] = [];
+
       let failedTaskIds: string[] = [];
       let ambiguousLaunchTaskIds: string[] = [];
       let knownOutcomeTaskIds: Array<{ taskId: string; outcomeClass: ProjectTaskExecutionLaunchResultOutcome }> = [];
@@ -3068,6 +3177,39 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           }
           continue;
         }
+        // Layer 15: status='codex' recovery.
+        // The Codex phase has been entered (status transition was durable).
+        // Determine whether start/result evidence exists and handle accordingly.
+        if (task.status === 'codex') {
+          const codexStart = codexStartByTask.get(task.taskId);
+          if (codexStart === undefined) {
+            // V14-era: status='codex' with no start evidence.
+            // Also: crash between 'codex' transition and start INSERT.
+            codexStartNotRecordedTaskIds = [...codexStartNotRecordedTaskIds, task.taskId];
+            continue;
+          }
+          const codexResult = codexResultByStart.get(codexStart.codexStartId);
+          if (codexResult === undefined) {
+            // Start evidence exists, no result evidence.
+            // Codex was initiated but outcome unknown.
+            codexResultNotRecordedTaskIds = [...codexResultNotRecordedTaskIds, task.taskId];
+            continue;
+          }
+          // Result evidence exists
+          if (codexResult.outcome === 'codex_success') {
+            // Codex completed successfully. For layer 15, preserve the task
+            // for potential verification continuation (section S).
+            // Don't terminalize — the result is known good.
+            codexSuccessTaskIds = [
+              ...codexSuccessTaskIds,
+              { taskId: task.taskId, codexStartId: codexStart.codexStartId },
+            ];
+            continue;
+          }
+          // codex_failed or codex_interrupted
+            codexFailedTaskIds = [...codexFailedTaskIds, task.taskId];
+          continue;
+        }
         const dispatch = dispatchByTask.get(task.taskId);
         const executionRun = executionRunByTask.get(task.taskId);
         if (
@@ -3150,7 +3292,47 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         }
         clearTrace.run(taskId);
       }
-      // Case 4/11: normalize preserved resumable tasks. The task stays
+      // Layer 15: terminalize codex-start-not-recorded tasks as workflow_interrupted.
+      // This includes V14-era codex tasks with no start evidence and tasks crashed
+      // between the 'codex' transition and the start INSERT.
+      const codexStartNotRecorded: SafeTaskError = {
+        code: 'workflow_interrupted',
+        message: SAFE_TASK_ERROR_MESSAGES.workflow_interrupted,
+      };
+      for (const taskId of codexStartNotRecordedTaskIds) {
+        const result = fail.run(JSON.stringify(codexStartNotRecorded), now, now, taskId);
+        if (Number(result.changes) !== 1) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        clearTrace.run(taskId);
+      }
+      // Layer 15: terminalize codex-result-not-recorded tasks.
+      const codexResultNotRecorded: SafeTaskError = {
+        code: 'codex_result_not_recorded',
+        message: 'Codex inició su ejecución pero LÍA no pudo registrar su resultado de forma duradera.',
+        stage: 'codex',
+      };
+      for (const taskId of codexResultNotRecordedTaskIds) {
+        const result = fail.run(JSON.stringify(codexResultNotRecorded), now, now, taskId);
+        if (Number(result.changes) !== 1) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        clearTrace.run(taskId);
+      }
+      // Layer 15: terminalize codex-failed tasks.
+      const codexFailed: SafeTaskError = {
+        code: 'codex_failed',
+        message: 'Codex no pudo completar la ejecución.',
+        stage: 'codex',
+      };
+      for (const taskId of codexFailedTaskIds) {
+        const result = fail.run(JSON.stringify(codexFailed), now, now, taskId);
+        if (Number(result.changes) !== 1) {
+          throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+        }
+        clearTrace.run(taskId);
+      }
+      // Layer 15: codex success tasks are preserved (not terminalized).
       // non-terminal (no terminal_at, no error); status is normalized to
       // 'hermes' and the active trace to ['planning'] (the stage BEFORE
       // the current active status; the decode invariant requires completed
@@ -3178,7 +3360,10 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         preservedRecoverable,
         failedInterrupted:
           failedTaskIds.length + ambiguousLaunchTaskIds.length
-          + knownOutcomeTaskIds.length + refusedResumeTaskIds.length,
+          + knownOutcomeTaskIds.length + refusedResumeTaskIds.length
+          + codexStartNotRecordedTaskIds.length
+          + codexResultNotRecordedTaskIds.length
+          + codexFailedTaskIds.length,
         terminalUnchanged,
         resumableAvailable: resumableTaskIds.length,
       };
@@ -4352,6 +4537,74 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     };
   }
 
+  // --- Codex evidence decode helpers ---
+
+  private decodeCodexStartEvidenceRow(row: CodexStartEvidenceRow): CodexStartEvidenceRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+    if (typeof row.codex_start_id !== 'string' || !PROJECT_TASK_ID.test(row.codex_start_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.invocation_id !== 'string' || !PROJECT_TASK_ID.test(row.invocation_id)) throw corrupt();
+    if (typeof row.launch_attempt_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_attempt_id)) throw corrupt();
+    if (typeof row.launch_result_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_result_id)) throw corrupt();
+    if (typeof row.snapshot_id !== 'string' || !PROJECT_TASK_ID.test(row.snapshot_id)) throw corrupt();
+    if (
+      !isNonNegativeInteger(row.start_recorded_at)
+      || !Number.isSafeInteger(row.start_recorded_at)
+      || row.start_recorded_at > 9007199254740991
+    ) throw corrupt();
+    return {
+      codexStartId: row.codex_start_id,
+      taskId: row.task_id,
+      executionRunId: row.execution_run_id,
+      invocationId: row.invocation_id,
+      launchAttemptId: row.launch_attempt_id,
+      launchResultId: row.launch_result_id,
+      snapshotId: row.snapshot_id,
+      startRecordedAt: row.start_recorded_at,
+    };
+  }
+
+  private decodeCodexResultEvidenceRow(row: CodexResultEvidenceRow): CodexResultEvidenceRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+    if (typeof row.codex_result_id !== 'string' || !PROJECT_TASK_ID.test(row.codex_result_id)) throw corrupt();
+    if (typeof row.codex_start_id !== 'string' || !PROJECT_TASK_ID.test(row.codex_start_id)) throw corrupt();
+    if (typeof row.execution_id !== 'string' || row.execution_id.length < 1 || row.execution_id.length > 36) throw corrupt();
+    if (typeof row.outcome !== 'string' || !CODEX_RESULT_OUTCOMES.includes(row.outcome as typeof CODEX_RESULT_OUTCOMES[number])) throw corrupt();
+    if (typeof row.success !== 'number' || !Number.isInteger(row.success) || (row.success !== 0 && row.success !== 1)) throw corrupt();
+    if (row.outcome === 'codex_success' && row.error !== null) throw corrupt();
+    if (row.outcome === 'codex_failed') {
+      if (typeof row.error !== 'string' || ![
+        'codex_execution_failed', 'timeout', 'worktree_create_failed',
+        'worktree_cleanup_failed', 'prompt_too_large',
+        'missing_repository_read', 'missing_isolated_worktree_write',
+        'invalid_generated_path',
+      ].includes(row.error)) throw corrupt();
+    }
+    if (row.outcome === 'codex_interrupted' && row.error !== null) throw corrupt();
+    if (typeof row.summary !== 'string' || row.summary.length < 1 || row.summary.length > 500 || row.summary !== row.summary.trim()) throw corrupt();
+    if (typeof row.result_metadata_json !== 'string') throw corrupt();
+    let parsed: unknown;
+    try { parsed = JSON.parse(row.result_metadata_json); } catch { throw corrupt(); }
+    if (!isRecord(parsed)) throw corrupt();
+    if (
+      !isNonNegativeInteger(row.result_recorded_at)
+      || !Number.isSafeInteger(row.result_recorded_at)
+      || row.result_recorded_at > 9007199254740991
+    ) throw corrupt();
+    return {
+      codexResultId: row.codex_result_id,
+      codexStartId: row.codex_start_id,
+      executionId: row.execution_id,
+      outcome: row.outcome as CodexResultEvidenceRecord['outcome'],
+      success: row.success as 0 | 1,
+      error: row.error as string | null,
+      summary: row.summary,
+      resultMetadataJson: row.result_metadata_json,
+      resultRecordedAt: row.result_recorded_at,
+    };
+  }
+
   // --- Resume Decision Store API ---
 
   recordResumeDecision(input: RecordResumeDecisionInput): RecordResumeDecisionResult {
@@ -4491,6 +4744,191 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         LIMIT ?
       `).all(limit) as unknown as ProjectTaskResumeDecisionRow[];
       return rows.map((row) => this.decodeResumeDecisionRow(row));
+    });
+  }
+
+  // --- Codex Evidence Store API ---
+
+  recordCodexStartEvidence(input: RecordCodexStartInput): RecordCodexStartResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      const { taskId, executionRunId, invocationId, launchAttemptId, launchResultId, snapshotId } = input;
+      if (Object.keys(input).length !== 6) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      if (![taskId, executionRunId, invocationId, launchAttemptId, launchResultId, snapshotId].every(
+        (id) => typeof id === 'string' && PROJECT_TASK_ID.test(id),
+      )) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+
+      // Check existing start evidence for this task
+      const existingRow = this.database.prepare(`
+        SELECT codex_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, start_recorded_at
+        FROM project_task_codex_start_evidence
+        WHERE task_id = ?
+      `).get(taskId) as unknown as CodexStartEvidenceRow | undefined;
+
+      if (existingRow !== undefined) {
+        const existing = this.decodeCodexStartEvidenceRow(existingRow);
+        // Idempotency check: exact same lineage
+        if (
+          existing.executionRunId === executionRunId
+          && existing.invocationId === invocationId
+          && existing.launchAttemptId === launchAttemptId
+          && existing.launchResultId === launchResultId
+          && existing.snapshotId === snapshotId
+        ) {
+          return { codexStart: existing, created: false };
+        }
+        // Contradiction: same taskId, different lineage
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.contradictory);
+      }
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > 9007199254740991) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const codexStartId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_codex_start_evidence
+          (codex_start_id, task_id, execution_run_id, invocation_id,
+           launch_attempt_id, launch_result_id, snapshot_id, start_recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(codexStartId, taskId, executionRunId, invocationId,
+        launchAttemptId, launchResultId, snapshotId, now);
+
+      const inserted = this.database.prepare(`
+        SELECT codex_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, start_recorded_at
+        FROM project_task_codex_start_evidence
+        WHERE codex_start_id = ?
+      `).get(codexStartId) as unknown as CodexStartEvidenceRow | undefined;
+
+      if (inserted === undefined) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      return { codexStart: this.decodeCodexStartEvidenceRow(inserted), created: true };
+    });
+  }
+
+  readCodexStartEvidence(codexStartId: string): CodexStartEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof codexStartId !== 'string' || !PROJECT_TASK_ID.test(codexStartId)) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT codex_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, start_recorded_at
+        FROM project_task_codex_start_evidence
+        WHERE codex_start_id = ?
+      `).get(codexStartId) as unknown as CodexStartEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeCodexStartEvidenceRow(row);
+    });
+  }
+
+  readCodexStartEvidenceByTask(taskId: string): CodexStartEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT codex_start_id, task_id, execution_run_id, invocation_id,
+               launch_attempt_id, launch_result_id, snapshot_id, start_recorded_at
+        FROM project_task_codex_start_evidence
+        WHERE task_id = ?
+      `).get(taskId) as unknown as CodexStartEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeCodexStartEvidenceRow(row);
+    });
+  }
+
+  recordCodexResultEvidence(input: RecordCodexResultInput): RecordCodexResultResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      const { codexStartId, executionId, outcome, success, error, summary, resultMetadataJson } = input;
+      if (Object.keys(input).length !== 7) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof codexStartId !== 'string' || !PROJECT_TASK_ID.test(codexStartId)) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (typeof executionId !== 'string' || executionId.length < 1 || executionId.length > 36) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (typeof outcome !== 'string' || !CODEX_RESULT_OUTCOMES.includes(outcome as typeof CODEX_RESULT_OUTCOMES[number])) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (typeof success !== 'number' || !Number.isInteger(success) || (success !== 0 && success !== 1)) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (outcome === 'codex_success' && error !== null) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      if (outcome === 'codex_failed') {
+        if (typeof error !== 'string' || ![
+          'codex_execution_failed', 'timeout', 'worktree_create_failed',
+          'worktree_cleanup_failed', 'prompt_too_large',
+          'missing_repository_read', 'missing_isolated_worktree_write',
+          'invalid_generated_path',
+        ].includes(error)) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (outcome === 'codex_interrupted' && error !== null) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      if (typeof summary !== 'string' || summary.length < 1 || summary.length > 500 || summary !== summary.trim()) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (typeof resultMetadataJson !== 'string') throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+
+      // Check existing result evidence for this start
+      const existingRow = this.database.prepare(`
+        SELECT codex_result_id, codex_start_id, execution_id, outcome, success,
+               error, summary, result_metadata_json, result_recorded_at
+        FROM project_task_codex_result_evidence
+        WHERE codex_start_id = ?
+      `).get(codexStartId) as unknown as CodexResultEvidenceRow | undefined;
+
+      if (existingRow !== undefined) {
+        const existing = this.decodeCodexResultEvidenceRow(existingRow);
+        // Idempotency check: same outcome
+        if (
+          existing.outcome === outcome
+          && existing.success === success
+          && existing.error === error
+          && existing.summary === summary
+        ) {
+          return { codexResult: existing, created: false };
+        }
+        // Contradiction: same startId, different outcome
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.resultContradictory);
+      }
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > 9007199254740991) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const codexResultId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_codex_result_evidence
+          (codex_result_id, codex_start_id, execution_id, outcome, success,
+           error, summary, result_metadata_json, result_recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(codexResultId, codexStartId, executionId, outcome, success,
+        error, summary, resultMetadataJson, now);
+
+      const inserted = this.database.prepare(`
+        SELECT codex_result_id, codex_start_id, execution_id, outcome, success,
+               error, summary, result_metadata_json, result_recorded_at
+        FROM project_task_codex_result_evidence
+        WHERE codex_result_id = ?
+      `).get(codexResultId) as unknown as CodexResultEvidenceRow | undefined;
+
+      if (inserted === undefined) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      return { codexResult: this.decodeCodexResultEvidenceRow(inserted), created: true };
+    });
+  }
+
+  readCodexResultEvidence(codexStartId: string): CodexResultEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof codexStartId !== 'string' || !PROJECT_TASK_ID.test(codexStartId)) {
+        throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT codex_result_id, codex_start_id, execution_id, outcome, success,
+               error, summary, result_metadata_json, result_recorded_at
+        FROM project_task_codex_result_evidence
+        WHERE codex_start_id = ?
+      `).get(codexStartId) as unknown as CodexResultEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeCodexResultEvidenceRow(row);
     });
   }
 

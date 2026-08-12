@@ -804,8 +804,8 @@ test('28. no capability/authority expansion in the runner or its composite store
   }
 });
 
-test('29. the durable runner and its contract introduce no schema at V14 (schema lives in the schema module)', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
+test('29. the durable runner and its contract introduce no schema at V15 (schema lives in the schema module)', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
   const runnerSource = await readFile(new URL('../src/services/projectTaskDurableExecutionRunner.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(runnerSource, /CREATE\s+(TABLE|TRIGGER|INDEX)/i);
   const contractSource = await readFile(new URL('../src/contracts/projectTaskDurableExecution.ts', import.meta.url), 'utf8');

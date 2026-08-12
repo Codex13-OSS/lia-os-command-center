@@ -118,8 +118,11 @@ export const SAFE_TASK_ERROR_MESSAGES = {
   external_launch_outcome_unknown: 'El lanzamiento externo quedó interrumpido y su resultado es desconocido; LÍA no lo relanza automáticamente.',
   local_resume_available: 'Existe una propuesta validada almacenada de forma duradera; la tarea permanece en estado resumible pendiente de reevaluación de LÍA.',
   resume_refused: 'LÍA rechazó la continuación local después de reevaluar la política actual.',
+  codex_start_not_recorded: 'LÍA no pudo registrar el inicio de la ejecución de Codex de forma duradera.',
+  codex_result_not_recorded: 'Codex inició su ejecución pero LÍA no pudo registrar su resultado de forma duradera.',
+  codex_failed: 'Codex no pudo completar la ejecución.',
 } as const satisfies Record<
-  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown' | 'local_resume_available' | 'resume_refused',
+  ProjectTaskWorkflowError | 'workflow_failed' | 'workflow_interrupted' | 'external_launch_outcome_unknown' | 'local_resume_available' | 'resume_refused' | 'codex_start_not_recorded' | 'codex_result_not_recorded' | 'codex_failed',
   string
 >;
 export type SafeTaskErrorCode = keyof typeof SAFE_TASK_ERROR_MESSAGES;

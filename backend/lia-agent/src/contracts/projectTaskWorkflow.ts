@@ -39,7 +39,9 @@ export type ProjectTaskWorkflowError =
   | 'workflow_interrupted'
   | 'local_resume_available'
   | 'resume_refused'
-  | 'human_approval_required';
+  | 'human_approval_required'
+  | 'codex_start_not_recorded'
+  | 'codex_result_not_recorded';
 
 /** Safe workflow receipt. Internal plans, paths, prompts, process output and commands are excluded. */
 export type ProjectTaskWorkflowResult =

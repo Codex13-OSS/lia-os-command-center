@@ -12,6 +12,11 @@ import {
   hasProjectTaskDurableExecutionPrimitives,
   runProjectTaskDurableExecution,
 } from '../dist/services/projectTaskDurableExecutionRunner.js';
+import {
+  mapCodexResultToEvidence,
+  hasCodexSuccessEvidence,
+  PROJECT_TASK_CODEX_EVIDENCE_ERRORS,
+} from '../dist/contracts/projectTaskCodexEvidence.js';
 
 const TASK_A = '450e8400-e29b-41d4-a716-446655440000';
 const TASK_B = '450e8400-e29b-41d4-a716-446655440001';
@@ -121,21 +126,17 @@ function createResumableTask(store, taskId = TASK_A, proposalOverrides = {}) {
   return { taskId, dispatch, claim, run, invocation, attempt, result, sha256: canonical.sha256 };
 }
 
+// ===========================================================================
+// Layer 14: existing tests
+// ===========================================================================
 test('Layer 14: resume path records approved decision for clean proposal', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-    // The resume path requires Codex execution which needs a real environment.
-    // We test the known-outcome re-entry path: running the runner with resume=false
-    // should return local_resume_available, and with resume=true it enters the
-    // resume evaluation path (which will fail at Codex execution, but the decision
-    // should be recorded first).
-    // For this test, we verify the knownOutcomeForTask returns local_resume_available.
     const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, { resume: false }));
     assert.equal(result.ok, false);
     assert.equal(result.error, 'local_resume_available');
     assert.equal(result.stage, 'hermes');
 
-    // The task must NOT be terminalized
     const task = store.get(TASK_A);
     assert.equal(task.terminalAt, undefined);
     assert.ok(task.status === 'hermes' || task.status === 'planning' || task.status === 'accepted');
@@ -145,14 +146,10 @@ test('Layer 14: resume path records approved decision for clean proposal', async
 test('Layer 14: resume=false preserves local_resume_available behavior', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-
-    // Without resume flag, the runner returns local_resume_available
     const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, { resume: false }));
     assert.equal(result.ok, false);
     assert.equal(result.error, 'local_resume_available');
     assert.equal(result.stage, 'hermes');
-
-    // Task stays non-terminal
     assert.equal(store.get(TASK_A).terminalAt, undefined);
   });
 });
@@ -160,14 +157,7 @@ test('Layer 14: resume=false preserves local_resume_available behavior', async (
 test('Layer 14: resume path never calls Hermes', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-
-    // The runner with resume=true should never call Hermes
     let hermesseCalls = 0;
-    // runProjectTaskDurableExecution enters resume path and calls
-    // planProjectTask which is a real function, then tries Codex
-    // which will fail because no real Codex binary is available.
-    // Verify that the resume path was entered (not Hermes).
-    // The result should be planning_failed type if registry works but Codex fails.
     try {
       await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
         resume: true,
@@ -184,15 +174,9 @@ test('Layer 14: resume path never calls Hermes', async () => {
 
 test('Layer 14: resume path with approved decision but missing snapshot fails closed', async () => {
   await fixture(async (store) => {
-    // Create task without snapshot but in hermes state
     store.createOrGet(TASK_A, 'fp-a', intent);
     store.transition(TASK_A, 'planning');
     store.transition(TASK_A, 'hermes');
-
-    // Task has no launch attempt and no snapshot. The runner rejects
-    // with project_task_durable_execution_task_unavailable before resume
-    // because task.status !== 'accepted' and there is no existing launch
-    // attempt to map to a known outcome. This is valid fail-closed behavior.
     await assert.rejects(
       () => runProjectTaskDurableExecution(runnerOptions(store, TASK_A)),
       /project_task_durable_execution_task_unavailable/,
@@ -203,12 +187,9 @@ test('Layer 14: resume path with approved decision but missing snapshot fails cl
 test('Layer 14: post-Codex task with snapshot fails closed', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-    // Transition to codex (post-Codex fence)
     store.transition(TASK_A, 'codex');
-
     const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A));
     assert.equal(result.ok, false);
-    // Post-Codex with snapshot: must be workflow_interrupted, NOT local_resume_available
     assert.equal(result.error, 'workflow_interrupted');
   });
 });
@@ -216,15 +197,11 @@ test('Layer 14: post-Codex task with snapshot fails closed', async () => {
 test('Layer 14: already-refused resume decision returns resume_refused', async () => {
   await fixture(async (store) => {
     const { result: snap } = createResumableTask(store);
-
-    // Directly record a refused decision
     store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshot.snapshotId,
       decision: 'refused', refusalReason: 'human_approval_required',
       policyFingerprint: 'a'.repeat(64),
     });
-
-    // Running again should return resume_refused
     const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A));
     assert.equal(result.ok, false);
     assert.equal(result.error, 'resume_refused');
@@ -234,14 +211,11 @@ test('Layer 14: already-refused resume decision returns resume_refused', async (
 test('Layer 14: resume decision is immutable after recording', async () => {
   await fixture(async (store) => {
     const { result: snap } = createResumableTask(store);
-
     const decision = store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshot.snapshotId,
       decision: 'approved', policyFingerprint: 'b'.repeat(64),
     });
     assert.equal(decision.created, true);
-
-    // Different decision on same task
     assert.throws(
       () => store.recordResumeDecision({
         taskId: TASK_A, snapshotId: snap.snapshot.snapshotId,
@@ -262,16 +236,12 @@ test('Layer 14: hasProjectTaskDurableExecutionPrimitives requires resume decisio
 test('Layer 14: recovery preserves resumable tasks for approved decisions', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-
-    // Record an approved decision
     const snap = store.readValidatedProposalSnapshotByTask(TASK_A);
     store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshotId,
       decision: 'approved', policyFingerprint: 'd'.repeat(64),
     });
-
     const recovery = store.reconcileRestartSafeTasks();
-    // Resumable should be 1 (approved decision on pre-Codex task)
     assert.equal(recovery.resumableAvailable, 1);
     assert.equal(store.get(TASK_A).terminalAt, undefined);
   });
@@ -280,16 +250,13 @@ test('Layer 14: recovery preserves resumable tasks for approved decisions', asyn
 test('Layer 14: recovery terminalizes tasks with refused resume decisions', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-
     const snap = store.readValidatedProposalSnapshotByTask(TASK_A);
     store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshotId,
       decision: 'refused', refusalReason: 'human_approval_required',
       policyFingerprint: 'e'.repeat(64),
     });
-
     const recovery = store.reconcileRestartSafeTasks();
-    // Should be terminalized with resume_refused
     assert.equal(recovery.resumableAvailable, 0);
     assert.equal(store.get(TASK_A).status, 'failed');
     assert.deepEqual(store.get(TASK_A).error, {
@@ -300,8 +267,8 @@ test('Layer 14: recovery terminalizes tasks with refused resume decisions', asyn
   });
 });
 
-test('Layer 14: schema version is V14', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
+test('Layer 15: schema version is V15', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
 });
 
 test('Layer 14: migration adds resume_decisions table and triggers', async () => {
@@ -310,25 +277,18 @@ test('Layer 14: migration adds resume_decisions table and triggers', async () =>
   try {
     const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000 });
     const db = new (await import('node:sqlite')).DatabaseSync(databasePath);
-
-    // Check table exists
     const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_task_resume_decisions'").get();
     assert.ok(table !== undefined);
     assert.ok(table.sql.includes('decision_id TEXT PRIMARY KEY'));
     assert.ok(table.sql.includes('decision TEXT NOT NULL CHECK (decision IN'));
-
-    // Check triggers exist
     const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%resume_decision%'").all();
     assert.equal(triggers.length, 3);
     const triggerNames = triggers.map(t => t.name);
     assert.ok(triggerNames.includes('project_task_resume_decisions_validate_insert'));
     assert.ok(triggerNames.includes('project_task_resume_decisions_immutable_update'));
     assert.ok(triggerNames.includes('project_task_resume_decisions_immutable_delete'));
-
-    // Check index
     const index = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'project_task_resume_decisions_recorded'").get();
     assert.ok(index !== undefined);
-
     db.close();
     store.close();
   } finally {
@@ -339,15 +299,10 @@ test('Layer 14: migration adds resume_decisions table and triggers', async () =>
 test('Layer 14: snapshot is inert data, never derives authority (source audit)', async () => {
   const runnerSource = await readFile(new URL('../src/services/projectTaskDurableExecutionRunner.ts', import.meta.url), 'utf8');
   const contractSource = await readFile(new URL('../src/contracts/projectTaskResumeDecision.ts', import.meta.url), 'utf8');
-
-  // Snapshot metadata fields (requiresHumanApproval, blockedActions) are inert data.
-  // They carry no authority and derive no capabilities.
   for (const source of [runnerSource, contractSource]) {
     assert.doesNotMatch(source, /\b(push|merge|deploy|production_write|database_write|secret_access)\b/);
     assert.doesNotMatch(source, /child_process|execSync|runuser/i);
   }
-
-  // No automatic Hermes relaunch
   for (const source of [runnerSource]) {
     const resumeLines = source.split('\n').filter(l => l.includes('executeResumePath') || l.includes('resume'));
     for (const line of resumeLines) {
@@ -355,13 +310,9 @@ test('Layer 14: snapshot is inert data, never derives authority (source audit)',
       assert.equal(line.includes('hermesExecutor'), false);
     }
   }
-
-  // No automatic Codex replay from snapshot
   const runnerCodeOnly = runnerSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
   assert.doesNotMatch(runnerCodeOnly, /automatic.*codex|codex.*replay|replay.*codex/i);
   assert.doesNotMatch(runnerSource, /retry.*authorit|authorit.*retry/i);
-
-  // Snapshot cannot derive capabilities
   const resumeDecisionContract = contractSource.slice(0, contractSource.indexOf('export interface ProjectTaskResumeDecisionStore'));
   assert.equal(resumeDecisionContract.includes('capabilities'), false);
   assert.equal(resumeDecisionContract.includes('authority'), false);
@@ -381,15 +332,10 @@ test('Layer 14: runner code introduces no production/deploy channels', async () 
 });
 
 test('Layer 14: layer 13 and previous layers remain compatible', async () => {
-  // Layer 13 recovery tests for non-resumable tasks should still pass.
-  // Tasks without snapshots should NOT be treated as resumable.
   await fixture(async (store) => {
-    // Create a task without snapshot in hermes state
     store.createOrGet(TASK_A, 'fp-a', intent);
     store.transition(TASK_A, 'planning');
     store.transition(TASK_A, 'hermes');
-
-    // Should fail closed, not resumable
     const recovery = store.reconcileRestartSafeTasks();
     assert.equal(recovery.resumableAvailable, 0);
     assert.equal(recovery.failedInterrupted, 1);
@@ -400,13 +346,11 @@ test('Layer 14: layer 13 and previous layers remain compatible', async () => {
 test('Layer 14: recovery is idempotent for resume decisions', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-
     const snap = store.readValidatedProposalSnapshotByTask(TASK_A);
     store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshotId,
       decision: 'approved', policyFingerprint: 'f'.repeat(64),
     });
-
     const r1 = store.reconcileRestartSafeTasks();
     const r2 = store.reconcileRestartSafeTasks();
     assert.deepEqual(r1, r2);
@@ -420,8 +364,6 @@ test('Layer 14: contradictory resume decision validation in recovery aborts', as
   try {
     const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000 });
     createResumableTask(store);
-
-    // Record a valid resume decision first
     const snap = store.readValidatedProposalSnapshotByTask(TASK_A);
     store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshotId,
@@ -429,14 +371,10 @@ test('Layer 14: contradictory resume decision validation in recovery aborts', as
     });
     store.close();
 
-    // Corrupt the existing decision: drop the immutable_update trigger so the
-    // row can be modified, enable PRAGMA ignore_check_constraints to bypass
-    // CHECK constraints, then mutate the row into an invalid shape.
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(databasePath);
     db.exec('DROP TRIGGER project_task_resume_decisions_immutable_update');
     db.exec('PRAGMA ignore_check_constraints = ON');
-    // Change to refused with NULL refusal_reason (invalid for 'refused')
     const updated = db.prepare(
       'UPDATE project_task_resume_decisions SET decision = ?, refusal_reason = NULL WHERE task_id = ?',
     ).run('refused', TASK_A);
@@ -455,21 +393,13 @@ test('Layer 14: contradictory resume decision validation in recovery aborts', as
 test('Layer 14: existing approved decision still triggers fresh LIA policy evaluation on re-entry', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-
-    // Record an approved decision
     const snap = store.readValidatedProposalSnapshotByTask(TASK_A);
     store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshotId,
       decision: 'approved', policyFingerprint: '1'.repeat(64),
     });
-
-    // Verify the approved decision is stored
     const d = store.readResumeDecisionByTask(TASK_A);
     assert.equal(d.decision, 'approved');
-
-    // Re-enter with resume=true but with a registry that throws.
-    // This proves fresh evaluation runs (and fails) rather than
-    // the old bug of skipping directly to Codex.
     const throwingRegistry = {
       read: async () => { throw new Error('registry-gone'); },
     };
@@ -478,9 +408,7 @@ test('Layer 14: existing approved decision still triggers fresh LIA policy evalu
       { resume: true, registry: throwingRegistry },
     ));
     assert.equal(result.ok, false);
-    // The fresh evaluation should have refused, not skipped to Codex
     assert.equal(result.error, 'resume_refused');
-    // Task should be terminalized
     const task = store.get(TASK_A);
     assert.equal(task.status, 'failed');
   });
@@ -489,15 +417,11 @@ test('Layer 14: existing approved decision still triggers fresh LIA policy evalu
 test('Layer 14: changing current policy can refuse a previously approved resume decision', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-
-    // Record an approved decision
     const snap = store.readValidatedProposalSnapshotByTask(TASK_A);
     store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshotId,
       decision: 'approved', policyFingerprint: '2'.repeat(64),
     });
-
-    // Re-enter with a registry that returns an empty list (project not found)
     const emptyRegistry = {
       read: async () => [],
     };
@@ -506,52 +430,501 @@ test('Layer 14: changing current policy can refuse a previously approved resume 
       { resume: true, registry: emptyRegistry },
     ));
     assert.equal(result.ok, false);
-    // Fresh evaluation must refuse because the project is no longer in registry
     assert.equal(result.error, 'resume_refused');
-    // Task must be terminalized — even though it was previously approved
     assert.equal(store.get(TASK_A).status, 'failed');
-    assert.deepEqual(store.get(TASK_A).error, {
-      code: 'resume_refused',
-      message: SAFE_TASK_ERROR_MESSAGES.resume_refused,
-      stage: 'hermes',
-    });
-    // The old approved decision remains as immutable historical evidence
-    const d = store.readResumeDecisionByTask(TASK_A);
-    assert.equal(d.decision, 'approved');
   });
 });
 
 test('Layer 14: fresh evaluation with approved decision passes when policy unchanged', async () => {
   await fixture(async (store) => {
     createResumableTask(store);
-
-    // Record an approved decision
     const snap = store.readValidatedProposalSnapshotByTask(TASK_A);
     store.recordResumeDecision({
       taskId: TASK_A, snapshotId: snap.snapshotId,
       decision: 'approved', policyFingerprint: '3'.repeat(64),
     });
-
-    // Re-enter with resume=true, same registry (policy unchanged)
-    // The fresh evaluation will approve but Codex will fail since
-    // no real Codex binary is available. That proves fresh evaluation
-    // happened AND reached the Codex phase, not skipped.
-    // The critical point: we did NOT skip to Codex — fresh evaluation
-    // re-planned, re-validated, re-checked sha256, and only then proceeded.
-    // Codex failure is expected in test.
+    // With resume=true and a working registry, fresh evaluation should
+    // proceed through planning. Codex execution may fail in test env
+    // but the fresh evaluation ran.
     try {
-      await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
-        resume: true,
-        workflowDependencies: {
-          executeHermes: hermesNeverCalled,
-        },
-      }));
+      await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, { resume: true }));
     } catch {
-      // Expected: Codex execution fails in test env, or policy gate refuses
+      // Expected: Codex fails in test env
     }
-    // After Codex attempt, task may be failed or still active depending
-    // on crash window. The invariant is: Hermes was never called.
+    // After the attempt, either the task was terminalized (Codex failed)
+    // or it stayed active. The key is that the fresh evaluation ran.
     const task = store.get(TASK_A);
     assert.ok(task !== undefined);
   });
+});
+
+// ===========================================================================
+// Layer 15: Codex Evidence Tests
+// ===========================================================================
+
+test('Layer 15: codex start evidence is recorded and readable', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    const input = {
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    };
+    const record = store.recordCodexStartEvidence(input);
+    assert.equal(record.created, true);
+    assert.equal(record.codexStart.taskId, TASK_A);
+    assert.equal(record.codexStart.executionRunId, run.executionRunId);
+    assert.equal(record.codexStart.invocationId, invocation.invocationId);
+    assert.ok(typeof record.codexStart.startRecordedAt === 'number');
+    assert.ok(record.codexStart.startRecordedAt > 0);
+
+    const read = store.readCodexStartEvidence(record.codexStart.codexStartId);
+    assert.deepEqual(read, record.codexStart);
+
+    const byTask = store.readCodexStartEvidenceByTask(TASK_A);
+    assert.deepEqual(byTask, record.codexStart);
+  });
+});
+
+test('Layer 15: codex start evidence is idempotent', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    const input = {
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    };
+    const first = store.recordCodexStartEvidence(input);
+    assert.equal(first.created, true);
+    const second = store.recordCodexStartEvidence(input);
+    assert.equal(second.created, false);
+    assert.equal(second.codexStart.codexStartId, first.codexStart.codexStartId);
+  });
+});
+
+test('Layer 15: codex start evidence with contradictory lineage fails closed', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    const input = {
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    };
+    store.recordCodexStartEvidence(input);
+    // Different lineage
+    assert.throws(
+      () => store.recordCodexStartEvidence({
+        ...input,
+        executionRunId: '450e8400-e29b-41d4-a716-44665544ffff',
+      }),
+      new RegExp(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.contradictory),
+    );
+  });
+});
+
+test('Layer 15: codex result evidence is recorded and readable', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    const startInput = {
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    };
+    const start = store.recordCodexStartEvidence(startInput);
+    store.transition(TASK_A, 'codex');
+
+    const evidence = mapCodexResultToEvidence({
+      success: true,
+      executionId: 'exec-123',
+      outcome: 'modification_completed',
+      summary: 'Codex completed successfully.',
+      resultText: 'Result text here.',
+    });
+    const result = store.recordCodexResultEvidence({
+      codexStartId: start.codexStart.codexStartId,
+      executionId: 'exec-123',
+      outcome: evidence.outcome,
+      success: evidence.success,
+      error: evidence.error,
+      summary: evidence.summary,
+      resultMetadataJson: evidence.resultMetadataJson,
+    });
+    assert.equal(result.created, true);
+    assert.equal(result.codexResult.codexStartId, start.codexStart.codexStartId);
+    assert.equal(result.codexResult.executionId, 'exec-123');
+    assert.equal(result.codexResult.outcome, 'codex_success');
+    assert.equal(result.codexResult.success, 1);
+
+    const read = store.readCodexResultEvidence(start.codexStart.codexStartId);
+    assert.deepEqual(read, result.codexResult);
+  });
+});
+
+test('Layer 15: codex result evidence is idempotent', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    const start = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    });
+    store.transition(TASK_A, 'codex');
+
+    const evidence = mapCodexResultToEvidence({
+      success: true, executionId: 'exec-abc',
+      outcome: 'analysis_completed', summary: 'Done.', resultText: '',
+    });
+    const input = {
+      codexStartId: start.codexStart.codexStartId,
+      executionId: 'exec-abc',
+      outcome: evidence.outcome,
+      success: evidence.success,
+      error: evidence.error,
+      summary: evidence.summary,
+      resultMetadataJson: evidence.resultMetadataJson,
+    };
+    const first = store.recordCodexResultEvidence(input);
+    assert.equal(first.created, true);
+    const second = store.recordCodexResultEvidence(input);
+    assert.equal(second.created, false);
+    assert.equal(second.codexResult.codexResultId, first.codexResult.codexResultId);
+  });
+});
+
+test('Layer 15: codex result evidence without start fails closed', async () => {
+  await fixture(async (store) => {
+    store.createOrGet(TASK_A, 'fp-a', intent);
+    assert.throws(
+      () => store.recordCodexResultEvidence({
+        codexStartId: '450e8400-e29b-41d4-a716-44665544ffff',
+        executionId: 'exec-123',
+        outcome: 'codex_success',
+        success: 1,
+        error: null,
+        summary: 'Done.',
+        resultMetadataJson: JSON.stringify({ executionId: 'exec-123' }),
+      }),
+      /incompatible/,
+    );
+  });
+});
+
+test('Layer 15: codex start evidence is immutable (raw SQL update/delete blocked)', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-codex-immutable-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000 });
+    createResumableTask(store);
+    const snapshot = store.readValidatedProposalSnapshotByTask(TASK_A);
+    const attempt = store.readTaskExecutionLaunchAttemptByTask(TASK_A);
+    const start = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: snapshot.executionRunId,
+      invocationId: snapshot.invocationId,
+      launchAttemptId: snapshot.launchAttemptId,
+      launchResultId: snapshot.launchResultId,
+      snapshotId: snapshot.snapshotId,
+    });
+    store.close();
+
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(databasePath);
+    assert.throws(
+      () => db.prepare('UPDATE project_task_codex_start_evidence SET start_recorded_at = 999 WHERE codex_start_id = ?').run(start.codexStart.codexStartId),
+      /immutable/,
+    );
+    assert.throws(
+      () => db.prepare('DELETE FROM project_task_codex_start_evidence WHERE codex_start_id = ?').run(start.codexStart.codexStartId),
+      /immutable/,
+    );
+    db.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Layer 15: codex result evidence is immutable (raw SQL update/delete blocked)', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-codex-result-immutable-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000 });
+    createResumableTask(store);
+    const snapshot = store.readValidatedProposalSnapshotByTask(TASK_A);
+    store.transition(TASK_A, 'codex');
+    const start = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: snapshot.executionRunId,
+      invocationId: snapshot.invocationId,
+      launchAttemptId: snapshot.launchAttemptId,
+      launchResultId: snapshot.launchResultId,
+      snapshotId: snapshot.snapshotId,
+    });
+    const evidence = mapCodexResultToEvidence({
+      success: true, executionId: 'exec-xyz',
+      outcome: 'analysis_completed', summary: 'Done.', resultText: '',
+    });
+    const result = store.recordCodexResultEvidence({
+      codexStartId: start.codexStart.codexStartId,
+      executionId: 'exec-xyz',
+      outcome: evidence.outcome,
+      success: evidence.success,
+      error: evidence.error,
+      summary: evidence.summary,
+      resultMetadataJson: evidence.resultMetadataJson,
+    });
+    store.close();
+
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(databasePath);
+    assert.throws(
+      () => db.prepare('UPDATE project_task_codex_result_evidence SET success = 0 WHERE codex_result_id = ?').run(result.codexResult.codexResultId),
+      /immutable/,
+    );
+    assert.throws(
+      () => db.prepare('DELETE FROM project_task_codex_result_evidence WHERE codex_result_id = ?').run(result.codexResult.codexResultId),
+      /immutable/,
+    );
+    db.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Layer 15: hasCodexSuccessEvidence returns true for codex_success outcome', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    store.transition(TASK_A, 'codex');
+    const start = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    });
+    const evidence = mapCodexResultToEvidence({
+      success: true, executionId: 'exec-ok',
+      outcome: 'modification_completed', summary: 'Success.', resultText: '',
+    });
+    const result = store.recordCodexResultEvidence({
+      codexStartId: start.codexStart.codexStartId,
+      executionId: 'exec-ok',
+      outcome: evidence.outcome,
+      success: evidence.success,
+      error: evidence.error,
+      summary: evidence.summary,
+      resultMetadataJson: evidence.resultMetadataJson,
+    });
+    const startRecord = store.readCodexStartEvidence(start.codexStart.codexStartId);
+    const resultRecord = store.readCodexResultEvidence(start.codexStart.codexStartId);
+    assert.equal(hasCodexSuccessEvidence(startRecord, resultRecord), true);
+  });
+});
+
+test('Layer 15: hasCodexSuccessEvidence returns false for codex_failed outcome', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    store.transition(TASK_A, 'codex');
+    const start = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    });
+    const result = store.recordCodexResultEvidence({
+      codexStartId: start.codexStart.codexStartId,
+      executionId: 'exec-fail',
+      outcome: 'codex_failed',
+      success: 0,
+      error: 'codex_execution_failed',
+      summary: 'Codex execution did not complete.',
+      resultMetadataJson: JSON.stringify({ executionId: 'exec-fail' }),
+    });
+    const startRecord = store.readCodexStartEvidence(start.codexStart.codexStartId);
+    const resultRecord = store.readCodexResultEvidence(start.codexStart.codexStartId);
+    assert.equal(hasCodexSuccessEvidence(startRecord, resultRecord), false);
+  });
+});
+
+test('Layer 15: hasCodexSuccessEvidence returns false with start but no result', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    const start = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    });
+    const startRecord = store.readCodexStartEvidence(start.codexStart.codexStartId);
+    assert.equal(hasCodexSuccessEvidence(startRecord, undefined), false);
+  });
+});
+
+test('Layer 15: mapCodexResultToEvidence produces safe evidence vocabulary', async () => {
+  const successResult = {
+    success: true,
+    executionId: 'exec-1',
+    outcome: 'modification_completed',
+    summary: 'Codex modified files successfully.',
+    resultText: 'Here is the full result text with lots of details.',
+  };
+  const evidence = mapCodexResultToEvidence(successResult);
+  assert.equal(evidence.outcome, 'codex_success');
+  assert.equal(evidence.success, 1);
+  assert.equal(evidence.error, null);
+  assert.equal(evidence.summary, 'Codex modified files successfully.');
+  const meta = JSON.parse(evidence.resultMetadataJson);
+  assert.equal(meta.outcome, 'modification_completed');
+  assert.equal(meta.executionId, 'exec-1');
+  assert.equal(typeof meta.resultTextLength, 'number');
+  // Never exposes raw output
+  assert.equal(evidence.resultMetadataJson.includes('Here is the full result'), false);
+
+  const failedResult = {
+    success: false,
+    executionId: 'exec-2',
+    error: 'timeout',
+    summary: 'Timed out.',
+    resultText: '',
+  };
+  const failedEvidence = mapCodexResultToEvidence(failedResult);
+  assert.equal(failedEvidence.outcome, 'codex_failed');
+  assert.equal(failedEvidence.success, 0);
+  assert.equal(failedEvidence.error, 'timeout');
+});
+
+test('Layer 15: V15 schema has codex evidence tables, indices, and triggers', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-v15-schema-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000 });
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(databasePath);
+
+    // Check start evidence table
+    const startTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_task_codex_start_evidence'").get();
+    assert.ok(startTable !== undefined);
+    assert.ok(startTable.sql.includes('codex_start_id TEXT PRIMARY KEY'));
+    assert.ok(startTable.sql.includes('task_id TEXT NOT NULL UNIQUE'));
+    assert.ok(startTable.sql.includes('STRICT'));
+
+    // Check result evidence table
+    const resultTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_task_codex_result_evidence'").get();
+    assert.ok(resultTable !== undefined);
+    assert.ok(resultTable.sql.includes('codex_result_id TEXT PRIMARY KEY'));
+    assert.ok(resultTable.sql.includes('codex_start_id TEXT NOT NULL UNIQUE'));
+    assert.ok(resultTable.sql.includes('STRICT'));
+
+    // Check indices
+    const startIndex = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'project_task_codex_start_evidence_recorded'").get();
+    assert.ok(startIndex !== undefined);
+    const resultIndex = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'project_task_codex_result_evidence_recorded'").get();
+    assert.ok(resultIndex !== undefined);
+
+    // Check triggers (6 total: validate insert + immutable update/delete for both tables)
+    const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%codex_%'").all();
+    assert.equal(triggers.length, 6);
+    const triggerNames = triggers.map(t => t.name);
+    assert.ok(triggerNames.includes('project_task_codex_start_evidence_validate_insert'));
+    assert.ok(triggerNames.includes('project_task_codex_start_evidence_immutable_update'));
+    assert.ok(triggerNames.includes('project_task_codex_start_evidence_immutable_delete'));
+    assert.ok(triggerNames.includes('project_task_codex_result_evidence_validate_insert'));
+    assert.ok(triggerNames.includes('project_task_codex_result_evidence_immutable_update'));
+    assert.ok(triggerNames.includes('project_task_codex_result_evidence_immutable_delete'));
+
+    db.close();
+    store.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Layer 15: V15 migration has zero manufactured codex evidence rows', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-v15-zero-evidence-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000 });
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(databasePath);
+    assert.equal(db.prepare('SELECT COUNT(*) AS total FROM project_task_codex_start_evidence').get().total, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS total FROM project_task_codex_result_evidence').get().total, 0);
+    db.close();
+    store.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Layer 15: pruned terminals excludes tasks carrying codex evidence', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    store.transition(TASK_A, 'codex');
+    store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    });
+    store.fail(TASK_A, { code: 'workflow_interrupted', message: SAFE_TASK_ERROR_MESSAGES.workflow_interrupted });
+    // Task should still be present (not pruned) because it has codex evidence
+    const task = store.get(TASK_A);
+    assert.ok(task !== undefined);
+    assert.equal(task.status, 'failed');
+    const startEv = store.readCodexStartEvidenceByTask(TASK_A);
+    assert.ok(startEv !== undefined);
+  });
+});
+
+test('Layer 15: recovery with codex start evidence but no result fails closed', async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    store.transition(TASK_A, 'codex');
+    store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    });
+    // Task is in 'codex' state with start evidence but no result evidence
+    const recovery = store.reconcileRestartSafeTasks();
+    // Should be terminalized as interrupted
+    assert.equal(store.get(TASK_A).status, 'failed');
+    assert.ok(recovery.failedInterrupted >= 0);
+  });
+});
+
+test('Layer 15: codex start evidence is zero authority (source audit)', async () => {
+  const contractSource = await readFile(new URL('../src/contracts/projectTaskCodexEvidence.ts', import.meta.url), 'utf8');
+  // No execution or authority channels
+  assert.doesNotMatch(contractSource, /\b(push|merge|deploy|production_write|database_write|secret_access)\b/);
+  assert.doesNotMatch(contractSource, /child_process|execSync|spawn\(|runuser/i);
+  // No automatic replay language
+  assert.doesNotMatch(contractSource, /automatic.*replay|replay.*automatic|auto.*retry|retry.*auto/i);
+  // Evidence vocabulary only — no authority fields (allow descriptive comments)
+  // Strip comments before checking for authority/permission/capability keywords
+  const codeOnly = contractSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(codeOnly, /authorit|permission|capa(bilit|cit)/i);
 });

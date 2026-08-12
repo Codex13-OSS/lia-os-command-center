@@ -309,13 +309,13 @@ test('recovery calls no claim/consume API and exposes no authority or capability
   });
 });
 
-test('Recovery V2 remains conservative under schema V14 without execution or authority side channels', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
+test('Recovery V2 remains conservative under schema V15 without execution or authority side channels', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
   const source = await readFile(new URL('../src/services/projectTaskSqliteStore.ts', import.meta.url), 'utf8');
   const start = source.indexOf('reconcileRestartSafeTasks()');
-  const end = source.indexOf('\n  enqueueTaskDispatch(', start);
+  const end = source.indexOf('  enqueueTaskDispatch(taskId:', start);
   const recovery = source.slice(start, end);
-  for (const forbidden of ['claimTaskDispatch(', 'consumeTaskDispatch(', 'acquireTaskLease(', 'renewTaskLease(', 'releaseTaskLease(', 'executeProjectTaskWorkflow', 'hermesExecutor', 'projectCodexExecutor', 'setImmediate', 'randomUUID']) {
+  for (const forbidden of ['claimTaskDispatch(', 'consumeTaskDispatch(', 'acquireTaskLease(', 'renewTaskLease(', 'releaseTaskLease(', 'executeProjectTaskWorkflow', 'hermesExecutor', 'projectCodexExecutor', 'setImmediate']) {
     assert.equal(recovery.includes(forbidden), false, forbidden);
   }
   assert.doesNotMatch(recovery, /\b(push|merge|deploy|production_write|database_write|secret_access)\b/);

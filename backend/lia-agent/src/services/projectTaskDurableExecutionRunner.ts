@@ -29,6 +29,8 @@ import type { ProjectVisualVerificationResult } from './projectVisualVerificatio
 import type { ProjectCodexCommitResult } from '../contracts/projectCodexCommit.js';
 import { buildProjectCodexHandoff } from './projectCodexHandoff.js';
 import { executeProjectCodexHandoff } from './projectCodexExecutor.js';
+import { mapCodexResultToEvidence } from '../contracts/projectTaskCodexEvidence.js';
+import type { RecordCodexStartInput, RecordCodexResultInput } from '../contracts/projectTaskCodexEvidence.js';
 import { verifyProjectCodexWorkspace } from './projectCodexVerification.js';
 import { verifyProjectVisualWorkspace } from './projectVisualVerification.js';
 import { commitVerifiedProjectCodexWorkspace } from './projectCodexCommit.js';
@@ -323,6 +325,54 @@ export function createProjectTaskDurableExecutionRunner(
       requiresHumanApproval: proposal.requiresHumanApproval,
       blockedActions: proposal.blockedActions,
     });
+  };
+
+  /**
+   * Layer 15: durable Codex start evidence seam. Invoked at most once per
+   * live workflow process, after the observable `codex` stage transition
+   * and immediately BEFORE the first real Codex external process call.
+   * Records the exact execution lineage so an operator can discriminate
+   * between "Codex never started" and "Codex returned an outcome."
+   * Evidence only — never gates execution.
+   */
+  const recordCodexStart = async (): Promise<void> => {
+    if (!gateFired) return;
+    const snapshot = store.readValidatedProposalSnapshotByTask(taskId);
+    if (snapshot === undefined) return;
+    const attempt = store.readTaskExecutionLaunchAttemptByTask(taskId);
+    if (attempt === undefined) return;
+    const input: RecordCodexStartInput = {
+      taskId,
+      executionRunId: snapshot.executionRunId,
+      invocationId: snapshot.invocationId,
+      launchAttemptId: snapshot.launchAttemptId,
+      launchResultId: snapshot.launchResultId,
+      snapshotId: snapshot.snapshotId,
+    };
+    store.recordCodexStartEvidence(input);
+  };
+
+  /**
+   * Layer 15: durable Codex result evidence seam. Invoked at most once per
+   * live workflow process, AFTER executeProjectCodexHandoff returns and
+   * BEFORE any verification/visual-QA/commit step. Maps the raw
+   * ProjectCodexExecutionResult to the safe evidence vocabulary and
+   * records it durably. Evidence only — never gates execution.
+   */
+  const recordCodexResult = async (result: ProjectCodexExecutionResult): Promise<void> => {
+    const startEvidence = store.readCodexStartEvidenceByTask(taskId);
+    if (startEvidence === undefined) return;
+    const evidence = mapCodexResultToEvidence(result);
+    const input: RecordCodexResultInput = {
+      codexStartId: startEvidence.codexStartId,
+      executionId: result.executionId,
+      outcome: evidence.outcome,
+      success: evidence.success,
+      error: evidence.error,
+      summary: evidence.summary,
+      resultMetadataJson: evidence.resultMetadataJson,
+    };
+    store.recordCodexResultEvidence(input);
   };
 
   /** Known durable outcome for the task, if the Launch Attempt already has a result. */
@@ -675,6 +725,19 @@ export function createProjectTaskDurableExecutionRunner(
     // fence for resume (same as workflowService:378-380).
     await options.onStage('codex');
 
+    // Layer 15: durably record Codex start evidence BEFORE the external call.
+    // The snapshot carries the exact execution lineage.
+    try {
+      store.recordCodexStartEvidence({
+        taskId: snapshot.taskId,
+        executionRunId: snapshot.executionRunId,
+        invocationId: snapshot.invocationId,
+        launchAttemptId: snapshot.launchAttemptId,
+        launchResultId: snapshot.launchResultId,
+        snapshotId: snapshot.snapshotId,
+      });
+    } catch { /* Evidence must not gate execution. */ }
+
     let codexResult: ProjectCodexExecutionResult;
     try {
       codexResult = await executeProjectCodexHandoff(handoffResult.handoff);
@@ -685,6 +748,24 @@ export function createProjectTaskDurableExecutionRunner(
         summary: 'Codex execution did not complete.',
       };
     }
+
+    // Layer 15: durably record Codex result evidence AFTER the call returns.
+    try {
+      const startEvidence = store.readCodexStartEvidenceByTask(snapshot.taskId);
+      if (startEvidence !== undefined) {
+        const evidence = mapCodexResultToEvidence(codexResult);
+        store.recordCodexResultEvidence({
+          codexStartId: startEvidence.codexStartId,
+          executionId: codexResult.executionId,
+          outcome: evidence.outcome,
+          success: evidence.success,
+          error: evidence.error,
+          summary: evidence.summary,
+          resultMetadataJson: evidence.resultMetadataJson,
+        });
+      }
+    } catch { /* Evidence must not gate execution. */ }
+
     if (!codexResult.success) {
       return {
         ok: false, status: 'failed', stage: 'codex',
@@ -949,6 +1030,8 @@ export function createProjectTaskDurableExecutionRunner(
           beforeExternalLaunch: gate,
           recordExternalLaunchResult,
           recordValidatedProposalResult,
+          recordCodexStart,
+          recordCodexResult,
         },
       );
     } catch (error) {

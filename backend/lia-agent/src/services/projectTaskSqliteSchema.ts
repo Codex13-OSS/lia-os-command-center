@@ -16,7 +16,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION = 11;
 export const PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION = 12;
 export const PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION = 13;
 export const PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION = 14;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 14;
+export const PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION = 15;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 15;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -109,6 +110,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
   }
@@ -1214,6 +1216,174 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       END
     `);
     meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION) {
+    // Layer 15: Durable Codex Execution Evidence V1. Purely additive: two new
+    // tables with indices and triggers. ZERO rows are manufactured for existing
+    // data. IF NOT EXISTS keeps migration idempotent so test rewind scripts
+    // that set schema_version back to 14 do not crash when the V15 tables
+    // (created during initial store construction) already exist.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_task_codex_start_evidence (
+        codex_start_id TEXT PRIMARY KEY CHECK (
+          length(codex_start_id) = 36
+          AND substr(codex_start_id, 9, 1) = '-'
+          AND substr(codex_start_id, 14, 1) = '-'
+          AND substr(codex_start_id, 19, 1) = '-'
+          AND substr(codex_start_id, 24, 1) = '-'
+          AND codex_start_id = lower(codex_start_id)
+          AND replace(codex_start_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        launch_result_id TEXT NOT NULL UNIQUE CHECK (length(launch_result_id) = 36),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (length(snapshot_id) = 36),
+        start_recorded_at INTEGER NOT NULL CHECK (
+          start_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_codex_start_evidence_recorded
+      ON project_task_codex_start_evidence(start_recorded_at ASC, codex_start_id ASC);
+
+      CREATE TABLE IF NOT EXISTS project_task_codex_result_evidence (
+        codex_result_id TEXT PRIMARY KEY CHECK (
+          length(codex_result_id) = 36
+          AND substr(codex_result_id, 9, 1) = '-'
+          AND substr(codex_result_id, 14, 1) = '-'
+          AND substr(codex_result_id, 19, 1) = '-'
+          AND substr(codex_result_id, 24, 1) = '-'
+          AND codex_result_id = lower(codex_result_id)
+          AND replace(codex_result_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        codex_start_id TEXT NOT NULL UNIQUE CHECK (length(codex_start_id) = 36),
+        execution_id TEXT NOT NULL CHECK (
+          length(execution_id) BETWEEN 1 AND 36
+        ),
+        outcome TEXT NOT NULL CHECK (
+          outcome IN ('codex_success', 'codex_failed', 'codex_interrupted')
+        ),
+        success INTEGER NOT NULL CHECK (success IN (0, 1)),
+        error TEXT CHECK (
+          (outcome = 'codex_success' AND error IS NULL)
+          OR (outcome = 'codex_failed' AND error IN (
+            'codex_execution_failed', 'timeout', 'worktree_create_failed',
+            'worktree_cleanup_failed', 'prompt_too_large',
+            'missing_repository_read', 'missing_isolated_worktree_write',
+            'invalid_generated_path'
+          ))
+          OR (outcome = 'codex_interrupted' AND error IS NULL)
+        ),
+        summary TEXT NOT NULL CHECK (
+          length(summary) BETWEEN 1 AND 500 AND summary = trim(summary)
+        ),
+        result_metadata_json TEXT NOT NULL CHECK (
+          json_valid(result_metadata_json)
+          AND json_type(result_metadata_json, '$') = 'object'
+          AND length(result_metadata_json) <= 2048
+        ),
+        result_recorded_at INTEGER NOT NULL CHECK (
+          result_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (codex_start_id)
+          REFERENCES project_task_codex_start_evidence(codex_start_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_codex_result_evidence_recorded
+      ON project_task_codex_result_evidence(result_recorded_at ASC, codex_result_id ASC);
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_start_evidence_validate_insert
+      BEFORE INSERT ON project_task_codex_start_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_runs AS run
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.execution_run_id = run.execution_run_id
+          JOIN project_task_execution_launch_attempts AS attempt
+            ON attempt.invocation_id = invocation.invocation_id
+          JOIN project_task_execution_launch_results AS result
+            ON result.launch_attempt_id = attempt.launch_attempt_id
+          JOIN project_task_validated_proposal_snapshots AS snapshot
+            ON snapshot.launch_result_id = result.launch_result_id
+          JOIN project_tasks AS task ON task.task_id = run.task_id
+          WHERE run.execution_run_id = NEW.execution_run_id
+            AND invocation.invocation_id = NEW.invocation_id
+            AND attempt.launch_attempt_id = NEW.launch_attempt_id
+            AND result.launch_result_id = NEW.launch_result_id
+            AND result.outcome_class = 'proposal_valid'
+            AND snapshot.snapshot_id = NEW.snapshot_id
+            AND snapshot.task_id = NEW.task_id
+            AND task.task_id = NEW.task_id
+            AND task.status IN ('hermes', 'codex')
+            AND task.terminal_at IS NULL
+            AND run.task_id = NEW.task_id
+            AND invocation.task_id = NEW.task_id
+            AND attempt.task_id = NEW.task_id
+            AND result.task_id = NEW.task_id
+            AND NEW.start_recorded_at >= snapshot.recorded_at
+        ) THEN RAISE(ABORT, 'project_task_codex_start_evidence_incompatible') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_result_evidence_validate_insert
+      BEFORE INSERT ON project_task_codex_result_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_codex_start_evidence AS start
+          JOIN project_tasks AS task ON task.task_id = start.task_id
+          WHERE start.codex_start_id = NEW.codex_start_id
+            AND task.status NOT IN ('completed', 'failed')
+            AND NEW.result_recorded_at >= start.start_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_codex_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          json_extract(NEW.result_metadata_json, '$.executionId') <> NEW.execution_id
+        THEN RAISE(ABORT, 'project_task_codex_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          (NEW.outcome = 'codex_success' AND NEW.success <> 1)
+          OR (NEW.outcome <> 'codex_success' AND NEW.success <> 0)
+        THEN RAISE(ABORT, 'project_task_codex_result_evidence_incompatible') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_start_evidence_immutable_update
+      BEFORE UPDATE ON project_task_codex_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_codex_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_start_evidence_immutable_delete
+      BEFORE DELETE ON project_task_codex_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_codex_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_result_evidence_immutable_update
+      BEFORE UPDATE ON project_task_codex_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_codex_result_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_result_evidence_immutable_delete
+      BEFORE DELETE ON project_task_codex_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_codex_result_evidence_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION;
   }
 }
 

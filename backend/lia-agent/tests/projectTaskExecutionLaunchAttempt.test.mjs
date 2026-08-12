@@ -710,7 +710,7 @@ test('V10 to V12 migration preserves the complete existing chain', async () => {
     v10.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
     assert.equal(migrated.readTaskExecutionInvocationByRun(prepared.run.executionRunId).invocationId, invocation.invocationId);
     assert.equal(migrated.readTaskExecutionRunByTask(continuation.createdTaskId).executionRunId, prepared.run.executionRunId);
     migrated.close();
@@ -907,9 +907,11 @@ test('a launch attempt existing does not mean Hermes started', async () => {
     const db = new DatabaseSync(databasePath);
     const runtimeObjects = db.prepare(`
       SELECT type, name FROM sqlite_master
-      WHERE name LIKE '%hermes%' OR name LIKE '%codex%' OR name LIKE '%workflow%'
+      WHERE (name LIKE '%hermes%' OR name LIKE '%codex%' OR name LIKE '%workflow%'
          OR name LIKE '%executor%' OR name LIKE '%agent%' OR name LIKE '%session%'
-         OR name LIKE '%prompt%' OR name LIKE '%timer%'
+         OR name LIKE '%prompt%' OR name LIKE '%timer%')
+        AND name NOT LIKE '%codex_start_evidence%'
+        AND name NOT LIKE '%codex_result_evidence%'
     `).all();
     assert.deepEqual(runtimeObjects, []);
     db.close();

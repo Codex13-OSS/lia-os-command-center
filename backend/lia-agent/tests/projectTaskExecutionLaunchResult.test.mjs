@@ -722,7 +722,7 @@ test('27. V11 to V12 migration preserves all existing durable rows', async () =>
     v11.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
     // The preserved Launch Attempt is still readable and fully functional.
     assert.equal(
       migrated.readTaskExecutionLaunchAttempt(attempt.launchAttemptId).launchAttemptId,
@@ -734,7 +734,7 @@ test('27. V11 to V12 migration preserves all existing durable rows', async () =>
     for (const [table, snapshotRows] of Object.entries(before)) {
       assert.equal(JSON.stringify(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), snapshotRows, table);
     }
-    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 14);
+    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 15);
     assert.equal(check.prepare('SELECT COUNT(*) AS total FROM project_task_execution_launch_results').get().total, 0);
     check.close();
 
@@ -804,7 +804,7 @@ test('29. the V9 -> V12 migration chain still reaches V12 and preserves every V9
     v9.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
     assert.equal(migrated.readTaskDispatchByTask(TASK_A).taskId, TASK_A);
     migrated.close();
 
@@ -812,7 +812,7 @@ test('29. the V9 -> V12 migration chain still reaches V12 and preserves every V9
     for (const [table, snapshotRows] of Object.entries(before)) {
       assert.equal(JSON.stringify(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), snapshotRows, table);
     }
-    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 14);
+    assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 15);
     check.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
@@ -1183,7 +1183,7 @@ test('58. Schema V12 only adds state/evidence', async () => {
   const databasePath = join(directory, 'tasks.sqlite');
   try {
     const store = new ProjectTaskSqliteStore({ databasePath });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
     assert.equal(store.readTaskExecutionLaunchResultByTask(TASK_A), undefined);
     const db = new DatabaseSync(databasePath);
     assert.equal(db.prepare('SELECT COUNT(*) AS total FROM project_task_execution_launch_results').get().total, 0);

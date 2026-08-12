@@ -101,6 +101,27 @@ export interface ProjectTaskWorkflowDependencies {
    * recordExternalLaunchResult behavior (direct/non-durable compatibility).
    */
   recordValidatedProposalResult?: (proposal: ProjectOrchestrationProposal) => void | Promise<void>;
+  /**
+   * Optional durable Codex start evidence seam (Layer 15). Invoked at most
+   * once per live workflow, after the observable `codex` stage transition
+   * (which durably transitions the task status to 'codex') and immediately
+   * BEFORE the first real Codex external process call. It durably records
+   * that Codex is about to launch for this task with its exact execution
+   * lineage. The callback receives no arguments (the lineage is captured
+   * by the closure). When the callback throws, Codex still runs (the
+   * start evidence is diagnostic, never gating).
+   */
+  recordCodexStart?: () => void | Promise<void>;
+  /**
+   * Optional durable Codex result evidence seam (Layer 15). Invoked at most
+   * once per live workflow, AFTER executeProjectCodexHandoff returns and
+   * BEFORE any verification, visual-QA, or commit step. Receives ONLY the
+   * safe ProjectCodexExecutionResult — never raw output, paths, or
+   * transcripts. The evidence is recorded durably after the Codex call
+   * completes. When the callback throws, the evidence could not be durably
+   * recorded but execution continues (evidence is state only, never authority).
+   */
+  recordCodexResult?: (result: ProjectCodexExecutionResult) => void | Promise<void>;
 }
 
 const observe = async (dependencies: ProjectTaskWorkflowDependencies, stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => {
@@ -376,11 +397,17 @@ export async function executeProjectTaskWorkflow(
 
   let codexResult: ProjectCodexExecutionResult;
   await observe(dependencies, 'codex');
+  // Layer 15: durably record Codex start evidence BEFORE the external call.
+  // Evidence only — never gates execution.
+  try { await dependencies.recordCodexStart?.(); } catch { /* Evidence recording must not block execution. */ }
   try {
     codexResult = await (dependencies.executeCodex ?? executeProjectCodexHandoff)(handoffResult.handoff);
   } catch {
     return fail('codex', 'codex_execution_failed', 'Codex execution did not complete.', identifiers);
   }
+  // Layer 15: durably record Codex result evidence AFTER the call returns.
+  // Evidence only — never gates execution.
+  try { await dependencies.recordCodexResult?.(codexResult); } catch { /* Evidence recording must not block execution. */ }
   if (!codexResult.success) {
     return fail('codex', codexResult.error, codexResult.summary, {
       ...identifiers,
