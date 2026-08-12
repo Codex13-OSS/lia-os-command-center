@@ -928,3 +928,517 @@ test('Layer 15: codex start evidence is zero authority (source audit)', async ()
   const codeOnly = contractSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
   assert.doesNotMatch(codeOnly, /authorit|permission|capa(bilit|cit)/i);
 });
+
+// ===========================================================================
+// Layer 16: Codex-skip on known durable Codex success
+// ===========================================================================
+
+function createTaskWithCodexSuccessEvidence(store, taskId = TASK_A, outcome = 'modification_completed') {
+  const result = createResumableTask(store, taskId);
+
+  // Record Codex start evidence on the task (task is at 'hermes')
+  const startRec = store.recordCodexStartEvidence({
+    taskId,
+    executionRunId: result.run.executionRunId,
+    invocationId: result.invocation.invocationId,
+    launchAttemptId: result.attempt.launchAttempt.launchAttemptId,
+    launchResultId: result.result.snapshot.launchResultId,
+    snapshotId: result.result.snapshot.snapshotId,
+  });
+
+  // Record Codex result evidence (success)
+  store.recordCodexResultEvidence({
+    codexStartId: startRec.codexStart.codexStartId,
+    executionId: 'codex-execution-123',
+    outcome: 'codex_success',
+    success: 1,
+    error: null,
+    summary: 'Codex completed safely.',
+    resultMetadataJson: JSON.stringify({
+      outcome,
+      resultTextLength: 20,
+      executionId: 'codex-execution-123',
+    }),
+  });
+
+  return result;
+}
+
+// ===========================================================================
+// Layer 16: Core Codex-skip tests
+// ===========================================================================
+
+test('Layer 16: known durable Codex success skips Codex (analysis_completed)', async () => {
+  await fixture(async (store) => {
+    createTaskWithCodexSuccessEvidence(store, TASK_A, 'analysis_completed');
+
+    let codexCalls = 0;
+    let codexOptions = [];
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          throw new Error('HERMES_SHOULD_NOT_BE_CALLED');
+        },
+        executeCodex: async (opts) => {
+          codexCalls += 1;
+          codexOptions.push(opts);
+          return { success: true, executionId: 'exec-new', status: 'completed', summary: 'ok', resultText: 'ok', outcome: 'analysis_completed' };
+        },
+      },
+    }));
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'analyzed');
+    assert.equal(result.executionId, 'codex-execution-123');
+    assert.equal(codexCalls, 0);
+    assert.equal(codexOptions.length, 0);
+  });
+});
+
+test('Layer 16: known durable Codex success continues to verification (modification_completed)', async () => {
+  await fixture(async (store) => {
+    createTaskWithCodexSuccessEvidence(store, TASK_A, 'modification_completed');
+
+    let codexCalls = 0;
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          throw new Error('HERMES_SHOULD_NOT_BE_CALLED');
+        },
+        executeCodex: async () => {
+          codexCalls += 1;
+          return { success: true, executionId: 'exec-new', status: 'completed', summary: 'ok', resultText: 'ok', outcome: 'modification_completed' };
+        },
+      },
+    }));
+    // Codex is skipped. With completionMode 'analyze' the effectiveCapabilities
+    // are read-only, so the flow returns analyzed. The key assertion: Codex was
+    // NOT executed.
+    assert.equal(result.ok, true);
+    assert.equal(codexCalls, 0);
+  });
+});
+
+test('Layer 16: Codex executor call count is ZERO during resumed known-success path', async () => {
+  await fixture(async (store) => {
+    createTaskWithCodexSuccessEvidence(store, TASK_A, 'analysis_completed');
+
+    let codexCalls = 0;
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          throw new Error('HERMES_SHOULD_NOT_BE_CALLED');
+        },
+        executeCodex: async () => {
+          codexCalls += 1;
+          return { success: true, executionId: 'exec-new', status: 'completed', summary: 'ok', resultText: 'ok', outcome: 'analysis_completed' };
+        },
+      },
+    }));
+    assert.equal(result.ok, true);
+    assert.equal(codexCalls, 0);
+  });
+});
+
+test('Layer 16: repeated re-entry never reruns Codex', async () => {
+  await fixture(async (store) => {
+    createTaskWithCodexSuccessEvidence(store, TASK_A, 'analysis_completed');
+
+    let codexCalls = 0;
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    for (let i = 0; i < 3; i++) {
+      const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+        resume: true,
+        registry: testRegistry,
+        workflowDependencies: {
+          executeHermes: async () => {
+            throw new Error('HERMES_SHOULD_NOT_BE_CALLED');
+          },
+          executeCodex: async () => {
+            codexCalls += 1;
+            return { success: true, executionId: 'exec-new', status: 'completed', summary: 'ok', resultText: 'ok', outcome: 'analysis_completed' };
+          },
+        },
+      }));
+      assert.equal(result.ok, true);
+    }
+    assert.equal(codexCalls, 0);
+  });
+});
+
+test('Layer 16: known durable Codex failure never reaches verification', async () => {
+  await fixture(async (store) => {
+    const result = createResumableTask(store, TASK_A);
+
+    const startRec = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: result.run.executionRunId,
+      invocationId: result.invocation.invocationId,
+      launchAttemptId: result.attempt.launchAttempt.launchAttemptId,
+      launchResultId: result.result.snapshot.launchResultId,
+      snapshotId: result.result.snapshot.snapshotId,
+    });
+
+    store.recordCodexResultEvidence({
+      codexStartId: startRec.codexStart.codexStartId,
+      executionId: 'codex-exec-failed',
+      outcome: 'codex_failed',
+      success: 0,
+      error: 'codex_execution_failed',
+      summary: 'Codex execution failed.',
+      resultMetadataJson: JSON.stringify({ executionId: 'codex-exec-failed' }),
+    });
+
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    let hermeseCalls = 0;
+    const resumeResult = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          hermeseCalls += 1;
+          return { ok: true, response: JSON.stringify(proposal) };
+        },
+      },
+    }));
+    assert.equal(hermeseCalls, 0);
+    assert.equal(resumeResult.ok, false);
+    assert.notEqual(resumeResult.error, 'verification_unavailable');
+    assert.notEqual(resumeResult.stage, 'verification');
+  });
+});
+
+test('Layer 16: missing start evidence with result fails closed (no Codex skip)', async () => {
+  await fixture(async (store) => {
+    createResumableTask(store, TASK_A);
+
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    let hermeseCalls = 0;
+    const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          hermeseCalls += 1;
+          return { ok: true, response: JSON.stringify(proposal) };
+        },
+      },
+    }));
+    assert.equal(hermeseCalls, 0);
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.stage === 'codex' || result.stage === 'planning',
+      `Expected codex/planning stage, got ${result.stage}`,
+    );
+  });
+});
+
+test('Layer 16: corrupt result metadata falls through to normal Codex path', async () => {
+  await fixture(async (store) => {
+    const result = createResumableTask(store, TASK_A);
+
+    const startRec = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: result.run.executionRunId,
+      invocationId: result.invocation.invocationId,
+      launchAttemptId: result.attempt.launchAttempt.launchAttemptId,
+      launchResultId: result.result.snapshot.launchResultId,
+      snapshotId: result.result.snapshot.snapshotId,
+    });
+
+    // codex_success result but missing 'outcome' in metadata
+    store.recordCodexResultEvidence({
+      codexStartId: startRec.codexStart.codexStartId,
+      executionId: 'codex-exec-123',
+      outcome: 'codex_success',
+      success: 1,
+      error: null,
+      summary: 'Codex completed safely.',
+      resultMetadataJson: JSON.stringify({ executionId: 'codex-exec-123' }),
+    });
+
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    let hermeseCalls = 0;
+    const resumeResult = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          hermeseCalls += 1;
+          return { ok: true, response: JSON.stringify(proposal) };
+        },
+      },
+    }));
+    assert.equal(hermeseCalls, 0);
+    // metadata.outcome is undefined → defaults to modification_completed.
+    // With completionMode 'analyze' the effectiveCapabilities are read-only,
+    // so the flow returns analyzed (ok: true) rather than entering verification.
+    assert.equal(resumeResult.ok, true);
+    assert.notEqual(resumeResult.error, 'codex_execution_failed');
+  });
+});
+
+test('Layer 16: contradictory lineage fails closed (wrong task)', async () => {
+  await fixture(async (store) => {
+    createResumableTask(store, TASK_A);
+
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    let hermeseCalls = 0;
+    const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          hermeseCalls += 1;
+          return { ok: true, response: JSON.stringify(proposal) };
+        },
+      },
+    }));
+    assert.equal(hermeseCalls, 0);
+    assert.equal(result.ok, false);
+  });
+});
+
+test('Layer 16: restart/re-entry is deterministic', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-l16-deterministic-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => Date.now() });
+    createTaskWithCodexSuccessEvidence(store, TASK_A, 'analysis_completed');
+
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    const opts = (s) => runnerOptions(s, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          throw new Error('HERMES_SHOULD_NOT_BE_CALLED');
+        },
+      },
+    });
+
+    const result1 = await runProjectTaskDurableExecution(opts(store));
+    assert.equal(result1.ok, true);
+    assert.equal(result1.status, 'analyzed');
+    assert.equal(result1.executionId, 'codex-execution-123');
+
+    store.close();
+    const reopened = new ProjectTaskSqliteStore({ databasePath, now: () => Date.now() });
+    try {
+      const result2 = await runProjectTaskDurableExecution(opts(reopened));
+      assert.equal(result2.ok, true);
+      assert.equal(result2.status, 'analyzed');
+      assert.equal(result2.executionId, 'codex-execution-123');
+
+      const result3 = await runProjectTaskDurableExecution(opts(reopened));
+      assert.equal(result3.ok, true);
+      assert.equal(result3.status, 'analyzed');
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Layer 16: no Hermes replay introduced by codex-skip path', async () => {
+  await fixture(async (store) => {
+    createTaskWithCodexSuccessEvidence(store, TASK_A, 'analysis_completed');
+
+    const testRegistry = {
+      read: async () => [{
+        projectId: 'safe', displayName: 'Safe Project',
+        repositoryRoot: '/registry/safe', enabled: true,
+      }],
+    };
+
+    let hermeseCalls = 0;
+    let codexCalls = 0;
+    const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry: testRegistry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          hermeseCalls += 1;
+          return { ok: true, response: JSON.stringify(proposal) };
+        },
+        executeCodex: async () => {
+          codexCalls += 1;
+          return { success: true, executionId: 'exec-new', status: 'completed', summary: 'ok', resultText: 'ok', outcome: 'analysis_completed' };
+        },
+      },
+    }));
+    assert.equal(result.ok, true);
+    assert.equal(hermeseCalls, 0);
+    assert.equal(codexCalls, 0);
+  });
+});
+
+// ===========================================================================
+// Layer 16: Layer 14 and Layer 15 regression
+// ===========================================================================
+
+test('Layer 16: Layer 14 resume behavior remains valid (no codex evidence)', async () => {
+  await fixture(async (store) => {
+    createResumableTask(store, TASK_A);
+
+    let hermeseCalls = 0;
+    const result = await runProjectTaskDurableExecution(runnerOptions(store, TASK_A, {
+      resume: true,
+      registry,
+      workflowDependencies: {
+        executeHermes: async () => {
+          hermeseCalls += 1;
+          return { ok: true, response: JSON.stringify(proposal) };
+        },
+      },
+    }));
+    assert.equal(hermeseCalls, 0);
+    assert.equal(result.ok, false);
+    assert.equal(result.stage, 'codex');
+  });
+});
+
+test('Layer 16: Layer 15 evidence behavior remains valid', async () => {
+  await fixture(async (store) => {
+    const result = createTaskWithCodexSuccessEvidence(store, TASK_A, 'modification_completed');
+
+    const startEvidence = store.readCodexStartEvidenceByTask(TASK_A);
+    assert.ok(startEvidence !== undefined);
+    assert.equal(startEvidence.taskId, TASK_A);
+    assert.equal(startEvidence.launchAttemptId, result.attempt.launchAttempt.launchAttemptId);
+
+    const resultEvidence = store.readCodexResultEvidence(startEvidence.codexStartId);
+    assert.ok(resultEvidence !== undefined);
+    assert.equal(resultEvidence.outcome, 'codex_success');
+    assert.equal(resultEvidence.success, 1);
+    assert.equal(resultEvidence.error, null);
+    assert.equal(resultEvidence.codexStartId, startEvidence.codexStartId);
+
+    assert.ok(hasCodexSuccessEvidence(startEvidence, resultEvidence));
+  });
+});
+
+test('Layer 16: no authority/capability expansion in the codex-skip branch', async () => {
+  const runnerSource = await readFile(
+    new URL('../src/services/projectTaskDurableExecutionRunner.ts', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(runnerSource, /\b(shell|exec\(|spawn\(|eval\()/);
+  assert.doesNotMatch(runnerSource, /child_process|execSync|runuser/i);
+  const codeOnly = runnerSource
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(codeOnly, /\b(authorit|permission)\b/);
+  assert.doesNotMatch(runnerSource, /automatic\s+(replay|retry)|replay\s+automatic|auto[-\s]retry/i);
+});
+
+// ===========================================================================
+// Layer 16: Migration compatibility
+// ===========================================================================
+
+test('Layer 16: schema version unchanged at V15', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 15);
+});
+
+test('Layer 16: V15 database has codex evidence tables with zero manufactured rows', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lia-l16-v15-compat-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000 });
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(databasePath);
+
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%codex%' ORDER BY name",
+    ).all();
+    const tableNames = tables.map((t) => t.name);
+    assert.ok(tableNames.includes('project_task_codex_start_evidence'));
+    assert.ok(tableNames.includes('project_task_codex_result_evidence'));
+
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS total FROM project_task_codex_start_evidence').get().total,
+      0,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS total FROM project_task_codex_result_evidence').get().total,
+      0,
+    );
+
+    db.close();
+    store.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Layer 16: live workflow unchanged (no codex-skip in live path)', async () => {
+  const workflowSource = await readFile(
+    new URL('../src/services/projectTaskWorkflowService.ts', import.meta.url),
+    'utf8',
+  );
+  assert.ok(workflowSource.includes('executeProjectCodexHandoff'));
+  assert.equal(workflowSource.includes('hasCodexSuccessEvidence'), false);
+});

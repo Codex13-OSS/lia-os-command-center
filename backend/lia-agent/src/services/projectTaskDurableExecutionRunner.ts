@@ -29,7 +29,7 @@ import type { ProjectVisualVerificationResult } from './projectVisualVerificatio
 import type { ProjectCodexCommitResult } from '../contracts/projectCodexCommit.js';
 import { buildProjectCodexHandoff } from './projectCodexHandoff.js';
 import { executeProjectCodexHandoff } from './projectCodexExecutor.js';
-import { mapCodexResultToEvidence } from '../contracts/projectTaskCodexEvidence.js';
+import { mapCodexResultToEvidence, hasCodexSuccessEvidence } from '../contracts/projectTaskCodexEvidence.js';
 import type { RecordCodexStartInput, RecordCodexResultInput } from '../contracts/projectTaskCodexEvidence.js';
 import { verifyProjectCodexWorkspace } from './projectCodexVerification.js';
 import { verifyProjectVisualWorkspace } from './projectVisualVerification.js';
@@ -721,50 +721,94 @@ export function createProjectTaskDurableExecutionRunner(
       };
     }
 
-    // Emit codex stage BEFORE Codex call — establishes the pre/post-Codex
-    // fence for resume (same as workflowService:378-380).
-    await options.onStage('codex');
+    // Layer 16: Check for existing durable Codex success evidence.
+    // When known Codex succeeded durably, skip Codex completely.
+    // Evidence is state only — never grants execution authority.
+    const existingStartEvidence = store.readCodexStartEvidenceByTask(snapshot.taskId);
+    let codexResult: ProjectCodexExecutionResult | undefined;
 
-    // Layer 15: durably record Codex start evidence BEFORE the external call.
-    // The snapshot carries the exact execution lineage.
-    try {
-      store.recordCodexStartEvidence({
-        taskId: snapshot.taskId,
-        executionRunId: snapshot.executionRunId,
-        invocationId: snapshot.invocationId,
-        launchAttemptId: snapshot.launchAttemptId,
-        launchResultId: snapshot.launchResultId,
-        snapshotId: snapshot.snapshotId,
-      });
-    } catch { /* Evidence must not gate execution. */ }
+    if (existingStartEvidence !== undefined) {
+      const existingResultEvidence = store.readCodexResultEvidence(existingStartEvidence.codexStartId);
+      if (hasCodexSuccessEvidence(existingStartEvidence, existingResultEvidence)) {
+        // Known durable Codex success. Skip Codex.
+        try {
+          const metadata = JSON.parse(existingResultEvidence.resultMetadataJson);
+          await options.onStage('codex');  // status transition: hermes → codex
 
-    let codexResult: ProjectCodexExecutionResult;
-    try {
-      codexResult = await executeProjectCodexHandoff(handoffResult.handoff);
-    } catch {
-      return {
-        ok: false, status: 'failed', stage: 'codex',
-        error: 'codex_execution_failed',
-        summary: 'Codex execution did not complete.',
-      };
+          codexResult = {
+            success: true,
+            executionId: existingResultEvidence.executionId,
+            status: 'completed' as const,
+            outcome: metadata.outcome ?? 'modification_completed',
+            resultText: '',
+            summary: existingResultEvidence.summary,
+          };
+
+          // analysis_completed: return analyzed immediately, no verification.
+          if (metadata.outcome === 'analysis_completed') {
+            return {
+              ok: true,
+              projectId: plan.projectId,
+              executionId: existingResultEvidence.executionId,
+              status: 'analyzed',
+              executionSummary: existingResultEvidence.summary,
+              resultText: '',
+              stages: ['planning', 'hermes', 'codex'] as readonly SafeTaskStage[],
+            };
+          }
+          // modification_completed: fall through to verification path
+          // using codexResult with the evidence executionId.
+        } catch {
+          // Corrupt metadata JSON: fall through to normal Codex path (fail-safe).
+        }
+      }
     }
 
-    // Layer 15: durably record Codex result evidence AFTER the call returns.
-    try {
-      const startEvidence = store.readCodexStartEvidenceByTask(snapshot.taskId);
-      if (startEvidence !== undefined) {
-        const evidence = mapCodexResultToEvidence(codexResult);
-        store.recordCodexResultEvidence({
-          codexStartId: startEvidence.codexStartId,
-          executionId: codexResult.executionId,
-          outcome: evidence.outcome,
-          success: evidence.success,
-          error: evidence.error,
-          summary: evidence.summary,
-          resultMetadataJson: evidence.resultMetadataJson,
+    if (codexResult === undefined) {
+      // No known durable Codex success — execute Codex normally.
+      // Emit codex stage BEFORE Codex call — establishes the pre/post-Codex
+      // fence for resume (same as workflowService:378-380).
+      await options.onStage('codex');
+
+      // Layer 15: durably record Codex start evidence BEFORE the external call.
+      try {
+        store.recordCodexStartEvidence({
+          taskId: snapshot.taskId,
+          executionRunId: snapshot.executionRunId,
+          invocationId: snapshot.invocationId,
+          launchAttemptId: snapshot.launchAttemptId,
+          launchResultId: snapshot.launchResultId,
+          snapshotId: snapshot.snapshotId,
         });
+      } catch { /* Evidence must not gate execution. */ }
+
+      try {
+        codexResult = await executeProjectCodexHandoff(handoffResult.handoff);
+      } catch {
+        return {
+          ok: false, status: 'failed', stage: 'codex',
+          error: 'codex_execution_failed',
+          summary: 'Codex execution did not complete.',
+        };
       }
-    } catch { /* Evidence must not gate execution. */ }
+
+      // Layer 15: durably record Codex result evidence AFTER the call returns.
+      try {
+        const afterStartEvidence = store.readCodexStartEvidenceByTask(snapshot.taskId);
+        if (afterStartEvidence !== undefined) {
+          const evidence = mapCodexResultToEvidence(codexResult);
+          store.recordCodexResultEvidence({
+            codexStartId: afterStartEvidence.codexStartId,
+            executionId: codexResult.executionId,
+            outcome: evidence.outcome,
+            success: evidence.success,
+            error: evidence.error,
+            summary: evidence.summary,
+            resultMetadataJson: evidence.resultMetadataJson,
+          });
+        }
+      } catch { /* Evidence must not gate execution. */ }
+    }
 
     if (!codexResult.success) {
       return {
