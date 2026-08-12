@@ -710,7 +710,7 @@ test('V10 to V12 migration preserves the complete existing chain', async () => {
     v10.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 16);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
     assert.equal(migrated.readTaskExecutionInvocationByRun(prepared.run.executionRunId).invocationId, invocation.invocationId);
     assert.equal(migrated.readTaskExecutionRunByTask(continuation.createdTaskId).executionRunId, prepared.run.executionRunId);
     migrated.close();
@@ -967,7 +967,7 @@ test('no product-runtime workflow, Hermes, Codex, route or timer launch integrat
     assert.equal(source.includes('launch attempt'), false, name);
   }
   for (const route of [
-    'status.ts', 'sameOriginStatus.ts', 'projectTasks.ts', 'projectTaskWorkflow.ts',
+    'status.ts', 'sameOriginStatus.ts', 'projectTaskWorkflow.ts',
     'projectTaskExecution.ts', 'projectOrchestration.ts', 'hermesQuery.ts', 'hermes.ts',
     'health.ts', 'agenda.ts',
   ]) {

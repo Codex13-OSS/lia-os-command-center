@@ -18,7 +18,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION = 13;
 export const PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION = 14;
 export const PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION = 15;
 export const PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION = 16;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 16;
+export const PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION = 17;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 17;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -113,6 +114,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
   }
@@ -1748,6 +1750,72 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       END
     `);
     meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION) {
+    // Layer 18: Durable Completion Evidence V1. Purely additive: the
+    // completion_evidence table with a unique index and immutability
+    // triggers. ZERO rows are manufactured for existing data. IF NOT
+    // EXISTS keeps migration idempotent so test rewind scripts that set
+    // schema_version back to 16 do not crash when the V17 table (created
+    // during initial store construction) already exists.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_task_completion_evidence (
+        completion_evidence_id TEXT PRIMARY KEY CHECK (
+          length(completion_evidence_id) = 36
+          AND substr(completion_evidence_id, 9, 1) = '-'
+          AND substr(completion_evidence_id, 14, 1) = '-'
+          AND substr(completion_evidence_id, 19, 1) = '-'
+          AND substr(completion_evidence_id, 24, 1) = '-'
+          AND completion_evidence_id = lower(completion_evidence_id)
+          AND replace(completion_evidence_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        execution_run_id TEXT NOT NULL CHECK (length(execution_run_id) = 36),
+        invocation_id TEXT NOT NULL CHECK (length(invocation_id) = 36),
+        launch_attempt_id TEXT NOT NULL CHECK (length(launch_attempt_id) = 36),
+        launch_result_id TEXT NOT NULL CHECK (length(launch_result_id) = 36),
+        snapshot_id TEXT NOT NULL CHECK (length(snapshot_id) = 36),
+        codex_start_id TEXT,
+        verification_start_id TEXT,
+        commit_start_id TEXT,
+        receipt_json TEXT NOT NULL CHECK (
+          json_valid(receipt_json)
+          AND json_type(receipt_json, '$') = 'object'
+        ),
+        recorded_at INTEGER NOT NULL CHECK (
+          recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS
+        idx_project_task_completion_evidence_task
+        ON project_task_completion_evidence(task_id);
+
+      CREATE TRIGGER IF NOT EXISTS project_task_completion_evidence_immutable_update
+      BEFORE UPDATE ON project_task_completion_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_completion_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_completion_evidence_immutable_delete
+      BEFORE DELETE ON project_task_completion_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_completion_evidence_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION;
   }
 }
 

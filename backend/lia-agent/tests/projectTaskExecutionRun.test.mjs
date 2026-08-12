@@ -333,7 +333,7 @@ test('V8 to V12 migration preserves prior durable chain and legacy consumed ambi
     v8.exec('DROP TRIGGER project_task_validated_proposal_snapshots_validate_insert; DROP TRIGGER project_task_validated_proposal_snapshots_immutable_update; DROP TRIGGER project_task_validated_proposal_snapshots_immutable_delete; DROP INDEX project_task_validated_proposal_snapshots_recorded; DROP TABLE project_task_validated_proposal_snapshots; DROP TRIGGER project_task_execution_launch_results_validate_insert; DROP TRIGGER project_task_execution_launch_results_immutable_update; DROP TRIGGER project_task_execution_launch_results_immutable_delete; DROP INDEX project_task_execution_launch_results_recorded; DROP TABLE project_task_execution_launch_results; DROP TRIGGER project_task_execution_invocations_preserve_on_lease_release; DROP TABLE project_task_execution_invocations; DROP TABLE project_task_execution_runs; DROP TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release; DROP TRIGGER project_task_execution_launch_attempts_validate_insert; DROP TRIGGER project_task_execution_launch_attempts_immutable_update; DROP TRIGGER project_task_execution_launch_attempts_immutable_delete; DROP INDEX project_task_execution_launch_attempts_crossed; DROP TABLE project_task_execution_launch_attempts; UPDATE project_task_meta SET schema_version = 8 WHERE singleton = 1');
     v8.close();
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 200 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 16);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
     assert.equal(migrated.readTaskExecutionRunByTask(TASK_A), undefined);
     migrated.close();
     const check = new DatabaseSync(databasePath);

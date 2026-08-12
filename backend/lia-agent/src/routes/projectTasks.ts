@@ -29,6 +29,62 @@ const safeReceipt = (result: Extract<ProjectTaskWorkflowResult, { ok: true }>): 
   });
 };
 const genericFailure = (): SafeTaskError => ({ code: 'workflow_failed', message: SAFE_TASK_ERROR_MESSAGES.workflow_failed });
+
+/** Layer 18: try to record completion evidence for the crash-window safety net. */
+function tryRecordCompletionEvidence(
+  store: ProjectTaskStore,
+  taskId: string,
+  receipt: SafeTaskReceipt,
+): void {
+  // Structural guard: only durable stores support completion evidence.
+  const durable = store as unknown as Record<string, unknown>;
+  if (typeof durable.recordCompletionEvidence !== 'function') return;
+  try {
+    // Read lineage from the store to build completion evidence.
+    const readRun = durable.readTaskExecutionRunByTask as ((id: string) => unknown) | undefined;
+    const readInvocation = durable.readTaskExecutionInvocationByExecutionRun as ((id: string) => unknown) | undefined;
+    const readAttempt = durable.readTaskExecutionLaunchAttemptByInvocation as ((id: string) => unknown) | undefined;
+    const readResult = durable.readTaskExecutionLaunchResultByLaunchAttempt as ((id: string) => unknown) | undefined;
+    const readSnapshot = durable.readValidatedProposalSnapshotByLaunchResult as ((id: string) => unknown) | undefined;
+    const readCodexStart = durable.readCodexStartEvidenceByTask as ((id: string) => unknown) | undefined;
+    const readVerifyStart = durable.readVerificationStartEvidenceByTask as ((id: string) => unknown) | undefined;
+    const readCommitStart = durable.readCommitStartEvidenceByTask as ((id: string) => unknown) | undefined;
+    const recordEvidence = durable.recordCompletionEvidence as ((input: Record<string, unknown>) => unknown) | undefined;
+
+    if (!readRun || !readInvocation || !readAttempt || !readResult || !readSnapshot || !recordEvidence) return;
+
+    const executionRun = readRun(taskId) as Record<string, unknown> | undefined;
+    if (!executionRun) return;
+    const invocation = readInvocation(executionRun.executionRunId as string) as Record<string, unknown> | undefined;
+    if (!invocation) return;
+    const launchAttempt = readAttempt(invocation.invocationId as string) as Record<string, unknown> | undefined;
+    if (!launchAttempt) return;
+    const launchResult = readResult(launchAttempt.launchAttemptId as string) as Record<string, unknown> | undefined;
+    if (!launchResult) return;
+    const snapshot = readSnapshot(launchResult.launchResultId as string) as Record<string, unknown> | undefined;
+    if (!snapshot) return;
+
+    const codexStart = readCodexStart?.(taskId) as Record<string, unknown> | undefined;
+    const verifyStart = readVerifyStart?.(taskId) as Record<string, unknown> | undefined;
+    const commitStart = readCommitStart?.(taskId) as Record<string, unknown> | undefined;
+
+    recordEvidence({
+      taskId,
+      executionRunId: executionRun.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: launchAttempt.launchAttemptId,
+      launchResultId: launchResult.launchResultId,
+      snapshotId: snapshot.snapshotId,
+      codexStartId: codexStart?.codexStartId ?? null,
+      verificationStartId: verifyStart?.verificationStartId ?? null,
+      commitStartId: commitStart?.commitStartId ?? null,
+      receipt,
+    });
+  } catch {
+    // Evidence failure must not block completion.
+  }
+}
+
 const FAILURE_STAGES = new Set(['planning', 'hermes', 'approval', 'codex', 'verification', 'commit']);
 const safeFailure = (result: Extract<ProjectTaskWorkflowResult, { ok: false }>): SafeTaskError => {
   if (!FAILURE_STAGES.has(result.stage) || !Object.hasOwn(SAFE_TASK_ERROR_MESSAGES, result.error)) return genericFailure();
@@ -69,7 +125,7 @@ export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: P
         ...(dependencies.executeWorkflow !== undefined ? { executeWorkflow: dependencies.executeWorkflow } : {}),
       });
       void run.then((result) => {
-        if (result.ok) { const receipt = safeReceipt(result); if (receipt) dependencies.store.complete(taskId, receipt); else dependencies.store.fail(taskId, genericFailure()); }
+        if (result.ok) { const receipt = safeReceipt(result); if (receipt) { tryRecordCompletionEvidence(dependencies.store, taskId, receipt); dependencies.store.complete(taskId, receipt); } else dependencies.store.fail(taskId, genericFailure()); }
         else if (result.error === 'local_resume_available') {
           // Layer 13: the task keeps its durable resumable state (non-terminal,
           // validated proposal snapshot available). It is NOT terminalized and
@@ -150,7 +206,7 @@ export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: P
     void run.then((result) => {
       if (result.ok) {
         const receipt = safeReceipt(result);
-        if (receipt) dependencies.store.complete(taskId, receipt);
+        if (receipt) { tryRecordCompletionEvidence(dependencies.store, taskId, receipt); dependencies.store.complete(taskId, receipt); }
         else dependencies.store.fail(taskId, genericFailure());
       } else if (result.error === 'local_resume_available') {
         // Still resumable — resume decision hasn't been reached.

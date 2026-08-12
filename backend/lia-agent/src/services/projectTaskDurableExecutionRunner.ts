@@ -81,7 +81,9 @@ export function hasProjectTaskDurableExecutionPrimitives(
     && typeof store.recordCommitStartEvidence === 'function'
     && typeof store.recordCommitResultEvidence === 'function'
     && typeof store.readCommitStartEvidenceByTask === 'function'
-    && typeof store.readCommitResultEvidence === 'function';
+    && typeof store.readCommitResultEvidence === 'function'
+    && typeof store.recordCompletionEvidence === 'function'
+    && typeof store.readCompletionEvidence === 'function';
 }
 
 export type ProjectTaskDurableExecutionRunnerOptions = {

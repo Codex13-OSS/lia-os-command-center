@@ -267,8 +267,8 @@ test('Layer 14: recovery terminalizes tasks with refused resume decisions', asyn
   });
 });
 
-test('Layer 15: schema version is V16', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 16);
+test('Layer 15: schema version is V17', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
 });
 
 test('Layer 14: migration adds resume_decisions table and triggers', async () => {
@@ -1399,8 +1399,8 @@ test('Layer 16: no authority/capability expansion in the codex-skip branch', asy
 // Layer 16: Migration compatibility
 // ===========================================================================
 
-test('Layer 16: schema version unchanged at V16', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 16);
+test('Layer 16: schema version is V17', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 17);
 });
 
 test('Layer 16: V16 database has codex evidence tables with zero manufactured rows', async () => {

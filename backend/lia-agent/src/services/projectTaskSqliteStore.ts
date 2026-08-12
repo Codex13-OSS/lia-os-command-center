@@ -172,6 +172,15 @@ import {
   PROJECT_TASK_COMMIT_EVIDENCE_ERRORS,
 } from '../contracts/projectTaskCommitEvidence.js';
 import type {
+  ProjectTaskCompletionEvidenceRecord,
+  RecordCompletionEvidenceInput,
+  RecordCompletionEvidenceResult,
+  ProjectTaskCompletionEvidenceStore,
+} from '../contracts/projectTaskCompletionEvidence.js';
+import {
+  PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS,
+} from '../contracts/projectTaskCompletionEvidence.js';
+import type {
   AcquireProjectTaskLeaseInput,
   ProjectTaskLeaseAuthority,
   ProjectTaskLeaseRecord,
@@ -475,6 +484,21 @@ type CommitResultEvidenceRow = {
   result_recorded_at: unknown;
 };
 
+type CompletionEvidenceRow = {
+  completion_evidence_id: unknown;
+  task_id: unknown;
+  execution_run_id: unknown;
+  invocation_id: unknown;
+  launch_attempt_id: unknown;
+  launch_result_id: unknown;
+  snapshot_id: unknown;
+  codex_start_id: unknown;
+  verification_start_id: unknown;
+  commit_start_id: unknown;
+  receipt_json: unknown;
+  recorded_at: unknown;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -532,7 +556,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore, ProjectTaskVerificationEvidenceStore, ProjectTaskCommitEvidenceStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore, ProjectTaskVerificationEvidenceStore, ProjectTaskCommitEvidenceStore, ProjectTaskCompletionEvidenceStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -3090,12 +3114,22 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           || codexStartIds.has(start.codexStartId)
           || codexStartTaskIds.has(start.taskId)
         ) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
-        // Validate lineage chain: the start must reference a task with status in ('hermes', 'codex')
-        // that has a launch attempt, a proposal_valid launch result, and a matching snapshot.
+        // Validate lineage chain: the start must reference a non-terminal task
+        // with status in ('hermes', 'codex', 'verification', 'commit').
+        // Later Layers (16/17/18) legitimately advance task status past
+        // 'codex' while Codex evidence remains valid; rejecting those
+        // statuses here would corrupt otherwise-valid recovery data.
+        // Terminal tasks (completed/failed) are already excluded by
+        // terminal_at !== null.
         const startTask = rows.find((r) => r.task_id === start.taskId);
         if (
           startTask === undefined
-          || (startTask.status !== 'hermes' && startTask.status !== 'codex')
+          || (
+            startTask.status !== 'hermes'
+            && startTask.status !== 'codex'
+            && startTask.status !== 'verification'
+            && startTask.status !== 'commit'
+          )
           || startTask.terminal_at !== null
         ) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
         if (!launchAttemptByTask.has(start.taskId)) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
@@ -3160,11 +3194,19 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           || verifyStartByTask.has(start.taskId)
           || verifyStartIds.has(start.verificationStartId)
         ) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
-        // Must reference a valid task with compatible status
+        // Must reference a valid task with compatible status.
+        // A task at 'commit' legitimately still has verification
+        // evidence (Layer 17: status transitions past 'verification'
+        // after evidence is recorded). Terminal tasks are excluded
+        // by the terminal_at guard below.
         const verifyTask = rows.find((r) => r.task_id === start.taskId);
         if (
           verifyTask === undefined
-          || (verifyTask.status !== 'codex' && verifyTask.status !== 'verification')
+          || (
+            verifyTask.status !== 'codex'
+            && verifyTask.status !== 'verification'
+            && verifyTask.status !== 'commit'
+          )
           || verifyTask.terminal_at !== null
         ) throw new Error(PROJECT_TASK_VERIFICATION_EVIDENCE_ERRORS.corruptRecord);
         // Must reference a valid codex start with codex_success
@@ -3256,6 +3298,38 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         commitResultIds.add(result.commitResultId);
       }
 
+      // Layer 18 completion evidence pre-pass: query and validate.
+      // EVERY completion evidence row must reference a valid task with valid
+      // receipt JSON. ONE row per task (unique index enforced at table level).
+      // ANY violation aborts the WHOLE recovery transaction atomically.
+      const completionEvidenceRows = this.database.prepare(`
+        SELECT completion_evidence_id, task_id, execution_run_id,
+               invocation_id, launch_attempt_id, launch_result_id, snapshot_id,
+               codex_start_id, verification_start_id, commit_start_id,
+               receipt_json, recorded_at
+        FROM project_task_completion_evidence
+        ORDER BY task_id ASC
+      `).all() as unknown as CompletionEvidenceRow[];
+
+      const completionEvidenceByTask = new Map<string, ProjectTaskCompletionEvidenceRecord>();
+      const completionEvidenceIds = new Set<string>();
+      for (const row of completionEvidenceRows) {
+        const evidence = this.decodeCompletionEvidenceRow(row);
+        if (
+          !taskIds.has(evidence.taskId)
+          || completionEvidenceByTask.has(evidence.taskId)
+          || completionEvidenceIds.has(evidence.completionEvidenceId)
+        ) throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+        // Validate the receipt JSON parses to a safe receipt
+        let receipt: unknown;
+        try { receipt = JSON.parse(evidence.receiptJson); } catch { throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord); }
+        if (!isSafeTaskReceipt(receipt)) throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+        completionEvidenceByTask.set(evidence.taskId, evidence);
+        completionEvidenceIds.add(evidence.completionEvidenceId);
+      }
+
+      let restartedCompleted = 0;
+
       let codexStartNotRecordedTaskIds: string[] = [];
       let codexResultNotRecordedTaskIds: string[] = [];
       let codexSuccessTaskIds: Array<{ taskId: string; codexStartId: string }> = [];
@@ -3318,70 +3392,85 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           terminalUnchanged += 1;
           continue;
         }
+        // Layer 18: delegate tasks with completion evidence to the
+        // post-processing completion bridge (below).  Do NOT classify or
+        // terminalize them here — the bridge owns the closed-chain
+        // completion decision with full cross-validation.
+        if (completionEvidenceByTask.has(task.taskId)) {
+          continue;
+        }
         if (launchAttemptByTask.has(task.taskId)) {
-          const result = launchResultByTask.get(task.taskId);
-          if (result === undefined) {
-            ambiguousLaunchTaskIds = [...ambiguousLaunchTaskIds, task.taskId];
-          } else if (
-            result.outcomeClass === 'proposal_valid'
-            && snapshotByTask.has(task.taskId)
-            && (
-              task.status === 'accepted'
-              || task.status === 'planning'
-              || task.status === 'hermes'
-            )
-          ) {
-            // Layer 13-14 recovery cases 4/10/11: a pre-Codex task (status
-            // below 'codex', so the Codex call is provably NOT started)
-            // carrying a validated proposal snapshot.
-            // - Case 4 (no resume decision): preserved resumable
-            // - Case 10 (refused decision): force-terminalize resume_refused
-            // - Case 11 (approved decision): preserved resumable
-            const resumeDecision = resumeDecisionByTask.get(task.taskId);
-            if (resumeDecision !== undefined && resumeDecision.decision === 'refused') {
-              // Case 10: resume decision 'refused' on pre-Codex task but
-              // not yet terminalized → force-terminalize with resume_refused.
-              refusedResumeTaskIds = [...refusedResumeTaskIds, task.taskId];
-            } else {
-              // Case 4 (no resume decision) or Case 11 (approved):
-              // preserved resumable. Status is normalized to 'hermes' and
-              // the active trace to ['planning','hermes'] (idempotent).
-              // Zero Hermes, zero Codex, zero new attempt/result/lease
-              // operations. Approval and blocked-action facts stay gated
-              // via the snapshot.
-              resumableTaskIds = [...resumableTaskIds, task.taskId];
-            }
-          } else if (
-            result.outcomeClass === 'proposal_valid'
-            && snapshotByTask.has(task.taskId)
-          ) {
-            // Layer 14 recovery case 12: proposal_valid + snapshot but task
-            // status >= 'codex' → Codex MAY have started. Check if there's an
-            // approved resume decision (which means we authorized resume but
-            // Codex may have started). Either way, fail closed.
-            const resumeDecision = resumeDecisionByTask.get(task.taskId);
-            if (
-              resumeDecision !== undefined
-              && resumeDecision.decision === 'approved'
+          // Layer 17: tasks at 'verification' or 'commit' have progressed
+          // past the ambiguous-launch boundary.  Delegate to the
+          // status-specific evidence handlers below instead of the generic
+          // launch-attempt classification path (which would incorrectly
+          // terminalize tasks whose evidence chain proves success).
+          if (task.status !== 'verification' && task.status !== 'commit') {
+            const result = launchResultByTask.get(task.taskId);
+            if (result === undefined) {
+              ambiguousLaunchTaskIds = [...ambiguousLaunchTaskIds, task.taskId];
+            } else if (
+              result.outcomeClass === 'proposal_valid'
+              && snapshotByTask.has(task.taskId)
+              && (
+                task.status === 'accepted'
+                || task.status === 'planning'
+                || task.status === 'hermes'
+              )
             ) {
-              // Case 12: approved + status >= 'codex' → workflow_interrupted.
-              knownOutcomeTaskIds = [
-                ...knownOutcomeTaskIds,
-                { taskId: task.taskId, outcomeClass: 'proposal_valid' },
-              ];
+              // Layer 13-14 recovery cases 4/10/11: a pre-Codex task (status
+              // below 'codex', so the Codex call is provably NOT started)
+              // carrying a validated proposal snapshot.
+              // - Case 4 (no resume decision): preserved resumable
+              // - Case 10 (refused decision): force-terminalize resume_refused
+              // - Case 11 (approved decision): preserved resumable
+              const resumeDecision = resumeDecisionByTask.get(task.taskId);
+              if (resumeDecision !== undefined && resumeDecision.decision === 'refused') {
+                // Case 10: resume decision 'refused' on pre-Codex task but
+                // not yet terminalized → force-terminalize with resume_refused.
+                refusedResumeTaskIds = [...refusedResumeTaskIds, task.taskId];
+              } else {
+                // Case 4 (no resume decision) or Case 11 (approved):
+                // preserved resumable. Status is normalized to 'hermes' and
+                // the active trace to ['planning','hermes'] (idempotent).
+                // Zero Hermes, zero Codex, zero new attempt/result/lease
+                // operations. Approval and blocked-action facts stay gated
+                // via the snapshot.
+                resumableTaskIds = [...resumableTaskIds, task.taskId];
+              }
+            } else if (
+              result.outcomeClass === 'proposal_valid'
+              && snapshotByTask.has(task.taskId)
+            ) {
+              // Layer 14 recovery case 12: proposal_valid + snapshot but task
+              // status >= 'codex' → Codex MAY have started. Check if there's an
+              // approved resume decision (which means we authorized resume but
+              // Codex may have started). Either way, fail closed.
+              const resumeDecision = resumeDecisionByTask.get(task.taskId);
+              if (
+                resumeDecision !== undefined
+                && resumeDecision.decision === 'approved'
+              ) {
+                // Case 12: approved + status >= 'codex' → workflow_interrupted.
+                knownOutcomeTaskIds = [
+                  ...knownOutcomeTaskIds,
+                  { taskId: task.taskId, outcomeClass: 'proposal_valid' },
+                ];
+              } else {
+                knownOutcomeTaskIds = [
+                  ...knownOutcomeTaskIds,
+                  { taskId: task.taskId, outcomeClass: result.outcomeClass },
+                ];
+              }
             } else {
               knownOutcomeTaskIds = [
                 ...knownOutcomeTaskIds,
                 { taskId: task.taskId, outcomeClass: result.outcomeClass },
               ];
             }
-          } else {
-            knownOutcomeTaskIds = [
-              ...knownOutcomeTaskIds,
-              { taskId: task.taskId, outcomeClass: result.outcomeClass },
-            ];
+            continue;
           }
-          continue;
+          // Fall through to status-specific handlers for verification/commit
         }
         // Layer 15: status='codex' recovery.
         // The Codex phase has been entered (status transition was durable).
@@ -3653,6 +3742,115 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
           throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
         }
         upsertTrace.run(taskId, JSON.stringify(['planning']));
+      }
+
+      // Layer 18: Post-processing completion bridge.
+      // For non-terminal tasks with valid completion evidence, safely
+      // complete them without replaying any prior non-idempotent operation.
+      // Evidence is state-only — never authority. Completion only occurs
+      // when ALL lineage links + receipt cross-validation pass.
+      for (const row of rows) {
+        const taskId = row.task_id as string;
+        // Skip already-terminal tasks
+        if (row.status === 'completed' || row.status === 'failed') continue;
+        // Skip tasks without completion evidence (no crash window to close)
+        const evidence = completionEvidenceByTask.get(taskId);
+        if (evidence === undefined) continue;
+
+        // Validate lineage integrity: every ID in the chain must
+        // reference the correct task.
+        const executionRun = executionRunByTask.get(taskId);
+        if (
+          executionRun === undefined
+          || executionRun.executionRunId !== evidence.executionRunId
+        ) continue; // Fail closed — broken lineage
+
+        // invocation is keyed by executionRunId (unique), we need to verify
+        // Find invocation for this task
+        let invocationMatch = false;
+        for (const invRow of invocationRows) {
+          if (invRow.task_id === taskId && invRow.invocation_id === evidence.invocationId && invRow.execution_run_id === evidence.executionRunId) {
+            invocationMatch = true;
+            break;
+          }
+        }
+        if (!invocationMatch) continue;
+
+        if (!launchAttemptByTask.has(taskId)) continue;
+        const launchAttempt = launchAttemptByTask.get(taskId)!;
+        if (launchAttempt.invocationId !== evidence.invocationId || launchAttempt.launchAttemptId !== evidence.launchAttemptId) continue;
+
+        if (!launchResultByTask.has(taskId)) continue;
+        const launchResult = launchResultByTask.get(taskId)!;
+        if (launchResult.launchAttemptId !== evidence.launchAttemptId || launchResult.launchResultId !== evidence.launchResultId) continue;
+
+        if (!snapshotByTask.has(taskId)) continue;
+        const snapshot = snapshotByTask.get(taskId)!;
+        if (snapshot.launchResultId !== evidence.launchResultId || snapshot.snapshotId !== evidence.snapshotId) continue;
+
+        // Parse and validate receipt
+        let receipt: SafeTaskReceipt;
+        try {
+          const parsed = JSON.parse(evidence.receiptJson);
+          if (!isSafeTaskReceipt(parsed)) continue;
+          receipt = parsed;
+        } catch { continue; }
+
+        // Cross-validate codex evidence if provided
+        if (evidence.codexStartId !== null) {
+          const codexStart = codexStartByTask.get(taskId);
+          if (codexStart === undefined || codexStart.codexStartId !== evidence.codexStartId) continue;
+          const codexResult = codexResultByStart.get(evidence.codexStartId);
+          if (codexResult === undefined) continue;
+          if (receipt.status !== 'analyzed' && codexResult.outcome !== 'codex_success') continue;
+        }
+
+        // Cross-validate verification evidence if status requires it
+        if (receipt.status === 'verified' || receipt.status === 'committed') {
+          if (evidence.verificationStartId === null) continue;
+          const verifyStart = verifyStartByTask.get(taskId);
+          if (verifyStart === undefined || verifyStart.verificationStartId !== evidence.verificationStartId) continue;
+          const verifyResult = verifyResultByStart.get(evidence.verificationStartId);
+          if (verifyResult === undefined || verifyResult.status !== 'verified') continue;
+          // Cross-validate checksPassed/totalChecks match receipt
+          if (receipt.verification !== undefined) {
+            if (receipt.verification.checksPassed !== verifyResult.checksPassed) continue;
+            if (receipt.verification.totalChecks !== verifyResult.totalChecks) continue;
+          }
+        }
+
+        // Cross-validate commit evidence if status requires it
+        if (receipt.status === 'committed') {
+          if (evidence.commitStartId === null) continue;
+          const commitStart = commitStartByTask.get(taskId);
+          if (commitStart === undefined || commitStart.commitStartId !== evidence.commitStartId) continue;
+          const commitResult = commitResultByStart.get(evidence.commitStartId);
+          if (commitResult === undefined || commitResult.status !== 'committed') continue;
+          // Cross-validate commit SHA
+          if (receipt.commit !== undefined && commitResult.commitSha !== receipt.commit) continue;
+        }
+
+        // All validations passed — safely complete the task.
+        // Do NOT call this.complete() here — we are already inside the
+        // reconciliation inTransaction() and complete() starts another
+        // inTransaction(), which would cause a nested-transaction error.
+        // Perform the equivalent terminal completion UPDATE directly.
+        // Atomic, fail-closed: skip already-terminal rows.
+        const completionNow = this.now();
+        const completionResult = this.database.prepare(`
+          UPDATE project_tasks
+          SET status = 'completed', receipt_json = ?,
+              updated_at = ?, terminal_at = ?
+          WHERE task_id = ? AND status NOT IN ('completed', 'failed')
+        `).run(JSON.stringify(receipt), completionNow, completionNow, taskId);
+        if (Number(completionResult.changes) !== 1) {
+          // Task was already terminal or doesn't exist — not an error, skip.
+          continue;
+        }
+        this.database.prepare(
+          'DELETE FROM project_task_active_stage_traces WHERE task_id = ?',
+        ).run(taskId);
+        restartedCompleted += 1;
       }
 
       return {
@@ -5561,6 +5759,129 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         WHERE verification_start_id = ?
       `).get(verificationStartId) as unknown as VerificationResultEvidenceRow | undefined;
       return row === undefined ? undefined : this.decodeVerificationResultEvidenceRow(row);
+    });
+  }
+
+  // --- Completion Evidence Store API ---
+
+  private decodeCompletionEvidenceRow(row: CompletionEvidenceRow): ProjectTaskCompletionEvidenceRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+    if (typeof row.completion_evidence_id !== 'string' || !PROJECT_TASK_ID.test(row.completion_evidence_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.execution_run_id !== 'string' || !PROJECT_TASK_ID.test(row.execution_run_id)) throw corrupt();
+    if (typeof row.invocation_id !== 'string' || !PROJECT_TASK_ID.test(row.invocation_id)) throw corrupt();
+    if (typeof row.launch_attempt_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_attempt_id)) throw corrupt();
+    if (typeof row.launch_result_id !== 'string' || !PROJECT_TASK_ID.test(row.launch_result_id)) throw corrupt();
+    if (typeof row.snapshot_id !== 'string' || !PROJECT_TASK_ID.test(row.snapshot_id)) throw corrupt();
+    if (row.codex_start_id !== null && (typeof row.codex_start_id !== 'string' || !PROJECT_TASK_ID.test(row.codex_start_id))) throw corrupt();
+    if (row.verification_start_id !== null && (typeof row.verification_start_id !== 'string' || !PROJECT_TASK_ID.test(row.verification_start_id))) throw corrupt();
+    if (row.commit_start_id !== null && (typeof row.commit_start_id !== 'string' || !PROJECT_TASK_ID.test(row.commit_start_id))) throw corrupt();
+    if (typeof row.receipt_json !== 'string') throw corrupt();
+    let parsed: unknown;
+    try { parsed = JSON.parse(row.receipt_json); } catch { throw corrupt(); }
+    if (!isSafeTaskReceipt(parsed)) throw corrupt();
+    if (
+      !isNonNegativeInteger(row.recorded_at)
+      || !Number.isSafeInteger(row.recorded_at)
+      || row.recorded_at > 9007199254740991
+    ) throw corrupt();
+    return {
+      completionEvidenceId: row.completion_evidence_id,
+      taskId: row.task_id,
+      executionRunId: row.execution_run_id,
+      invocationId: row.invocation_id,
+      launchAttemptId: row.launch_attempt_id,
+      launchResultId: row.launch_result_id,
+      snapshotId: row.snapshot_id,
+      codexStartId: row.codex_start_id as string | null,
+      verificationStartId: row.verification_start_id as string | null,
+      commitStartId: row.commit_start_id as string | null,
+      receiptJson: row.receipt_json,
+      recordedAt: row.recorded_at,
+    };
+  }
+
+  recordCompletionEvidence(input: RecordCompletionEvidenceInput): RecordCompletionEvidenceResult {
+    return this.inTransaction(() => {
+      if (!isRecord(input)) throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      const { taskId, executionRunId, invocationId, launchAttemptId, launchResultId, snapshotId, codexStartId, verificationStartId, commitStartId, receipt } = input;
+      if (Object.keys(input).length !== 10) throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      if (![taskId, executionRunId, invocationId, launchAttemptId, launchResultId, snapshotId].every(
+        (id) => typeof id === 'string' && PROJECT_TASK_ID.test(id),
+      )) throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      if (codexStartId !== null && (typeof codexStartId !== 'string' || !PROJECT_TASK_ID.test(codexStartId))) {
+        throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (verificationStartId !== null && (typeof verificationStartId !== 'string' || !PROJECT_TASK_ID.test(verificationStartId))) {
+        throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (commitStartId !== null && (typeof commitStartId !== 'string' || !PROJECT_TASK_ID.test(commitStartId))) {
+        throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      if (!isRecord(receipt) || !isSafeTaskReceipt(receipt)) {
+        throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const receiptJson = JSON.stringify(receipt);
+
+      const existingRow = this.database.prepare(`
+        SELECT completion_evidence_id, task_id, execution_run_id,
+               invocation_id, launch_attempt_id, launch_result_id, snapshot_id,
+               codex_start_id, verification_start_id, commit_start_id,
+               receipt_json, recorded_at
+        FROM project_task_completion_evidence
+        WHERE task_id = ?
+      `).get(taskId) as unknown as CompletionEvidenceRow | undefined;
+
+      if (existingRow !== undefined) {
+        if (existingRow.receipt_json === receiptJson) {
+          return { completionEvidence: this.decodeCompletionEvidenceRow(existingRow), created: false };
+        }
+        throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.contradictory);
+      }
+
+      const now = this.now();
+      if (!Number.isSafeInteger(now) || now < 0 || now > 9007199254740991) {
+        throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const completionEvidenceId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_task_completion_evidence
+          (completion_evidence_id, task_id, execution_run_id, invocation_id,
+           launch_attempt_id, launch_result_id, snapshot_id, codex_start_id,
+           verification_start_id, commit_start_id, receipt_json, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(completionEvidenceId, taskId, executionRunId, invocationId,
+        launchAttemptId, launchResultId, snapshotId, codexStartId,
+        verificationStartId, commitStartId, receiptJson, now);
+
+      const inserted = this.database.prepare(`
+        SELECT completion_evidence_id, task_id, execution_run_id,
+               invocation_id, launch_attempt_id, launch_result_id, snapshot_id,
+               codex_start_id, verification_start_id, commit_start_id,
+               receipt_json, recorded_at
+        FROM project_task_completion_evidence
+        WHERE completion_evidence_id = ?
+      `).get(completionEvidenceId) as unknown as CompletionEvidenceRow | undefined;
+
+      if (inserted === undefined) throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      return { completionEvidence: this.decodeCompletionEvidenceRow(inserted), created: true };
+    });
+  }
+
+  readCompletionEvidence(taskId: string): ProjectTaskCompletionEvidenceRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_TASK_COMPLETION_EVIDENCE_ERRORS.corruptRecord);
+      }
+      const row = this.database.prepare(`
+        SELECT completion_evidence_id, task_id, execution_run_id,
+               invocation_id, launch_attempt_id, launch_result_id, snapshot_id,
+               codex_start_id, verification_start_id, commit_start_id,
+               receipt_json, recorded_at
+        FROM project_task_completion_evidence
+        WHERE task_id = ?
+      `).get(taskId) as unknown as CompletionEvidenceRow | undefined;
+      return row === undefined ? undefined : this.decodeCompletionEvidenceRow(row);
     });
   }
 
