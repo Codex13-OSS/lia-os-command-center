@@ -5,6 +5,7 @@ import { createProjectRegistryFileSource } from './services/projectRegistryFileS
 import { createFileProjectVerificationRegistry } from './services/projectVerificationFileSource.js';
 import { createProjectTaskStore } from './services/projectTaskStoreFactory.js';
 import { reconcileProjectTasksAtStartup } from './services/projectTaskReconciliation.js';
+import { createProjectSupervisorSchedulingRuntime } from './services/projectSupervisorSchedulingRuntime.js';
 
 const config = loadConfig();
 const projectTaskStore = createProjectTaskStore(config);
@@ -13,22 +14,48 @@ const projectTaskStore = createProjectTaskStore(config);
 // work fails closed, and a recovery failure prevents app.listen.
 reconcileProjectTasksAtStartup(projectTaskStore);
 
+const projectRegistrySource = config.projectRegistryPath === ''
+  ? undefined
+  : createProjectRegistryFileSource(config.projectRegistryPath);
+const projectVerificationRegistry = config.projectVerificationPath === ''
+  ? undefined
+  : createFileProjectVerificationRegistry(config.projectVerificationPath);
+
 const dependencies = {
   ...(config.agendaSqlitePath === ''
     ? {}
     : { agendaReadSource: createAgendaSqliteReadSource(config.agendaSqlitePath) }),
-  ...(config.projectRegistryPath === ''
-    ? {}
-    : { projectRegistrySource: createProjectRegistryFileSource(config.projectRegistryPath) }),
-  ...(config.projectVerificationPath === ''
-    ? {}
-    : {
-        projectVerificationRegistry:
-          createFileProjectVerificationRegistry(config.projectVerificationPath),
-      }),
+  ...(projectRegistrySource !== undefined ? { projectRegistrySource } : {}),
+  ...(projectVerificationRegistry !== undefined ? { projectVerificationRegistry } : {}),
   projectTaskStore,
 };
-const app = createApp(config, dependencies);
+
+// Supervisor Scheduling Runtime Wiring (design: supervisor-scheduling-runtime-wiring-design.md).
+// Default OFF (LIA_SUPERVISOR_ENABLED=false): like the bounded pass it drives,
+// the runtime ships inert unless explicitly enabled. When enabled, exactly ONE
+// bounded reconciliation opportunity is requested per process startup, strictly
+// AFTER durable recovery/reconciliation and BEFORE listen. The wakeup is
+// coalesced and single-flight, and the pass itself re-derives everything from
+// durable rows: a process restart recovers from durable evidence, never from a
+// surviving callback. The structural store guard keeps the in-memory store
+// (which has no goal surface) in the unsupported state.
+const projectSupervisorRuntime = config.supervisorEnabled
+  ? createProjectSupervisorSchedulingRuntime({
+      store: projectTaskStore,
+      config,
+      ...(projectRegistrySource !== undefined ? { registry: projectRegistrySource } : {}),
+      ...(projectVerificationRegistry !== undefined ? { verificationRegistry: projectVerificationRegistry } : {}),
+    })
+  : undefined;
+
+if (projectSupervisorRuntime !== undefined) {
+  projectSupervisorRuntime.requestPass('startup');
+}
+
+const app = createApp(config, {
+  ...dependencies,
+  ...(projectSupervisorRuntime !== undefined ? { projectSupervisorRuntime } : {}),
+});
 const server = app.listen(config.port, config.host, () => {
   if (config.logLevel !== 'silent') {
     console.log(`LIA agent TypeScript backend listening on http://${config.host}:${config.port}`);

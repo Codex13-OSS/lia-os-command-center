@@ -23,9 +23,11 @@ import {
 import { createStatusRouter } from './routes/status.js';
 import { createSameOriginStatusRouter } from './routes/sameOriginStatus.js';
 import { createProjectTasksRouter, type ProjectTasksDependencies } from './routes/projectTasks.js';
+import { createProjectSupervisorRouter } from './routes/projectSupervisor.js';
 import { InMemoryProjectTaskStore } from './services/inMemoryProjectTaskStore.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
 import type { HermesQueryExecutor } from './services/hermesExecutor.js';
+import type { ProjectSupervisorSchedulingRuntime } from './services/projectSupervisorSchedulingRuntime.js';
 
 export type LiaAgentDependencies = {
   agendaReadSource?: AgendaReadSource;
@@ -37,6 +39,7 @@ export type LiaAgentDependencies = {
   projectTaskWorkflowExecutor?: ProjectTaskWorkflowExecutor;
   projectTaskStore?: ProjectTasksDependencies['store'];
   projectTasksWorkflowExecutor?: ProjectTasksDependencies['executeWorkflow'];
+  projectSupervisorRuntime?: ProjectSupervisorSchedulingRuntime;
 };
 
 export function createApp(
@@ -91,6 +94,7 @@ export function createApp(
     verificationRegistry: dependencies.projectVerificationRegistry,
     executeWorkflow: dependencies.projectTasksWorkflowExecutor,
   }));
+  app.use(createProjectSupervisorRouter(dependencies.projectSupervisorRuntime));
   app.use(notFound);
   app.use(errorHandler);
 

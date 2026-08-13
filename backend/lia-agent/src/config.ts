@@ -19,6 +19,7 @@ export type LiaAgentConfig = {
   hermesModel: string;
   hermesTimeoutMs: number;
   hermesMaxQueryCharacters: number;
+  supervisorEnabled: boolean;
   logLevel: 'silent' | 'error' | 'warn' | 'info';
 };
 
@@ -218,6 +219,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LiaAgentConfig
       8_000,
       'invalid_lia_hermes_max_query_characters',
     ),
+    supervisorEnabled: parseBoolean(env.LIA_SUPERVISOR_ENABLED),
     logLevel: parseLogLevel(env.LIA_AGENT_LOG_LEVEL),
   };
 }
