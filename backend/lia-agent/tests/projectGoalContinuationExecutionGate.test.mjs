@@ -804,5 +804,5 @@ test('EG-27: no Hermes, Codex, workflow, dispatch or execution authority exists 
   // The gate's sole authority write is the existing materializeContinuation.
   assert.equal(storeSource.includes('materializeContinuation'), true);
   // Schema version advanced to V18 for the approval table.
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 19);
 });

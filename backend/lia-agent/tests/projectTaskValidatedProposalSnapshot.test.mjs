@@ -345,7 +345,7 @@ test('1. V12 -> V13 migration is purely additive: rows byte-identical, schema 13
     v12.close();
 
     const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
+    assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 19);
     assert.equal(
       migrated.readTaskExecutionLaunchAttempt(attempt.launchAttemptId).launchAttemptId,
       attempt.launchAttemptId,
@@ -427,13 +427,13 @@ test('3. V4 and V9 migration chains reach V13 additively with zero manufactured 
       legacy.close();
 
       const migrated = new ProjectTaskSqliteStore({ databasePath, now: () => 2_000 });
-      assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
+      assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 19);
       assert.equal(migrated.get(TASK_A).fingerprint, 'fp-a');
       migrated.close();
 
       const check = new DatabaseSync(databasePath);
       assert.equal(JSON.stringify(check.prepare('SELECT * FROM project_tasks ORDER BY rowid').all()), beforeTasks, label);
-      assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 18, label);
+      assert.equal(check.prepare('SELECT schema_version FROM project_task_meta').get().schema_version, 19, label);
       assert.equal(check.prepare('SELECT COUNT(*) AS total FROM project_task_validated_proposal_snapshots').get().total, 0, label);
       check.close();
     } finally { await rm(directory, { recursive: true, force: true }); }
@@ -1153,8 +1153,8 @@ test('29. corrupt rows fail closed: recovery aborts atomically and reads throw c
 // ===========================================================================
 // 30. Schema version and guard contract.
 // ===========================================================================
-test('30. migration chain asserts SCHEMA_VERSION 18 in every affected test file', async () => {
-  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18);
+test('30. migration chain asserts SCHEMA_VERSION 19 in every affected test file', async () => {
+  assert.equal(PROJECT_TASK_SQLITE_SCHEMA_VERSION, 19);
   for (const file of [
     'projectTaskDispatch.test.mjs',
     'projectTaskDurableExecutionRunner.test.mjs',
@@ -1165,7 +1165,7 @@ test('30. migration chain asserts SCHEMA_VERSION 18 in every affected test file'
     'projectTaskRecovery.test.mjs',
   ]) {
     const source = await readFile(new URL(`../tests/${file}`, import.meta.url), 'utf8');
-    assert.equal(source.includes('PROJECT_TASK_SQLITE_SCHEMA_VERSION, 18'), true, file);
+    assert.equal(source.includes('PROJECT_TASK_SQLITE_SCHEMA_VERSION, 19'), true, file);
     assert.equal(source.includes('PROJECT_TASK_SQLITE_SCHEMA_VERSION, 14'), false, file);
   }
 });

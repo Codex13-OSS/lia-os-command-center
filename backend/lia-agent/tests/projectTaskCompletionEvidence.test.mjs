@@ -559,7 +559,7 @@ test('T11: restart recovery does NOT complete when commit SHA mismatches', async
 // ============================================================
 // T12: V16→V18 migration
 // ============================================================
-test('T12: V16 schema migrates to V18 additively', async () => {
+test('T12: V16 schema migrates to V19 additively', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lia-layer18-migrate-'));
   const databasePath = join(directory, 'tasks.sqlite');
   try {
@@ -582,7 +582,7 @@ test('T12: V16 schema migrates to V18 additively', async () => {
       const dbCheck = new DatabaseSync(databasePath);
       try {
         const meta = dbCheck.prepare('SELECT schema_version FROM project_task_meta WHERE singleton = 1').get();
-        assert.equal(meta.schema_version, PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION);
+        assert.equal(meta.schema_version, PROJECT_TASK_SQLITE_SCHEMA_VERSION);
         assert.equal(meta.schema_version, PROJECT_TASK_SQLITE_SCHEMA_VERSION);
 
         // Verify the table exists

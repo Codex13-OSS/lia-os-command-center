@@ -20,7 +20,8 @@ export const PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION = 15;
 export const PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION = 16;
 export const PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION = 17;
 export const PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION = 18;
-export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 18;
+export const PROJECT_TASK_SQLITE_SCHEMA_V19_VERSION = 19;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 19;
 
 export const PROJECT_TASK_SQLITE_STAGES = [
   'accepted',
@@ -117,6 +118,7 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION
     && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V19_VERSION
   ) {
     throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
   }
@@ -1908,6 +1910,199 @@ export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync
       END
     `);
     meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION) {
+    // Autonomous Continuation Execution Policy V1: two additive durable
+    // records — the per-goal autonomy policy and the per-step execution
+    // authorization. Purely additive: two new tables with insert-validation,
+    // identity-immutability, one-way-control and delete-immutability triggers.
+    // ZERO rows are manufactured for existing data. IF NOT EXISTS keeps
+    // migration idempotent so test rewind scripts that set schema_version back
+    // to 18 do not crash when the V19 tables (created during initial store
+    // construction) already exist.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V19_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_goal_autonomy_policies (
+        policy_id TEXT PRIMARY KEY CHECK (
+          length(policy_id) = 36
+          AND substr(policy_id, 9, 1) = '-'
+          AND substr(policy_id, 14, 1) = '-'
+          AND substr(policy_id, 19, 1) = '-'
+          AND substr(policy_id, 24, 1) = '-'
+          AND policy_id = lower(policy_id)
+          AND replace(policy_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        goal_id TEXT NOT NULL UNIQUE CHECK (goal_id <> ''),
+        mode TEXT NOT NULL CHECK (mode IN (
+          'manual_only', 'approved_single_step', 'bounded_autonomous'
+        )),
+        suspended_at INTEGER CHECK (suspended_at IS NULL OR suspended_at >= 0),
+        expires_at INTEGER CHECK (expires_at IS NULL OR expires_at > 0),
+        revoked_at INTEGER CHECK (revoked_at IS NULL OR revoked_at >= 0),
+        max_cycles INTEGER CHECK (max_cycles IS NULL OR (max_cycles BETWEEN 1 AND 5)),
+        elapsed_budget_ms INTEGER CHECK (elapsed_budget_ms IS NULL OR elapsed_budget_ms > 0),
+        approver TEXT NOT NULL CHECK (
+          length(approver) BETWEEN 1 AND 200 AND approver = trim(approver)
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+        fingerprint TEXT NOT NULL CHECK (
+          length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        CHECK (
+          (mode = 'bounded_autonomous')
+          OR (max_cycles IS NULL AND elapsed_budget_ms IS NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_goal_autonomy_policies_goal
+      ON project_goal_autonomy_policies(goal_id);
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_validate_insert
+      BEFORE INSERT ON project_goal_autonomy_policies
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_goals WHERE goal_id = NEW.goal_id AND status = 'active'
+        ) THEN RAISE(ABORT, 'project_goal_autonomy_policy_goal_terminal') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_identity_immutable
+      BEFORE UPDATE OF policy_id, goal_id, mode, approver, created_at, fingerprint,
+                       max_cycles, elapsed_budget_ms, expires_at
+      ON project_goal_autonomy_policies
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_autonomy_policy_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_suspend_resume
+      BEFORE UPDATE OF suspended_at ON project_goal_autonomy_policies
+      WHEN NOT (
+        (OLD.suspended_at IS NULL AND NEW.suspended_at IS NOT NULL
+          AND NEW.suspended_at >= OLD.created_at)
+        OR (OLD.suspended_at IS NOT NULL AND NEW.suspended_at IS NULL)
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_autonomy_policy_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_revoke_once
+      BEFORE UPDATE OF revoked_at ON project_goal_autonomy_policies
+      WHEN NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND NEW.revoked_at >= OLD.created_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_autonomy_policy_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_immutable_delete
+      BEFORE DELETE ON project_goal_autonomy_policies
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_autonomy_policy_immutable');
+      END;
+
+      CREATE TABLE IF NOT EXISTS project_goal_continuation_execution_authorizations (
+        authorization_id TEXT PRIMARY KEY CHECK (
+          length(authorization_id) = 36
+          AND substr(authorization_id, 9, 1) = '-'
+          AND substr(authorization_id, 14, 1) = '-'
+          AND substr(authorization_id, 19, 1) = '-'
+          AND substr(authorization_id, 24, 1) = '-'
+          AND authorization_id = lower(authorization_id)
+          AND replace(authorization_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        plan_id TEXT NOT NULL CHECK (length(plan_id) = 36),
+        policy_fingerprint TEXT NOT NULL CHECK (
+          length(policy_fingerprint) = 64 AND policy_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        approver TEXT NOT NULL CHECK (
+          length(approver) BETWEEN 1 AND 200 AND approver = trim(approver)
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        expires_at INTEGER CHECK (expires_at IS NULL OR expires_at > created_at),
+        revoked_at INTEGER CHECK (revoked_at IS NULL OR revoked_at >= created_at),
+        consumed_at INTEGER CHECK (consumed_at IS NULL OR consumed_at >= created_at),
+        fingerprint TEXT NOT NULL CHECK (
+          length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        CHECK (NOT (revoked_at IS NOT NULL AND consumed_at IS NOT NULL)),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (plan_id) REFERENCES project_goal_continuation_plans(plan_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_goal_continuation_execution_authorizations_goal
+      ON project_goal_continuation_execution_authorizations(goal_id);
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_validate_insert
+      BEFORE INSERT ON project_goal_continuation_execution_authorizations
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_tasks AS task
+          JOIN project_task_lineage AS lineage ON lineage.task_id = task.task_id
+          JOIN project_goal_continuation_plans AS plan ON plan.plan_id = NEW.plan_id
+          JOIN project_goal_continuation_consumptions AS consumption ON consumption.plan_id = plan.plan_id
+          WHERE task.task_id = NEW.task_id
+            AND lineage.goal_id = NEW.goal_id
+            AND lineage.parent_task_id IS NOT NULL
+            AND task.status = 'accepted'
+            AND task.terminal_at IS NULL
+            AND plan.goal_id = NEW.goal_id
+            AND plan.status = 'planned'
+            AND consumption.created_task_id = NEW.task_id
+        ) THEN RAISE(ABORT, 'project_goal_continuation_execution_authorization_lineage_mismatch') END;
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_goal_autonomy_policies AS policy
+          WHERE policy.goal_id = NEW.goal_id
+            AND policy.fingerprint = NEW.policy_fingerprint
+            AND policy.mode = 'approved_single_step'
+            AND policy.suspended_at IS NULL
+            AND policy.revoked_at IS NULL
+        ) THEN RAISE(ABORT, 'autonomy_authorization_policy_invalid') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_identity_immutable
+      BEFORE UPDATE OF authorization_id, goal_id, task_id, plan_id, policy_fingerprint,
+                       approver, created_at, fingerprint
+      ON project_goal_continuation_execution_authorizations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_execution_authorization_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_revoke_once
+      BEFORE UPDATE OF revoked_at ON project_goal_continuation_execution_authorizations
+      WHEN NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND NEW.revoked_at >= OLD.created_at
+        AND OLD.consumed_at IS NULL
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_execution_authorization_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_consume_once
+      BEFORE UPDATE OF consumed_at ON project_goal_continuation_execution_authorizations
+      WHEN NOT (
+        OLD.consumed_at IS NULL AND NEW.consumed_at IS NOT NULL
+        AND NEW.consumed_at >= OLD.created_at
+        AND OLD.revoked_at IS NULL
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_execution_authorization_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_immutable_delete
+      BEFORE DELETE ON project_goal_continuation_execution_authorizations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_execution_authorization_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V19_VERSION;
   }
 }
 

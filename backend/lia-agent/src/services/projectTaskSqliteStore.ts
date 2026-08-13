@@ -62,6 +62,30 @@ import {
   PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS,
 } from '../contracts/projectGoalContinuationApproval.js';
 import type {
+  AutonomyMode,
+  ProjectGoalAutonomyPolicyRecord,
+  ProjectGoalAutonomyPolicyStore,
+  SetGoalAutonomyPolicyInput,
+} from '../contracts/projectGoalAutonomyPolicy.js';
+import {
+  AUTONOMY_MODES,
+  AUTONOMY_POLICY_MAX_APPROVER_LENGTH,
+  AUTONOMY_POLICY_VERSION,
+  PROJECT_GOAL_AUTONOMY_POLICY_ERRORS,
+  autonomyPolicyMeaning,
+} from '../contracts/projectGoalAutonomyPolicy.js';
+import type {
+  CreateExecutionAuthorizationInput,
+  ProjectGoalContinuationExecutionAuthorizationRecord,
+  ProjectGoalContinuationExecutionAuthorizationStore,
+} from '../contracts/projectGoalContinuationExecutionAuthorization.js';
+import {
+  EXECUTION_AUTHORIZATION_DEFAULT_TTL_MS,
+  EXECUTION_AUTHORIZATION_MAX_APPROVER_LENGTH,
+  EXECUTION_AUTHORIZATION_VERSION,
+  PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS,
+} from '../contracts/projectGoalContinuationExecutionAuthorization.js';
+import type {
   ProjectContinuationMaterializationResult,
   ProjectContinuationRuntime,
 } from '../contracts/projectContinuationRuntime.js';
@@ -268,6 +292,29 @@ const SNAPSHOT_BLOCKED_ACTIONS = new Set<string>([
 ]);
 const RESUME_DECISIONS = new Set<string>(PROJECT_TASK_RESUME_DECISIONS);
 const RESUME_REFUSAL_REASONS = new Set<string>(PROJECT_TASK_RESUME_REFUSAL_REASONS);
+const AUTONOMY_MODE_SET = new Set<string>(AUTONOMY_MODES);
+
+/** Fingerprint for the durable per-goal autonomy policy: sha256 over meaning (mode + bounds + goal). */
+function fingerprintAutonomyPolicy(meaning: ReturnType<typeof autonomyPolicyMeaning>): string {
+  return createHash('sha256').update(JSON.stringify({
+    ...meaning,
+    version: AUTONOMY_POLICY_VERSION,
+  })).digest('hex');
+}
+
+/** Fingerprint for the durable execution authorization: sha256 over (goal_id, task_id, plan_id, policy_fingerprint). */
+function fingerprintExecutionAuthorization(meaning: {
+  goalId: string;
+  taskId: string;
+  planId: string;
+  policyFingerprint: string;
+}): string {
+  return createHash('sha256').update(JSON.stringify({
+    ...meaning,
+    version: EXECUTION_AUTHORIZATION_VERSION,
+  })).digest('hex');
+}
+
 
 type ProjectTaskRow = {
   task_id: unknown;
@@ -346,6 +393,35 @@ type ProjectGoalContinuationApprovalRow = {
   created_at: unknown;
   expires_at: unknown;
   revoked_at: unknown;
+};
+
+type ProjectGoalAutonomyPolicyRow = {
+  policy_id: unknown;
+  goal_id: unknown;
+  mode: unknown;
+  suspended_at: unknown;
+  expires_at: unknown;
+  revoked_at: unknown;
+  max_cycles: unknown;
+  elapsed_budget_ms: unknown;
+  approver: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+  fingerprint: unknown;
+};
+
+type ProjectGoalContinuationExecutionAuthorizationRow = {
+  authorization_id: unknown;
+  goal_id: unknown;
+  task_id: unknown;
+  plan_id: unknown;
+  policy_fingerprint: unknown;
+  approver: unknown;
+  created_at: unknown;
+  expires_at: unknown;
+  revoked_at: unknown;
+  consumed_at: unknown;
+  fingerprint: unknown;
 };
 
 type ProjectTaskLeaseRow = {
@@ -579,7 +655,7 @@ function isSafeTaskError(value: unknown): value is SafeTaskError {
  * points). Callers must invoke close() when the store is no longer needed;
  * every operation after close() fails closed.
  */
-export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectGoalContinuationApprovalStore, ProjectContinuationRuntime, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore, ProjectTaskVerificationEvidenceStore, ProjectTaskCommitEvidenceStore, ProjectTaskCompletionEvidenceStore {
+export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReconciler, ProjectTaskRestartSafeReconciler, ProjectGoalStore, ProjectGoalEvaluationStore, ProjectGoalContinuationPlanStore, ProjectGoalContinuationApprovalStore, ProjectContinuationRuntime, ProjectGoalAutonomyPolicyStore, ProjectGoalContinuationExecutionAuthorizationStore, ProjectTaskLeaseStore, ProjectTaskDispatchStore, ProjectTaskExecutionRunStore, ProjectTaskExecutionInvocationStore, ProjectTaskExecutionLaunchAttemptStore, ProjectTaskExecutionLaunchResultStore, ProjectTaskValidatedProposalSnapshotStore, ProjectTaskResumeDecisionStore, ProjectTaskCodexEvidenceStore, ProjectTaskVerificationEvidenceStore, ProjectTaskCommitEvidenceStore, ProjectTaskCompletionEvidenceStore {
   private readonly options: ResolvedProjectTaskSqliteStoreOptions;
   private readonly database: DatabaseSync;
   private closed = false;
@@ -693,6 +769,12 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       ).all();
       this.database.prepare(
         'SELECT approval_id, plan_id, goal_id, source_evaluation_id, plan_fingerprint, source_evidence_fingerprint, approver, created_at, expires_at, revoked_at FROM project_goal_continuation_approvals LIMIT 1',
+      ).all();
+      this.database.prepare(
+        'SELECT policy_id, goal_id, mode, suspended_at, expires_at, revoked_at, max_cycles, elapsed_budget_ms, approver, created_at, updated_at, fingerprint FROM project_goal_autonomy_policies LIMIT 1',
+      ).all();
+      this.database.prepare(
+        'SELECT authorization_id, goal_id, task_id, plan_id, policy_fingerprint, approver, created_at, expires_at, revoked_at, consumed_at, fingerprint FROM project_goal_continuation_execution_authorizations LIMIT 1',
       ).all();
       this.database.prepare(`
         SELECT task_id, lease_id, lease_owner, fencing_token, acquired_at,
@@ -1874,6 +1956,124 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     };
   }
 
+  private selectGoalAutonomyPolicyRow(goalId: string): ProjectGoalAutonomyPolicyRow | undefined {
+    return this.database.prepare(`
+      SELECT policy_id, goal_id, mode, suspended_at, expires_at, revoked_at,
+             max_cycles, elapsed_budget_ms, approver, created_at, updated_at, fingerprint
+      FROM project_goal_autonomy_policies WHERE goal_id = ?
+    `).get(goalId) as unknown as ProjectGoalAutonomyPolicyRow | undefined;
+  }
+
+  private decodeGoalAutonomyPolicyRow(
+    row: ProjectGoalAutonomyPolicyRow,
+  ): ProjectGoalAutonomyPolicyRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    if (typeof row.policy_id !== 'string' || !PROJECT_GOAL_ID.test(row.policy_id)) throw corrupt();
+    if (typeof row.goal_id !== 'string' || !PROJECT_GOAL_ID.test(row.goal_id)) throw corrupt();
+    if (typeof row.mode !== 'string' || !AUTONOMY_MODE_SET.has(row.mode)) throw corrupt();
+    if (row.suspended_at !== null && !isNonNegativeInteger(row.suspended_at)) throw corrupt();
+    if (row.expires_at !== null && (!isNonNegativeInteger(row.expires_at) || row.expires_at === 0)) throw corrupt();
+    if (row.revoked_at !== null && !isNonNegativeInteger(row.revoked_at)) throw corrupt();
+    if (row.max_cycles !== null && (!isNonNegativeInteger(row.max_cycles) || row.max_cycles < 1 || row.max_cycles > 5)) throw corrupt();
+    if (row.elapsed_budget_ms !== null && (!isNonNegativeInteger(row.elapsed_budget_ms) || row.elapsed_budget_ms === 0)) throw corrupt();
+    if (
+      typeof row.approver !== 'string'
+      || row.approver.length < 1
+      || row.approver.length > AUTONOMY_POLICY_MAX_APPROVER_LENGTH
+      || row.approver !== row.approver.trim()
+    ) throw corrupt();
+    if (!isNonNegativeInteger(row.created_at) || !isNonNegativeInteger(row.updated_at)) throw corrupt();
+    if (row.updated_at < row.created_at) throw corrupt();
+    if (typeof row.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(row.fingerprint)) throw corrupt();
+
+    const mode = row.mode as AutonomyMode;
+    const meaning = autonomyPolicyMeaning({
+      goalId: row.goal_id,
+      mode,
+      maxCycles: row.max_cycles === null ? undefined : row.max_cycles,
+      elapsedBudgetMs: row.elapsed_budget_ms === null ? undefined : row.elapsed_budget_ms,
+      expiresAt: row.expires_at === null ? undefined : row.expires_at,
+    });
+    if (fingerprintAutonomyPolicy(meaning) !== row.fingerprint) throw corrupt();
+    return {
+      policyId: row.policy_id,
+      goalId: row.goal_id,
+      mode,
+      approver: row.approver,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      fingerprint: row.fingerprint,
+      ...(row.suspended_at !== null ? { suspendedAt: row.suspended_at as number } : {}),
+      ...(row.expires_at !== null ? { expiresAt: row.expires_at as number } : {}),
+      ...(row.revoked_at !== null ? { revokedAt: row.revoked_at as number } : {}),
+      ...(row.max_cycles !== null ? { maxCycles: row.max_cycles as number } : {}),
+      ...(row.elapsed_budget_ms !== null ? { elapsedBudgetMs: row.elapsed_budget_ms as number } : {}),
+    };
+  }
+
+  private selectExecutionAuthorizationRowById(
+    authorizationId: string,
+  ): ProjectGoalContinuationExecutionAuthorizationRow | undefined {
+    return this.database.prepare(`
+      SELECT authorization_id, goal_id, task_id, plan_id, policy_fingerprint,
+             approver, created_at, expires_at, revoked_at, consumed_at, fingerprint
+      FROM project_goal_continuation_execution_authorizations WHERE authorization_id = ?
+    `).get(authorizationId) as unknown as ProjectGoalContinuationExecutionAuthorizationRow | undefined;
+  }
+
+  private selectExecutionAuthorizationRowByTask(
+    taskId: string,
+  ): ProjectGoalContinuationExecutionAuthorizationRow | undefined {
+    return this.database.prepare(`
+      SELECT authorization_id, goal_id, task_id, plan_id, policy_fingerprint,
+             approver, created_at, expires_at, revoked_at, consumed_at, fingerprint
+      FROM project_goal_continuation_execution_authorizations WHERE task_id = ?
+    `).get(taskId) as unknown as ProjectGoalContinuationExecutionAuthorizationRow | undefined;
+  }
+
+  private decodeExecutionAuthorizationRow(
+    row: ProjectGoalContinuationExecutionAuthorizationRow,
+  ): ProjectGoalContinuationExecutionAuthorizationRecord {
+    const corrupt = (): Error => new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    if (typeof row.authorization_id !== 'string' || !PROJECT_GOAL_ID.test(row.authorization_id)) throw corrupt();
+    if (typeof row.goal_id !== 'string' || !PROJECT_GOAL_ID.test(row.goal_id)) throw corrupt();
+    if (typeof row.task_id !== 'string' || !PROJECT_TASK_ID.test(row.task_id)) throw corrupt();
+    if (typeof row.plan_id !== 'string' || !PROJECT_GOAL_ID.test(row.plan_id)) throw corrupt();
+    if (typeof row.policy_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(row.policy_fingerprint)) throw corrupt();
+    if (
+      typeof row.approver !== 'string'
+      || row.approver.length < 1
+      || row.approver.length > EXECUTION_AUTHORIZATION_MAX_APPROVER_LENGTH
+      || row.approver !== row.approver.trim()
+    ) throw corrupt();
+    if (!isNonNegativeInteger(row.created_at)) throw corrupt();
+    if (row.expires_at !== null && (!isNonNegativeInteger(row.expires_at) || row.expires_at <= row.created_at)) throw corrupt();
+    if (row.revoked_at !== null && (!isNonNegativeInteger(row.revoked_at) || row.revoked_at < row.created_at)) throw corrupt();
+    if (row.consumed_at !== null && (!isNonNegativeInteger(row.consumed_at) || row.consumed_at < row.created_at)) throw corrupt();
+    if (row.revoked_at !== null && row.consumed_at !== null) throw corrupt();
+    if (typeof row.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(row.fingerprint)) throw corrupt();
+    const fingerprint = fingerprintExecutionAuthorization({
+      goalId: row.goal_id,
+      taskId: row.task_id,
+      planId: row.plan_id,
+      policyFingerprint: row.policy_fingerprint,
+    });
+    if (fingerprint !== row.fingerprint) throw corrupt();
+    return {
+      authorizationId: row.authorization_id,
+      goalId: row.goal_id,
+      taskId: row.task_id,
+      planId: row.plan_id,
+      policyFingerprint: row.policy_fingerprint,
+      approver: row.approver,
+      createdAt: row.created_at,
+      fingerprint: row.fingerprint,
+      ...(row.expires_at !== null ? { expiresAt: row.expires_at as number } : {}),
+      ...(row.revoked_at !== null ? { revokedAt: row.revoked_at as number } : {}),
+      ...(row.consumed_at !== null ? { consumedAt: row.consumed_at as number } : {}),
+    };
+  }
+
   private prepareGoalEvaluation(input: EvaluateProjectGoalAttemptInput): ProjectGoalEvaluationRecord {
     if (
       !PROJECT_GOAL_ID.test(input.goalId)
@@ -2646,6 +2846,413 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         throw new Error(PROJECT_GOAL_CONTINUATION_APPROVAL_ERRORS.approvalInvalid);
       }
       return approval;
+    });
+  }
+
+  setGoalAutonomyPolicy(input: SetGoalAutonomyPolicyInput): ProjectGoalAutonomyPolicyRecord {
+    return this.inTransaction(() => {
+      const allowedKeys = ['goalId', 'mode', 'approver', 'maxCycles', 'elapsedBudgetMs', 'expiresAt'];
+      if (
+        !isRecord(input)
+        || !Object.keys(input).every((key) => allowedKeys.includes(key))
+        || typeof input.goalId !== 'string'
+        || !PROJECT_GOAL_ID.test(input.goalId)
+        || typeof input.mode !== 'string'
+        || !AUTONOMY_MODE_SET.has(input.mode)
+        || typeof input.approver !== 'string'
+        || input.approver.length < 1
+        || input.approver.length > AUTONOMY_POLICY_MAX_APPROVER_LENGTH
+        || input.approver !== input.approver.trim()
+        || (input.maxCycles !== undefined && (!isNonNegativeInteger(input.maxCycles) || input.maxCycles < 1 || input.maxCycles > 5))
+        || (input.elapsedBudgetMs !== undefined && (!isNonNegativeInteger(input.elapsedBudgetMs) || input.elapsedBudgetMs === 0))
+        || (input.expiresAt !== undefined && !isNonNegativeInteger(input.expiresAt))
+      ) {
+        throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.invalidInput);
+      }
+      const mode = input.mode as AutonomyMode;
+      // Bounds are ONLY meaningful for bounded_autonomous; the schema CHECK
+      // mirrors this. Reject early with a clean code.
+      if (mode !== 'bounded_autonomous' && (input.maxCycles !== undefined || input.elapsedBudgetMs !== undefined)) {
+        throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.invalidBounds);
+      }
+
+      const goalRow = this.selectGoalRow(input.goalId);
+      if (goalRow === undefined) throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.goalNotFound);
+      const goal = this.decodeGoalRow(goalRow);
+      if (goal.status !== 'active') throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.goalTerminal);
+
+      // maxCycles is a redundant convenience bound, clamped <= goal.maxAttempts.
+      let maxCycles: number | undefined;
+      if (input.maxCycles !== undefined) {
+        maxCycles = Math.min(input.maxCycles, goal.maxAttempts);
+      }
+      const elapsedBudgetMs = input.elapsedBudgetMs;
+
+      const now = this.now();
+      const createdAt = Math.max(now, goal.createdAt);
+      if (input.expiresAt !== undefined && input.expiresAt <= createdAt) {
+        throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.invalidInput);
+      }
+      const meaning = autonomyPolicyMeaning({
+        goalId: input.goalId,
+        mode,
+        maxCycles,
+        elapsedBudgetMs,
+        expiresAt: input.expiresAt,
+      });
+      const fingerprint = fingerprintAutonomyPolicy(meaning);
+
+      const existingRow = this.selectGoalAutonomyPolicyRow(input.goalId);
+      if (existingRow !== undefined) {
+        const existing = this.decodeGoalAutonomyPolicyRow(existingRow);
+        // Exact replay (same meaning) is idempotent; a mode transition or bound
+        // change is a contradictory re-set and fails closed (operator-only
+        // transition must go through an explicit, audited path — v1 conservatism).
+        const existingMeaning = autonomyPolicyMeaning(existing);
+        if (
+          JSON.stringify(existingMeaning) !== JSON.stringify(meaning)
+          || existing.approver !== input.approver
+        ) {
+          throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.contradictory);
+        }
+        return existing;
+      }
+
+      const policyId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_goal_autonomy_policies (
+          policy_id, goal_id, mode, suspended_at, expires_at, revoked_at,
+          max_cycles, elapsed_budget_ms, approver, created_at, updated_at, fingerprint
+        ) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
+      `).run(
+        policyId,
+        input.goalId,
+        mode,
+        input.expiresAt ?? null,
+        maxCycles ?? null,
+        elapsedBudgetMs ?? null,
+        input.approver,
+        createdAt,
+        createdAt,
+        fingerprint,
+      );
+      const inserted = this.selectGoalAutonomyPolicyRow(input.goalId);
+      if (inserted === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeGoalAutonomyPolicyRow(inserted);
+    });
+  }
+
+  readGoalAutonomyPolicy(goalId: string): ProjectGoalAutonomyPolicyRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof goalId !== 'string' || !PROJECT_GOAL_ID.test(goalId)) {
+        throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.invalidInput);
+      }
+      const row = this.selectGoalAutonomyPolicyRow(goalId);
+      return row === undefined ? undefined : this.decodeGoalAutonomyPolicyRow(row);
+    });
+  }
+
+  suspendGoalAutonomy(goalId: string): ProjectGoalAutonomyPolicyRecord {
+    return this.inTransaction(() => {
+      if (typeof goalId !== 'string' || !PROJECT_GOAL_ID.test(goalId)) {
+        throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.invalidInput);
+      }
+      const row = this.selectGoalAutonomyPolicyRow(goalId);
+      if (row === undefined) throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.policyNotFound);
+      const policy = this.decodeGoalAutonomyPolicyRow(row);
+      if (policy.suspendedAt !== undefined) return policy;
+      if (policy.revokedAt !== undefined) throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.notSuspended);
+      const suspendedAt = Math.max(this.now(), policy.createdAt);
+      this.database.prepare(`
+        UPDATE project_goal_autonomy_policies SET suspended_at = ?, updated_at = ?
+        WHERE goal_id = ? AND suspended_at IS NULL
+      `).run(suspendedAt, suspendedAt, goalId);
+      const updated = this.selectGoalAutonomyPolicyRow(goalId);
+      if (updated === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeGoalAutonomyPolicyRow(updated);
+    });
+  }
+
+  resumeGoalAutonomy(goalId: string): ProjectGoalAutonomyPolicyRecord {
+    return this.inTransaction(() => {
+      if (typeof goalId !== 'string' || !PROJECT_GOAL_ID.test(goalId)) {
+        throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.invalidInput);
+      }
+      const row = this.selectGoalAutonomyPolicyRow(goalId);
+      if (row === undefined) throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.policyNotFound);
+      const policy = this.decodeGoalAutonomyPolicyRow(row);
+      if (policy.suspendedAt === undefined) throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.notResumable);
+      const resumedAt = Math.max(this.now(), policy.createdAt);
+      this.database.prepare(`
+        UPDATE project_goal_autonomy_policies SET suspended_at = NULL, updated_at = ?
+        WHERE goal_id = ? AND suspended_at IS NOT NULL
+      `).run(resumedAt, goalId);
+      const updated = this.selectGoalAutonomyPolicyRow(goalId);
+      if (updated === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeGoalAutonomyPolicyRow(updated);
+    });
+  }
+
+  revokeGoalAutonomy(goalId: string): ProjectGoalAutonomyPolicyRecord {
+    return this.inTransaction(() => {
+      if (typeof goalId !== 'string' || !PROJECT_GOAL_ID.test(goalId)) {
+        throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.invalidInput);
+      }
+      const row = this.selectGoalAutonomyPolicyRow(goalId);
+      if (row === undefined) throw new Error(PROJECT_GOAL_AUTONOMY_POLICY_ERRORS.policyNotFound);
+      const policy = this.decodeGoalAutonomyPolicyRow(row);
+      if (policy.revokedAt !== undefined) return policy;
+      const revokedAt = Math.max(this.now(), policy.createdAt);
+      this.database.prepare(`
+        UPDATE project_goal_autonomy_policies SET revoked_at = ?, updated_at = ?
+        WHERE goal_id = ? AND revoked_at IS NULL
+      `).run(revokedAt, revokedAt, goalId);
+      const updated = this.selectGoalAutonomyPolicyRow(goalId);
+      if (updated === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeGoalAutonomyPolicyRow(updated);
+    });
+  }
+
+  createExecutionAuthorization(
+    input: CreateExecutionAuthorizationInput,
+  ): ProjectGoalContinuationExecutionAuthorizationRecord {
+    return this.inTransaction(() => {
+      const allowedKeys = ['goalId', 'taskId', 'planId', 'approver', 'expiresAt'];
+      if (
+        !isRecord(input)
+        || !Object.keys(input).every((key) => allowedKeys.includes(key))
+        || typeof input.goalId !== 'string'
+        || !PROJECT_GOAL_ID.test(input.goalId)
+        || typeof input.taskId !== 'string'
+        || !PROJECT_TASK_ID.test(input.taskId)
+        || typeof input.planId !== 'string'
+        || !PROJECT_GOAL_ID.test(input.planId)
+        || typeof input.approver !== 'string'
+        || input.approver.length < 1
+        || input.approver.length > EXECUTION_AUTHORIZATION_MAX_APPROVER_LENGTH
+        || input.approver !== input.approver.trim()
+        || (input.expiresAt !== undefined && !isNonNegativeInteger(input.expiresAt))
+      ) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.invalidInput);
+      }
+
+      // The governing autonomy policy must already be opted into
+      // approved_single_step; the authorization binds its exact fingerprint.
+      const policyRow = this.selectGoalAutonomyPolicyRow(input.goalId);
+      if (policyRow === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.policyRequired);
+      }
+      const policy = this.decodeGoalAutonomyPolicyRow(policyRow);
+      if (policy.mode !== 'approved_single_step') {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.policyModeMismatch);
+      }
+      if (policy.suspendedAt !== undefined || policy.revokedAt !== undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.policyInvalid);
+      }
+      if (policy.expiresAt !== undefined && this.now() >= policy.expiresAt) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.policyInvalid);
+      }
+
+      // The task must be the exact materialized continuation task: accepted,
+      // non-terminal, lineage bound to the goal, plan consumed to this task.
+      const taskRow = this.selectRow(input.taskId);
+      if (taskRow === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.taskNotFound);
+      }
+      const task = this.decodeRow(taskRow);
+      if (task.status !== 'accepted' || task.terminalAt !== undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.taskNotAccepted);
+      }
+      if (task.lineage?.goalId !== input.goalId || task.lineage.parentTaskId === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.lineageMismatch);
+      }
+      const planRow = this.selectContinuationPlanRow(input.planId);
+      if (planRow === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.planNotFound);
+      }
+      const plan = this.decodeContinuationPlanRow(planRow);
+      if (plan.status !== 'consumed' || plan.createdTaskId !== input.taskId) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.planNotConsumed);
+      }
+      if (plan.goalId !== input.goalId) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.lineageMismatch);
+      }
+
+      const createdAt = Math.max(this.now(), plan.consumedAt ?? 0, task.createdAt);
+      const expiresAt = input.expiresAt ?? createdAt + EXECUTION_AUTHORIZATION_DEFAULT_TTL_MS;
+      if (expiresAt <= createdAt) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.invalidInput);
+      }
+      const fingerprint = fingerprintExecutionAuthorization({
+        goalId: input.goalId,
+        taskId: input.taskId,
+        planId: input.planId,
+        policyFingerprint: policy.fingerprint,
+      });
+
+      const existingRow = this.selectExecutionAuthorizationRowByTask(input.taskId);
+      if (existingRow !== undefined) {
+        const existing = this.decodeExecutionAuthorizationRow(existingRow);
+        const effectiveExpiresAt = existing.expiresAt ?? existing.createdAt + EXECUTION_AUTHORIZATION_DEFAULT_TTL_MS;
+        if (
+          existing.approver !== input.approver
+          || existing.expiresAt !== effectiveExpiresAt
+          || existing.policyFingerprint !== policy.fingerprint
+          || existing.planId !== input.planId
+        ) {
+          throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationContradictory);
+        }
+        return existing;
+      }
+
+      const authorizationId = randomUUID();
+      this.database.prepare(`
+        INSERT INTO project_goal_continuation_execution_authorizations (
+          authorization_id, goal_id, task_id, plan_id, policy_fingerprint,
+          approver, created_at, expires_at, revoked_at, consumed_at, fingerprint
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+      `).run(
+        authorizationId,
+        input.goalId,
+        input.taskId,
+        input.planId,
+        policy.fingerprint,
+        input.approver,
+        createdAt,
+        expiresAt,
+        fingerprint,
+      );
+      const inserted = this.selectExecutionAuthorizationRowByTask(input.taskId);
+      if (inserted === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeExecutionAuthorizationRow(inserted);
+    });
+  }
+
+  revokeExecutionAuthorization(
+    authorizationId: string,
+  ): ProjectGoalContinuationExecutionAuthorizationRecord {
+    return this.inTransaction(() => {
+      if (typeof authorizationId !== 'string' || !PROJECT_GOAL_ID.test(authorizationId)) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionAuthorizationRowById(authorizationId);
+      if (row === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationNotFound);
+      }
+      const authorization = this.decodeExecutionAuthorizationRow(row);
+      if (authorization.revokedAt !== undefined) return authorization;
+      if (authorization.consumedAt !== undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.notRevocable);
+      }
+      const revokedAt = Math.max(this.now(), authorization.createdAt);
+      const changed = this.database.prepare(`
+        UPDATE project_goal_continuation_execution_authorizations SET revoked_at = ?
+        WHERE authorization_id = ? AND revoked_at IS NULL AND consumed_at IS NULL
+      `).run(revokedAt, authorizationId);
+      if (Number(changed.changes) !== 1) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.notRevocable);
+      }
+      const updated = this.selectExecutionAuthorizationRowById(authorizationId);
+      if (updated === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeExecutionAuthorizationRow(updated);
+    });
+  }
+
+  readExecutionAuthorization(
+    authorizationId: string,
+  ): ProjectGoalContinuationExecutionAuthorizationRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof authorizationId !== 'string' || !PROJECT_GOAL_ID.test(authorizationId)) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionAuthorizationRowById(authorizationId);
+      return row === undefined ? undefined : this.decodeExecutionAuthorizationRow(row);
+    });
+  }
+
+  readExecutionAuthorizationByTask(
+    taskId: string,
+  ): ProjectGoalContinuationExecutionAuthorizationRecord | undefined {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionAuthorizationRowByTask(taskId);
+      return row === undefined ? undefined : this.decodeExecutionAuthorizationRow(row);
+    });
+  }
+
+  consumeExecutionAuthorization(
+    authorizationId: string,
+  ): ProjectGoalContinuationExecutionAuthorizationRecord {
+    return this.inTransaction(() => {
+      if (typeof authorizationId !== 'string' || !PROJECT_GOAL_ID.test(authorizationId)) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionAuthorizationRowById(authorizationId);
+      if (row === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationNotFound);
+      }
+      const authorization = this.decodeExecutionAuthorizationRow(row);
+      if (authorization.consumedAt !== undefined) return authorization;
+      if (authorization.revokedAt !== undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationRevoked);
+      }
+      if (authorization.expiresAt !== undefined && this.now() >= authorization.expiresAt) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationExpired);
+      }
+      const consumedAt = Math.max(this.now(), authorization.createdAt);
+      const changed = this.database.prepare(`
+        UPDATE project_goal_continuation_execution_authorizations SET consumed_at = ?
+        WHERE authorization_id = ? AND consumed_at IS NULL AND revoked_at IS NULL
+      `).run(consumedAt, authorizationId);
+      if (Number(changed.changes) !== 1) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.notConsumable);
+      }
+      const updated = this.selectExecutionAuthorizationRowById(authorizationId);
+      if (updated === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+      return this.decodeExecutionAuthorizationRow(updated);
+    });
+  }
+
+  assertExecutionAuthorizationValid(
+    taskId: string,
+  ): ProjectGoalContinuationExecutionAuthorizationRecord {
+    return this.inTransaction(() => {
+      if (typeof taskId !== 'string' || !PROJECT_TASK_ID.test(taskId)) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.invalidInput);
+      }
+      const row = this.selectExecutionAuthorizationRowByTask(taskId);
+      if (row === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationRequired);
+      }
+      const authorization = this.decodeExecutionAuthorizationRow(row);
+      if (authorization.revokedAt !== undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationRevoked);
+      }
+      if (authorization.consumedAt !== undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationConsumed);
+      }
+      if (authorization.expiresAt !== undefined && this.now() >= authorization.expiresAt) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationExpired);
+      }
+      // The authorization is only valid if it still binds the exact governing
+      // policy fingerprint/version and that policy is still in force.
+      const policyRow = this.selectGoalAutonomyPolicyRow(authorization.goalId);
+      if (policyRow === undefined) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationInvalid);
+      }
+      const policy = this.decodeGoalAutonomyPolicyRow(policyRow);
+      if (
+        policy.fingerprint !== authorization.policyFingerprint
+        || policy.mode !== 'approved_single_step'
+        || policy.suspendedAt !== undefined
+        || policy.revokedAt !== undefined
+        || (policy.expiresAt !== undefined && this.now() >= policy.expiresAt)
+      ) {
+        throw new Error(PROJECT_GOAL_CONTINUATION_EXECUTION_AUTHORIZATION_ERRORS.authorizationInvalid);
+      }
+      return authorization;
     });
   }
 
