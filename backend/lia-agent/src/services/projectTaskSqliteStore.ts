@@ -3309,6 +3309,18 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     });
   }
 
+  listActiveGoals(): ProjectGoalRecord[] {
+    return this.inTransaction(() => {
+      const rows = this.database.prepare(`
+        SELECT goal_id, project_id, objective, status, created_at, updated_at, terminal_at,
+               current_attempt, max_attempts, continuation_depth_limit, terminal_reason
+        FROM project_goals WHERE status = 'active'
+        ORDER BY created_at ASC, goal_id ASC
+      `).all() as unknown as ProjectGoalRow[];
+      return rows.map((row) => this.decodeGoalRow(row));
+    });
+  }
+
   private createGoalAttempt(
     input: CreateRootAttemptInput | CreateContinuationAttemptInput,
   ): CreateProjectTaskResult {

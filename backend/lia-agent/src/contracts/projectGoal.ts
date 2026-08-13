@@ -74,6 +74,8 @@ export type CreateContinuationAttemptInput = {
 export interface ProjectGoalStore {
   createGoal(input: CreateProjectGoalInput): ProjectGoalRecord;
   readGoal(goalId: string): ProjectGoalRecord | undefined;
+  /** Read-only enumeration of every `active` goal (bounded loop runtime surface). */
+  listActiveGoals(): ProjectGoalRecord[];
   createRootAttempt(input: CreateRootAttemptInput): CreateProjectTaskResult;
   createContinuationAttempt(input: CreateContinuationAttemptInput): CreateProjectTaskResult;
   listGoalAttempts(goalId: string): ProjectTaskRecord[];
