@@ -434,3 +434,150 @@ test('SQLite constraints make cycles and direct lineage mutation impossible', as
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('listGoals enumerates active first, then terminal, deterministic within groups', async () => {
+  let now = 1000;
+  const directory = await mkdtemp(join(tmpdir(), 'lia-goal-list-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => now });
+    const g = (n) => `650e8400-e29b-41d4-a716-${n.toString(16).padStart(12, '0')}`;
+    // Terminal goal (created first), then active goals in a defined order.
+    store.createGoal({ goalId: g(1), projectId: 'safe', objective: 'Terminal mission.' });
+    store.transitionGoal(g(1), 'completed', 'objective_completed');
+    now = 2000;
+    store.createGoal({ goalId: g(3), projectId: 'safe', objective: 'Third active.' });
+    now = 3000;
+    store.createGoal({ goalId: g(2), projectId: 'other', objective: 'Second active.' });
+    now = 4000;
+
+    const all = store.listGoals();
+    assert.deepEqual(all.map((record) => record.goalId), [g(3), g(2), g(1)], 'active first, created_at ASC, goal_id ASC; terminal last');
+    assert.equal(all[0].status, 'active');
+    assert.equal(all[1].status, 'active');
+    assert.equal(all[2].status, 'completed');
+
+    assert.deepEqual(
+      store.listGoals({ includeTerminal: false }).map((record) => record.goalId),
+      [g(3), g(2)],
+      'includeTerminal=false hides terminal goals',
+    );
+    assert.deepEqual(
+      store.listGoals({ projectId: 'other' }).map((record) => record.goalId),
+      [g(2)],
+      'project filter narrows to one project',
+    );
+    // Limit selects the NEWEST rows by updated_at DESC, then re-orders.
+    assert.deepEqual(
+      store.listGoals({ limit: 2 }).map((record) => record.goalId),
+      [g(3), g(2)],
+      'limit keeps the newest updated rows and still orders active-first',
+    );
+    assert.deepEqual(
+      store.listGoals({ limit: 0 }).map((record) => record.goalId),
+      [g(2)],
+      'limit is clamped to [1, 100]',
+    );
+    assert.throws(
+      () => store.listGoals({ projectId: '   ' }),
+      /invalid_project_goal/,
+      'malformed project filter fails closed',
+    );
+    store.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('createGoalWithRootAttempt is an atomic intake composition', async () => {
+  let now = 1000;
+  const directory = await mkdtemp(join(tmpdir(), 'lia-goal-intake-'));
+  const databasePath = join(directory, 'tasks.sqlite');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => now });
+    const goalId = GOAL;
+    const taskId = ROOT;
+    const result = store.createGoalWithRootAttempt({
+      goal: { goalId, projectId: 'safe', objective: 'Atomic intake mission.' },
+      rootAttempt: {
+        taskId,
+        fingerprint: 'intake-fp',
+        intent: intent(),
+        goalId,
+        continuationDepth: 0,
+        attemptNumber: 0,
+      },
+    });
+    assert.equal(result.goal.status, 'active');
+    assert.equal(result.task.kind, 'created');
+    assert.equal(result.task.record.status, 'accepted');
+    assert.equal(result.task.record.lineage.attemptNumber, 0);
+    assert.equal(result.task.record.lineage.parentTaskId, undefined);
+    assert.equal(store.readGoal(goalId).currentAttempt, 0);
+    assert.equal(store.listGoalAttempts(goalId).length, 1);
+
+    // Duplicate goalId -> deterministic conflict, no second row.
+    assert.throws(
+      () => store.createGoalWithRootAttempt({
+        goal: { goalId, projectId: 'safe', objective: 'Duplicate.' },
+        rootAttempt: {
+          taskId: CHILD,
+          fingerprint: 'intake-fp-2',
+          intent: intent(),
+          goalId,
+          continuationDepth: 0,
+          attemptNumber: 0,
+        },
+      }),
+      /project_goal_already_exists/,
+    );
+
+    // Invalid lineage (capability outside the ceiling) rolls the whole
+    // transaction back: no goal row is left behind.
+    const badGoal = '650e8400-e29b-41d4-a716-4466554400ff';
+    assert.throws(
+      () => store.createGoalWithRootAttempt({
+        goal: { goalId: badGoal, projectId: 'safe', objective: 'Bad intake.' },
+        rootAttempt: {
+          taskId: OTHER,
+          fingerprint: 'intake-fp-3',
+          intent: intent({ requestedCapabilities: ['push'] }),
+          goalId: badGoal,
+          continuationDepth: 0,
+          attemptNumber: 0,
+        },
+      }),
+      /invalid_project_task_lineage/,
+    );
+    assert.equal(store.readGoal(badGoal), undefined, 'failed intake leaves no goal row');
+    assert.equal(store.get(OTHER), undefined, 'failed intake leaves no task row');
+
+    // Capacity refuses partial creation: the goal row rolls back too.
+    const fullStore = new ProjectTaskSqliteStore({
+      databasePath: join(directory, 'full.sqlite'),
+      maxRecords: 1,
+      maxActive: 1,
+      now: () => now,
+    });
+    fullStore.createOrGet(taskId, 'fp', intent());
+    assert.throws(
+      () => fullStore.createGoalWithRootAttempt({
+        goal: { goalId: badGoal, projectId: 'safe', objective: 'Capacity intake.' },
+        rootAttempt: {
+          taskId: '750e8400-e29b-41d4-a716-4466554400fe',
+          fingerprint: 'intake-fp-4',
+          intent: intent(),
+          goalId: badGoal,
+          continuationDepth: 0,
+          attemptNumber: 0,
+        },
+      }),
+      /project_goal_capacity_reached/,
+    );
+    assert.equal(fullStore.readGoal(badGoal), undefined, 'capacity refuses a goal without its root attempt');
+    fullStore.close();
+    store.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

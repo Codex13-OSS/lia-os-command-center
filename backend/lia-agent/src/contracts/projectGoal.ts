@@ -71,11 +71,48 @@ export type CreateContinuationAttemptInput = {
   attemptNumber: number;
 };
 
+/**
+ * Bounded goal enumeration options (operator goal control surface, design §A).
+ * The limit selects the NEWEST N rows by `updated_at DESC, goal_id ASC`; the
+ * returned rows are then ordered active-first, `created_at ASC, goal_id ASC`.
+ */
+export type ListProjectGoalsOptions = {
+  projectId?: string;
+  /** Bounded read ceiling; clamped to [1, 100]. Default 100. */
+  limit?: number;
+  /** Hide terminal goals. Default true (include terminal). */
+  includeTerminal?: boolean;
+};
+
+/**
+ * Single-transaction intake composition (design §D / §N): create the goal row
+ * and its root attempt atomically through the SAME validated primitives the
+ * store already exposes. Zero authority change — the root attempt is created
+ * as `accepted` and is never launched inside the store.
+ */
+export type CreateGoalWithRootAttemptInput = {
+  goal: CreateProjectGoalInput;
+  rootAttempt: CreateRootAttemptInput;
+};
+
+export type CreateGoalWithRootAttemptResult = {
+  goal: ProjectGoalRecord;
+  task: CreateProjectTaskResult;
+};
+
 export interface ProjectGoalStore {
   createGoal(input: CreateProjectGoalInput): ProjectGoalRecord;
   readGoal(goalId: string): ProjectGoalRecord | undefined;
   /** Read-only enumeration of every `active` goal (bounded loop runtime surface). */
   listActiveGoals(): ProjectGoalRecord[];
+  /** Bounded operator enumeration (active first, then terminal). */
+  listGoals(options?: ListProjectGoalsOptions): ProjectGoalRecord[];
+  /**
+   * Atomic intake: create the goal and its root attempt in ONE transaction.
+   * Both validations are the exact existing ones; the root attempt is created
+   * as `accepted` and is never dispatched, leased or executed here.
+   */
+  createGoalWithRootAttempt(input: CreateGoalWithRootAttemptInput): CreateGoalWithRootAttemptResult;
   createRootAttempt(input: CreateRootAttemptInput): CreateProjectTaskResult;
   createContinuationAttempt(input: CreateContinuationAttemptInput): CreateProjectTaskResult;
   listGoalAttempts(goalId: string): ProjectTaskRecord[];
@@ -105,4 +142,6 @@ export const PROJECT_GOAL_ERRORS = {
   capabilityExpansion: 'project_task_continuation_capability_expansion',
   attemptLimit: 'project_goal_attempt_limit_reached',
   depthLimit: 'project_goal_continuation_depth_limit_reached',
+  /** Intake capacity: the atomic goal+root-attempt composition refuses partial creation. */
+  capacity: 'project_goal_capacity_reached',
 } as const;

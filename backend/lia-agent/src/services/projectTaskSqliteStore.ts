@@ -9,8 +9,11 @@ import type { ProjectTaskBlockedCapability } from '../contracts/projectExecutor.
 import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
 import type {
   CreateContinuationAttemptInput,
+  CreateGoalWithRootAttemptInput,
+  CreateGoalWithRootAttemptResult,
   CreateProjectGoalInput,
   CreateRootAttemptInput,
+  ListProjectGoalsOptions,
   ProjectGoalRecord,
   ProjectGoalStore,
   ProjectGoalTerminalReason,
@@ -3257,49 +3260,51 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
   }
 
   createGoal(input: CreateProjectGoalInput): ProjectGoalRecord {
-    return this.inTransaction(() => {
-      const maxAttempts = input.maxAttempts ?? PROJECT_GOAL_DEFAULT_MAX_ATTEMPTS;
-      const continuationDepthLimit = input.continuationDepthLimit
-        ?? PROJECT_GOAL_DEFAULT_CONTINUATION_DEPTH_LIMIT;
-      if (
-        !PROJECT_GOAL_ID.test(input.goalId)
-        || typeof input.projectId !== 'string'
-        || input.projectId.trim() === ''
-        || typeof input.objective !== 'string'
-        || input.objective.trim() === ''
-        || input.objective.length > 20_000
-        || !Number.isInteger(maxAttempts)
-        || maxAttempts < 1
-        || maxAttempts > PROJECT_GOAL_MAX_ATTEMPTS_LIMIT
-        || !Number.isInteger(continuationDepthLimit)
-        || continuationDepthLimit < 0
-        || continuationDepthLimit > PROJECT_GOAL_CONTINUATION_DEPTH_LIMIT
-      ) {
-        throw new Error(PROJECT_GOAL_ERRORS.invalidGoal);
-      }
-      if (this.selectGoalRow(input.goalId) !== undefined) {
-        throw new Error(PROJECT_GOAL_ERRORS.goalExists);
-      }
+    return this.inTransaction(() => this.createGoalInTx(input));
+  }
 
-      const now = this.now();
-      this.database.prepare(`
-        INSERT INTO project_goals (
-          goal_id, project_id, objective, status, created_at, updated_at,
-          current_attempt, max_attempts, continuation_depth_limit
-        ) VALUES (?, ?, ?, 'active', ?, ?, NULL, ?, ?)
-      `).run(
-        input.goalId,
-        input.projectId,
-        input.objective,
-        now,
-        now,
-        maxAttempts,
-        continuationDepthLimit,
-      );
-      const row = this.selectGoalRow(input.goalId);
-      if (row === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
-      return this.decodeGoalRow(row);
-    });
+  private createGoalInTx(input: CreateProjectGoalInput): ProjectGoalRecord {
+    const maxAttempts = input.maxAttempts ?? PROJECT_GOAL_DEFAULT_MAX_ATTEMPTS;
+    const continuationDepthLimit = input.continuationDepthLimit
+      ?? PROJECT_GOAL_DEFAULT_CONTINUATION_DEPTH_LIMIT;
+    if (
+      !PROJECT_GOAL_ID.test(input.goalId)
+      || typeof input.projectId !== 'string'
+      || input.projectId.trim() === ''
+      || typeof input.objective !== 'string'
+      || input.objective.trim() === ''
+      || input.objective.length > 20_000
+      || !Number.isInteger(maxAttempts)
+      || maxAttempts < 1
+      || maxAttempts > PROJECT_GOAL_MAX_ATTEMPTS_LIMIT
+      || !Number.isInteger(continuationDepthLimit)
+      || continuationDepthLimit < 0
+      || continuationDepthLimit > PROJECT_GOAL_CONTINUATION_DEPTH_LIMIT
+    ) {
+      throw new Error(PROJECT_GOAL_ERRORS.invalidGoal);
+    }
+    if (this.selectGoalRow(input.goalId) !== undefined) {
+      throw new Error(PROJECT_GOAL_ERRORS.goalExists);
+    }
+
+    const now = this.now();
+    this.database.prepare(`
+      INSERT INTO project_goals (
+        goal_id, project_id, objective, status, created_at, updated_at,
+        current_attempt, max_attempts, continuation_depth_limit
+      ) VALUES (?, ?, ?, 'active', ?, ?, NULL, ?, ?)
+    `).run(
+      input.goalId,
+      input.projectId,
+      input.objective,
+      now,
+      now,
+      maxAttempts,
+      continuationDepthLimit,
+    );
+    const row = this.selectGoalRow(input.goalId);
+    if (row === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
+    return this.decodeGoalRow(row);
   }
 
   readGoal(goalId: string): ProjectGoalRecord | undefined {
@@ -3321,21 +3326,89 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
     });
   }
 
+  /**
+   * Bounded operator enumeration (design §A.1). The limit selects the NEWEST N
+   * rows by `updated_at DESC, goal_id ASC`; the returned rows are then ordered
+   * active-first, `created_at ASC, goal_id ASC` — exactly the `listActiveGoals`
+   * order for the active group. Pure read; never writes.
+   */
+  listGoals(options: ListProjectGoalsOptions = {}): ProjectGoalRecord[] {
+    return this.inTransaction(() => {
+      const projectId = options.projectId;
+      if (
+        projectId !== undefined
+        && (typeof projectId !== 'string' || projectId.trim() === '' || projectId.length > 120)
+      ) {
+        throw new Error(PROJECT_GOAL_ERRORS.invalidGoal);
+      }
+      const includeTerminal = options.includeTerminal !== false;
+      const limit = options.limit === undefined
+        ? 100
+        : Math.min(100, Math.max(1, Math.floor(options.limit)));
+      const rows = this.database.prepare(`
+        SELECT goal_id, project_id, objective, status, created_at, updated_at, terminal_at,
+               current_attempt, max_attempts, continuation_depth_limit, terminal_reason
+        FROM (
+          SELECT goal_id, project_id, objective, status, created_at, updated_at, terminal_at,
+                 current_attempt, max_attempts, continuation_depth_limit, terminal_reason
+          FROM project_goals
+          WHERE (? = 1 OR status = 'active')
+            AND (? IS NULL OR project_id = ?)
+          ORDER BY updated_at DESC, goal_id ASC
+          LIMIT ?
+        )
+        ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at ASC, goal_id ASC
+      `).all(
+        includeTerminal ? 1 : 0,
+        projectId ?? null,
+        projectId ?? null,
+        limit,
+      ) as unknown as ProjectGoalRow[];
+      return rows.map((row) => this.decodeGoalRow(row));
+    });
+  }
+
+  /**
+   * Atomic intake composition (design §D/§N): one transaction that runs the
+   * EXACT existing `createGoal` + `createGoalAttempt` validations and creates
+   * the goal row plus the root attempt (`accepted`, never launched). A
+   * non-created task result (capacity) rolls the whole transaction back —
+   * creation is all-or-nothing, so the surface can never leave a goal without
+   * its root attempt.
+   */
+  createGoalWithRootAttempt(
+    input: CreateGoalWithRootAttemptInput,
+  ): CreateGoalWithRootAttemptResult {
+    return this.inTransaction(() => {
+      const goal = this.createGoalInTx(input.goal);
+      const task = this.createGoalAttemptInTx(input.rootAttempt);
+      if (task.kind !== 'created') {
+        throw new Error(PROJECT_GOAL_ERRORS.capacity);
+      }
+      return { goal, task };
+    });
+  }
+
   private createGoalAttempt(
     input: CreateRootAttemptInput | CreateContinuationAttemptInput,
   ): CreateProjectTaskResult {
-    return this.inTransaction(() => {
-      this.pruneExpiredTerminals();
-      if (
-        !PROJECT_TASK_ID.test(input.taskId)
-        || !PROJECT_GOAL_ID.test(input.goalId)
-        || typeof input.fingerprint !== 'string'
-        || input.fingerprint === ''
-        || !isNonNegativeInteger(input.continuationDepth)
-        || !isNonNegativeInteger(input.attemptNumber)
-      ) {
-        throw new Error(PROJECT_GOAL_ERRORS.invalidLineage);
-      }
+    return this.inTransaction(() => this.createGoalAttemptInTx(input));
+  }
+
+  private createGoalAttemptInTx(
+    input: CreateRootAttemptInput | CreateContinuationAttemptInput,
+  ): CreateProjectTaskResult {
+    this.pruneExpiredTerminals();
+    if (
+      !PROJECT_TASK_ID.test(input.taskId)
+      || !PROJECT_GOAL_ID.test(input.goalId)
+      || typeof input.fingerprint !== 'string'
+      || input.fingerprint === ''
+      || !isNonNegativeInteger(input.continuationDepth)
+      || !isNonNegativeInteger(input.attemptNumber)
+    ) {
+      throw new Error(PROJECT_GOAL_ERRORS.invalidLineage);
+    }
       const intentValidation = validateProjectTaskRequest(input.intent);
       if (!intentValidation.success) throw new Error(PROJECT_GOAL_ERRORS.invalidLineage);
 
@@ -3430,7 +3503,6 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
       const row = this.selectRow(input.taskId);
       if (row === undefined) throw new Error(PROJECT_TASK_SQLITE_ERRORS.corruptRecord);
       return { kind: 'created', record: this.decodeRow(row) };
-    });
   }
 
   createRootAttempt(input: CreateRootAttemptInput): CreateProjectTaskResult {

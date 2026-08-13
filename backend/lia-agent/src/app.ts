@@ -24,6 +24,7 @@ import { createStatusRouter } from './routes/status.js';
 import { createSameOriginStatusRouter } from './routes/sameOriginStatus.js';
 import { createProjectTasksRouter, type ProjectTasksDependencies } from './routes/projectTasks.js';
 import { createProjectSupervisorRouter } from './routes/projectSupervisor.js';
+import { createProjectGoalControlRouter } from './routes/projectGoalControl.js';
 import { InMemoryProjectTaskStore } from './services/inMemoryProjectTaskStore.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
 import type { HermesQueryExecutor } from './services/hermesExecutor.js';
@@ -40,6 +41,8 @@ export type LiaAgentDependencies = {
   projectTaskStore?: ProjectTasksDependencies['store'];
   projectTasksWorkflowExecutor?: ProjectTasksDependencies['executeWorkflow'];
   projectSupervisorRuntime?: ProjectSupervisorSchedulingRuntime;
+  /** Clock seam forwarded to the goal control surface (test/qualification only). */
+  now?: () => number;
 };
 
 export function createApp(
@@ -95,6 +98,21 @@ export function createApp(
     executeWorkflow: dependencies.projectTasksWorkflowExecutor,
   }));
   app.use(createProjectSupervisorRouter(dependencies.projectSupervisorRuntime));
+  // Operator Goal Control Surface — mounted strictly AFTER the supervisor
+  // router so `/api/projects/goals/supervisor` never matches `:goalId`
+  // (routing-order constraint, design §J).
+  app.use(createProjectGoalControlRouter({
+    store: dependencies.projectTaskStore ?? new InMemoryProjectTaskStore(),
+    config,
+    ...(dependencies.projectRegistrySource !== undefined ? { registry: dependencies.projectRegistrySource } : {}),
+    ...(dependencies.projectVerificationRegistry !== undefined
+      ? { verificationRegistry: dependencies.projectVerificationRegistry }
+      : {}),
+    ...(dependencies.projectTasksWorkflowExecutor !== undefined
+      ? { executeWorkflow: dependencies.projectTasksWorkflowExecutor }
+      : {}),
+    ...(dependencies.now !== undefined ? { now: dependencies.now } : {}),
+  }));
   app.use(notFound);
   app.use(errorHandler);
 

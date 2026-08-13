@@ -940,3 +940,47 @@ test('21: structural — no timer/cron/polling/busy-loop; no second engine; no a
   assert.ok(!app.includes('reconcileMultiGoalOnce'), 'app stays free of orchestrator identifiers');
   assert.ok(!app.includes('projectMultiGoalAutonomousOrchestrator'));
 });
+
+test('22: routing order — supervisor routes are matched before :goalId; control surface stays reachable', async () => {
+  const { directory, databasePath } = await tempDatabase('lia-sup-routing-');
+  try {
+    const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000, maxActive: 64, maxRecords: 256 });
+    const { goalId: g, taskId: t } = seedGoal(store, 1);
+    store.fail(t, failure());
+
+    await withServer(createApp(config, { projectTaskStore: store }), async (baseUrl) => {
+      // The supervisor literal routes must win over the control surface's
+      // `:goalId` param route (mount order: supervisor BEFORE goal control).
+      let response = await fetch(`${baseUrl}/api/projects/goals/supervisor`);
+      assert.equal(response.status, 503, 'supervisor HUD fails closed as unavailable, not invalid_goal_id');
+      let body = await response.json();
+      assert.equal(body.error, 'supervisor_unavailable');
+      response = await fetch(`${baseUrl}/api/projects/goals/supervisor/pass`, { method: 'POST' });
+      assert.equal(response.status, 503);
+      body = await response.json();
+      assert.equal(body.error, 'supervisor_unavailable');
+
+      // The control surface remains reachable on its own paths.
+      response = await fetch(`${baseUrl}/api/projects/goals`);
+      assert.equal(response.status, 200);
+      body = await response.json();
+      assert.equal(body.ok, true);
+      assert.equal(body.goals.length, 1);
+      assert.equal(body.goals[0].goalId, g);
+
+      response = await fetch(`${baseUrl}/api/projects/goals/${g}`);
+      assert.equal(response.status, 200);
+      body = await response.json();
+      assert.equal(body.goalId, g);
+
+      // A non-UUID goalId is rejected by the control surface's param guard.
+      response = await fetch(`${baseUrl}/api/projects/goals/not-a-uuid`);
+      assert.equal(response.status, 400);
+      body = await response.json();
+      assert.equal(body.error, 'invalid_goal_id');
+    });
+    store.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
