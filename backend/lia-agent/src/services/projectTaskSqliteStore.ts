@@ -2260,7 +2260,7 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         SELECT evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
                decision, reason_code, summary, evidence_fingerprint, created_at, applied_at
         FROM project_goal_evaluations WHERE goal_id = ?
-        ORDER BY created_at DESC, evaluation_id DESC LIMIT 1
+        ORDER BY attempt_number DESC, created_at DESC, evaluation_id DESC LIMIT 1
       `).get(goalId) as unknown as ProjectGoalEvaluationRow | undefined;
       return row === undefined ? undefined : this.decodeEvaluationRow(row);
     });
@@ -2275,7 +2275,7 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         SELECT evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
                decision, reason_code, summary, evidence_fingerprint, created_at, applied_at
         FROM project_goal_evaluations WHERE goal_id = ?
-        ORDER BY created_at ASC, evaluation_id ASC
+        ORDER BY attempt_number ASC, created_at ASC, evaluation_id ASC
       `).all(goalId) as unknown as ProjectGoalEvaluationRow[];
       return rows.map((row) => this.decodeEvaluationRow(row));
     });

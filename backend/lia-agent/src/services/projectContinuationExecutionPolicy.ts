@@ -107,7 +107,7 @@ function tryRecordCompletionEvidence(store: ProjectTaskStore, taskId: string, re
   if (typeof durable.recordCompletionEvidence !== 'function') return;
   try {
     const readRun = durable.readTaskExecutionRunByTask as ((id: string) => unknown) | undefined;
-    const readInvocation = durable.readTaskExecutionInvocationByExecutionRun as ((id: string) => unknown) | undefined;
+    const readInvocation = durable.readTaskExecutionInvocationByRun as ((id: string) => unknown) | undefined;
     const readAttempt = durable.readTaskExecutionLaunchAttemptByInvocation as ((id: string) => unknown) | undefined;
     const readResult = durable.readTaskExecutionLaunchResultByLaunchAttempt as ((id: string) => unknown) | undefined;
     const readSnapshot = durable.readValidatedProposalSnapshotByLaunchResult as ((id: string) => unknown) | undefined;
@@ -118,22 +118,22 @@ function tryRecordCompletionEvidence(store: ProjectTaskStore, taskId: string, re
 
     if (!readRun || !readInvocation || !readAttempt || !readResult || !readSnapshot || !recordEvidence) return;
 
-    const executionRun = readRun(taskId) as Record<string, unknown> | undefined;
+    const executionRun = readRun.call(store, taskId) as Record<string, unknown> | undefined;
     if (!executionRun) return;
-    const invocation = readInvocation(executionRun.executionRunId as string) as Record<string, unknown> | undefined;
+    const invocation = readInvocation.call(store, executionRun.executionRunId as string) as Record<string, unknown> | undefined;
     if (!invocation) return;
-    const launchAttempt = readAttempt(invocation.invocationId as string) as Record<string, unknown> | undefined;
+    const launchAttempt = readAttempt.call(store, invocation.invocationId as string) as Record<string, unknown> | undefined;
     if (!launchAttempt) return;
-    const launchResult = readResult(launchAttempt.launchAttemptId as string) as Record<string, unknown> | undefined;
+    const launchResult = readResult.call(store, launchAttempt.launchAttemptId as string) as Record<string, unknown> | undefined;
     if (!launchResult) return;
-    const snapshot = readSnapshot(launchResult.launchResultId as string) as Record<string, unknown> | undefined;
+    const snapshot = readSnapshot.call(store, launchResult.launchResultId as string) as Record<string, unknown> | undefined;
     if (!snapshot) return;
 
-    const codexStart = readCodexStart?.(taskId) as Record<string, unknown> | undefined;
-    const verifyStart = readVerifyStart?.(taskId) as Record<string, unknown> | undefined;
-    const commitStart = readCommitStart?.(taskId) as Record<string, unknown> | undefined;
+    const codexStart = readCodexStart?.call(store, taskId) as Record<string, unknown> | undefined;
+    const verifyStart = readVerifyStart?.call(store, taskId) as Record<string, unknown> | undefined;
+    const commitStart = readCommitStart?.call(store, taskId) as Record<string, unknown> | undefined;
 
-    recordEvidence({
+    recordEvidence.call(store, {
       taskId,
       executionRunId: executionRun.executionRunId,
       invocationId: invocation.invocationId,
