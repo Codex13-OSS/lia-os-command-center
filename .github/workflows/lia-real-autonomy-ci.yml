@@ -2,9 +2,6 @@ name: LIA Real Autonomy CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - feat/lia-server-release
   workflow_dispatch:
 
 permissions:
