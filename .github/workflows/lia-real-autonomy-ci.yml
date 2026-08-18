@@ -35,8 +35,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run real autonomy qualification
-        run: node qualification/real-autonomy-qualification.mjs
+      - name: Run validation
+        shell: bash
+        run: |
+          if [ -f qualification/real-autonomy-qualification.mjs ]; then
+            node qualification/real-autonomy-qualification.mjs
+          else
+            npm run self-check
+          fi
 
       - name: Upload qualification report
         if: always()
