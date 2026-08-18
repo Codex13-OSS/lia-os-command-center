@@ -1246,3 +1246,48 @@ test('25: nonexistent goal => 404; malformed goalId => 400 invalid_goal_id', asy
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+
+test("root attempt terminalization wakes supervisor automatically", async () => {
+  const { directory, databasePath } = await tempDatabase("lia-gcs-root-wakeup-");
+  try {
+    const store = new ProjectTaskSqliteStore({
+      databasePath,
+      now: () => 1000,
+      maxActive: 64,
+      maxRecords: 256,
+    });
+    const supervisor = makeSupervisor(store, { assessor: satisfiedAssessor });
+
+    await withServer(controlApp(store, {
+      projectTasksWorkflowExecutor: async () => workflowOk,
+      projectSupervisorRuntime: supervisor,
+    }), async (baseUrl) => {
+      const created = await post(baseUrl, "/api/projects/goals", createBody({
+        maxAttempts: 1,
+        continuationDepthLimit: 0,
+      }));
+      assert.equal(created.status, 202);
+
+      let detail;
+      for (let i = 0; i < 20; i += 1) {
+        await flushImmediates(2);
+        detail = await (await fetch(baseUrl + "/api/projects/goals/" + goalId(1))).json();
+        if (detail.status === "completed") break;
+      }
+
+      assert.equal(detail.status, "completed");
+      assert.equal(detail.terminalReason, "objective_completed");
+      assert.equal(detail.attempts.length, 1);
+
+      const hud = await (await fetch(baseUrl + "/api/projects/goals/supervisor")).json();
+      assert.equal(hud.ok, true);
+      assert.equal(hud.supervisor.lastPass.source, "terminalization");
+      assert.equal(hud.supervisor.lastPass.externalExecutionSlotsUsed, 0);
+    });
+
+    store.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -91,6 +91,8 @@ export type ProjectGoalControlServiceDependencies = {
   verificationRegistry?: ProjectVerificationRegistry;
   /** Test seam forwarded to the intake runner, never before the durable gate. */
   executeWorkflow?: GoalControlWorkflowExecutor;
+  /** Best-effort supervisor wakeup after durable root terminalization. */
+  onRootTaskTerminalized?: () => void;
   now?: () => number;
   noProgressEscalationThreshold?: number;
 };
@@ -373,6 +375,12 @@ export function createProjectGoalControlService(
     };
   };
 
+  const notifyRootTaskTerminalized = (): void => {
+    try { dependencies.onRootTaskTerminalized?.(); } catch {
+      // Durable terminal state remains authoritative if notification fails.
+    }
+  };
+
   /** Schedules the EXISTING durable runner for the root attempt, exactly like the tasks route. */
   const scheduleRootAttemptRunner = (taskId: string, request: ProjectTaskRequest): void => {
     setImmediate(() => {
@@ -394,16 +402,22 @@ export function createProjectGoalControlService(
           if (receipt) {
             tryRecordCompletionEvidence(store, taskId, receipt);
             store.complete(taskId, receipt);
+            notifyRootTaskTerminalized();
           } else {
             store.fail(taskId, genericFailure());
+            notifyRootTaskTerminalized();
           }
         } else if (result.error === 'local_resume_available') {
           // Layer 13: durable resumable state; NOT terminalized, nothing retried.
           return;
         } else {
           store.fail(taskId, safeFailure(result));
+          notifyRootTaskTerminalized();
         }
-      }).catch(() => store.fail(taskId, genericFailure()));
+      }).catch(() => {
+        store.fail(taskId, genericFailure());
+        notifyRootTaskTerminalized();
+      });
     });
   };
 

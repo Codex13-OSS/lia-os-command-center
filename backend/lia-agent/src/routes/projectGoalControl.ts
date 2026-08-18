@@ -40,6 +40,7 @@ export type ProjectGoalControlDependencies = {
   verificationRegistry?: ProjectVerificationRegistry;
   /** Test seam forwarded to the intake runner, never before the durable gate. */
   executeWorkflow?: ProjectGoalControlServiceDependencies['executeWorkflow'];
+  onRootTaskTerminalized?: () => void;
   now?: () => number;
   noProgressEscalationThreshold?: number;
 };
@@ -62,6 +63,7 @@ export function createProjectGoalControlRouter(dependencies: ProjectGoalControlD
     ...(dependencies.registry !== undefined ? { registry: dependencies.registry } : {}),
     ...(dependencies.verificationRegistry !== undefined ? { verificationRegistry: dependencies.verificationRegistry } : {}),
     ...(dependencies.executeWorkflow !== undefined ? { executeWorkflow: dependencies.executeWorkflow } : {}),
+    ...(dependencies.onRootTaskTerminalized !== undefined ? { onRootTaskTerminalized: dependencies.onRootTaskTerminalized } : {}),
     ...(dependencies.now !== undefined ? { now: dependencies.now } : {}),
     ...(dependencies.noProgressEscalationThreshold !== undefined
       ? { noProgressEscalationThreshold: dependencies.noProgressEscalationThreshold }

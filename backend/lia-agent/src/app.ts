@@ -111,6 +111,7 @@ export function createApp(
     ...(dependencies.projectTasksWorkflowExecutor !== undefined
       ? { executeWorkflow: dependencies.projectTasksWorkflowExecutor }
       : {}),
+    onRootTaskTerminalized: (): void => { dependencies.projectSupervisorRuntime?.requestPass('terminalization'); },
     ...(dependencies.now !== undefined ? { now: dependencies.now } : {}),
   }));
   app.use(notFound);
