@@ -1,0 +1,49 @@
+name: LIA Real Autonomy CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lia-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: backend/lia-agent
+
+jobs:
+  real-autonomy-qualification:
+    name: Real autonomy qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/lia-agent/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run real autonomy qualification
+        run: node qualification/real-autonomy-qualification.mjs
+
+      - name: Upload qualification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lia-real-autonomy-qualification
+          path: |
+            backend/lia-agent/qualification/qualification-report.json
+            backend/lia-agent/qualification/qualification-report.txt
+          if-no-files-found: ignore
