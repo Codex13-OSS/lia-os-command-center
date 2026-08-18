@@ -1049,15 +1049,3 @@
 .lia-autonomy-hud-r3-grid strong{font-size:20px}
 .lia-autonomy-hud-r3-foot{padding-top:12px;border-top:1px solid rgba(255,255,255,.08)}
 @media(max-width:760px){.lia-autonomy-hud-r3-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.lia-autonomy-hud-r3-foot{align-items:flex-start;flex-direction:column}}
-
-/* iPad / tablet: fill the real browser window, including Stage Manager. */
-@media (min-width: 721px) and (max-width: 1120px) {
-  .lia-dash-r3-shell.lia-projects-r3-shell {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    height: auto !important;
-    min-height: 0 !important;
-    overflow: hidden !important;
-  }
-}
