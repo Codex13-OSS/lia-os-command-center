@@ -15,6 +15,7 @@ import {
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import '../../styles/projectsExecutiveR3.css';
 import { readLiaHermesUiStatus, type LiaHermesUiStatus } from '../../integrations/liaHermesStatusClient';
+import { readLiaAutonomyHud, type LiaAutonomyHud } from '../../integrations/liaAutonomyHudClient';
 
 type Props = {
   onDashboard: () => void;
@@ -327,6 +328,7 @@ export function ProjectsShellR3(props: Props) {
     state: 'checking',
     label: 'Comprobando Hermes…',
   });
+  const [autonomyHud, setAutonomyHud] = useState<LiaAutonomyHud | null>(null);
   const [instruction, setInstruction] = useState('');
   const [priority, setPriority] = useState<LiaProjectTaskPriority>('normal');
   const [runs, setRuns] = useState<ProjectRun[]>([]);
@@ -469,6 +471,20 @@ export function ProjectsShellR3(props: Props) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const next = await readLiaAutonomyHud();
+      if (!cancelled) setAutonomyHud(next);
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     mountedRef.current = true;
     const saved = loadPersistedProjectTask();
     if (saved && saved.lastStatus !== 'completed' && saved.lastStatus !== 'failed') {
@@ -589,6 +605,44 @@ export function ProjectsShellR3(props: Props) {
           <p>Envía una instrucción y sigue el trabajo de LÍA en vivo</p>
         </div>
       </header>
+
+      <section className="lia-autonomy-hud-r3" aria-label="LÍA Autonomy HUD">
+        <header className="lia-autonomy-hud-r3-head">
+          <div>
+            <span>🤖 LÍA AUTONOMY HUD</span>
+            <strong>{autonomyHud ? 'Supervisor conectado' : 'Conectando al supervisor…'}</strong>
+          </div>
+          <b>{autonomyHud?.supervisor.failClosed ? 'Protección activa' : autonomyHud ? 'Operativo' : 'Conectando'}</b>
+        </header>
+
+        <div className="lia-autonomy-hud-r3-grid">
+          <article>
+            <span>Estado</span>
+            <strong>{autonomyHud?.supervisor.state ?? '—'}</strong>
+            <small>{autonomyHud?.supervisor.enabled ? 'Autonomía habilitada' : 'Esperando estado'}</small>
+          </article>
+          <article>
+            <span>Objetivos activos</span>
+            <strong>{autonomyHud?.supervisor.goals.activeGoalCount ?? '—'}</strong>
+            <small>{autonomyHud ? `${autonomyHud.totalGoals} registrados` : 'Leyendo objetivos'}</small>
+          </article>
+          <article>
+            <span>Ejecutando</span>
+            <strong>{autonomyHud?.supervisor.goals.executingGoalCount ?? '—'}</strong>
+            <small>{autonomyHud ? `${autonomyHud.supervisor.goals.inFlight}/${autonomyHud.supervisor.goals.externalExecutionCeiling} slots` : 'Sin datos'}</small>
+          </article>
+          <article>
+            <span>Intervención humana</span>
+            <strong>{autonomyHud?.supervisor.goals.humanInterventionRequiredCount ?? '—'}</strong>
+            <small>{autonomyHud?.supervisor.goals.blockedOnHumanGoalCount ? 'Hay bloqueos pendientes' : 'Sin bloqueos'}</small>
+          </article>
+        </div>
+
+        <footer className="lia-autonomy-hud-r3-foot">
+          <span>Último impulso: {autonomyHud?.supervisor.lastPass?.source ?? '—'}</span>
+          <span>{autonomyHud?.supervisor.pendingWakeup ? 'Siguiente paso pendiente' : 'Sin trabajo pendiente'}</span>
+        </footer>
+      </section>
 
       <section className="lia-projects-r3-chat" aria-label="Conversación con LÍA">
         <div className="lia-projects-r3-thread" ref={threadRef} role="log" aria-live="polite">

@@ -1035,3 +1035,17 @@
   background: #d86f78;
   box-shadow: 0 0 10px rgba(216, 111, 120, .5);
 }
+
+/* LIA AUTONOMY HUD R3 */
+.lia-autonomy-hud-r3{margin:0 0 18px;padding:18px;border:1px solid rgba(255,255,255,.1);border-radius:22px;background:rgba(15,18,26,.78)}
+.lia-autonomy-hud-r3-head,.lia-autonomy-hud-r3-foot{display:flex;justify-content:space-between;gap:14px;align-items:center}
+.lia-autonomy-hud-r3-head div{display:grid;gap:4px}
+.lia-autonomy-hud-r3-head span{font-size:11px;letter-spacing:.12em;opacity:.7}
+.lia-autonomy-hud-r3-head strong{font-size:16px}
+.lia-autonomy-hud-r3-head b{font-size:12px}
+.lia-autonomy-hud-r3-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0}
+.lia-autonomy-hud-r3-grid article{display:grid;gap:4px;padding:12px;border-radius:16px;background:rgba(255,255,255,.05)}
+.lia-autonomy-hud-r3-grid span,.lia-autonomy-hud-r3-grid small,.lia-autonomy-hud-r3-foot{font-size:11px;opacity:.68}
+.lia-autonomy-hud-r3-grid strong{font-size:20px}
+.lia-autonomy-hud-r3-foot{padding-top:12px;border-top:1px solid rgba(255,255,255,.08)}
+@media(max-width:760px){.lia-autonomy-hud-r3-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.lia-autonomy-hud-r3-foot{align-items:flex-start;flex-direction:column}}

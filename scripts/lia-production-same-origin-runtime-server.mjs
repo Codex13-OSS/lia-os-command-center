@@ -27,6 +27,10 @@ const PROJECT_WORKFLOW_PATH = '/api/projects/tasks/workflow';
 const SAME_ORIGIN_PROJECT_WORKFLOW_PATH = '/api/lia-agent/projects/tasks/workflow';
 const PROJECT_TASKS_PATH = '/api/projects/tasks';
 const SAME_ORIGIN_PROJECT_TASKS_PATH = '/api/lia-agent/projects/tasks';
+const PROJECT_GOALS_PATH = '/api/projects/goals';
+const PROJECT_SUPERVISOR_PATH = '/api/projects/goals/supervisor';
+const SAME_ORIGIN_PROJECT_GOALS_PATH = '/api/lia-agent/projects/goals';
+const SAME_ORIGIN_PROJECT_SUPERVISOR_PATH = '/api/lia-agent/projects/goals/supervisor';
 const MAX_QUERY_CHARACTERS = 8_000;
 // Accept the same real instructions the frontend (8_000 characters, up to
 // ~32 KiB in UTF-8) and the backend (express.json 64kb) already accept. A
@@ -599,6 +603,32 @@ async function proxyHermesStatus(response) {
   sendJson(response, 200, sanitized);
 }
 
+async function proxyGoalRead(pathname, response) {
+  const upstreamPath = pathname === SAME_ORIGIN_PROJECT_SUPERVISOR_PATH
+    ? PROJECT_SUPERVISOR_PATH
+    : PROJECT_GOALS_PATH;
+
+  const upstream = await requestLocal(INTERNAL_BACKEND_PORT, upstreamPath, {
+    method: 'GET',
+    timeout: 2200,
+    maxResponseBytes: MAX_RESPONSE_BYTES,
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!upstream.ok) {
+    sendJson(response, 503, { ok: false, error: 'backend_unavailable' });
+    return;
+  }
+
+  const payload = parseJsonBody(upstream);
+  if (payload?.ok !== true) {
+    sendJson(response, 502, { ok: false, error: 'invalid_backend_response' });
+    return;
+  }
+
+  sendJson(response, 200, payload);
+}
+
 async function proxyHermesQuery(request, response) {
   const contentType = String(request.headers['content-type'] || '').toLowerCase();
 
@@ -872,6 +902,18 @@ function createRuntimeServer(distExists) {
       }
 
       await proxyHermesQuery(request, response);
+      return;
+    }
+
+    if (
+      requestUrl.pathname === SAME_ORIGIN_PROJECT_GOALS_PATH
+      || requestUrl.pathname === SAME_ORIGIN_PROJECT_SUPERVISOR_PATH
+    ) {
+      if (request.method !== 'GET') {
+        sendJson(response, 405, { ok: false, error: 'method_not_allowed' });
+        return;
+      }
+      await proxyGoalRead(requestUrl.pathname, response);
       return;
     }
 
