@@ -1,10 +1,11 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { PROJECT_TASK_ID, sanitizeProjectTaskPayload } from './lia-project-task-public-contract.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..');
@@ -17,10 +18,51 @@ const DEFAULT_PORT = 3424;
 const DEFAULT_CONTROLLED_ADAPTER_PORT = 3224;
 const NON_LOCALHOST_GATE = 'ALLOW_PRODUCTION_SCAFFOLD_REHEARSAL_ONLY';
 const MESSAGING_FLAG = ['whats', 'appEnabled'].join('');
+const DEFAULT_INTERNAL_BACKEND_PORT = 3014;
+const HERMES_QUERY_PATH = '/api/hermes/query';
+const HERMES_STATUS_PATH = '/api/hermes/status';
+const SAME_ORIGIN_QUERY_PATH = '/api/lia-agent/query';
+const SAME_ORIGIN_HERMES_STATUS_PATH = '/api/lia-agent/hermes/status';
+const PROJECT_WORKFLOW_PATH = '/api/projects/tasks/workflow';
+const SAME_ORIGIN_PROJECT_WORKFLOW_PATH = '/api/lia-agent/projects/tasks/workflow';
+const PROJECT_TASKS_PATH = '/api/projects/tasks';
+const SAME_ORIGIN_PROJECT_TASKS_PATH = '/api/lia-agent/projects/tasks';
+const MAX_QUERY_CHARACTERS = 8_000;
+// Accept the same real instructions the frontend (8_000 characters, up to
+// ~32 KiB in UTF-8) and the backend (express.json 64kb) already accept. A
+// 16 KiB byte cap made the production runtime reject long multi-byte
+// instructions that work in dev and are valid for the backend.
+const MAX_REQUEST_BYTES = 64 * 1024;
+const MAX_RESPONSE_BYTES = 96 * 1024;
+const QUERY_TIMEOUT_MS = 125_000;
+const PROJECT_WORKFLOW_TIMEOUT_MS = 20 * 60 * 1_000;
+const PROJECT_SUBMIT_TIMEOUT_MS = 8_000;
+// Leave enough time for this proxy to return its controlled error before the
+// browser's status deadline. Equal deadlines make the browser abort the useful
+// proxy response under transient backend delay.
+const PROJECT_STATUS_TIMEOUT_MS = 3_000;
+const ALLOWED_HERMES_ERRORS = new Set(['invalid_query', 'execution_disabled', 'timeout', 'execution_failed', 'empty_response', 'internal_error']);
+const PROJECT_PRIORITIES = new Set(['low', 'normal', 'high', 'critical']);
+const PROJECT_CAPABILITIES = ['repository_read', 'isolated_worktree_write', 'run_tests', 'local_commit'];
+const PROJECT_WORKFLOW_STAGES = new Set(['planning', 'hermes', 'approval', 'codex', 'verification', 'commit']);
+const PROJECT_WORKFLOW_ERRORS = new Set([
+  'invalid_task', 'project_not_found', 'project_disabled', 'registry_unavailable',
+  'local_commit_requires_run_tests', 'prompt_too_large', 'execution_disabled', 'timeout',
+  'execution_failed', 'empty_response', 'invalid_hermes_json', 'invalid_hermes_proposal',
+  'human_approval_required', 'missing_repository_read', 'missing_isolated_worktree_write',
+  'invalid_generated_path', 'worktree_create_failed', 'codex_execution_failed',
+  'worktree_cleanup_failed', 'verification_unavailable', 'visual_verification_unavailable',
+  'check_failed', 'check_timeout', 'visual_check_failed', 'visual_check_timeout',
+  'local_commit_not_approved', 'workspace_not_verified', 'nothing_to_commit',
+  'git_status_failed', 'git_stage_failed', 'git_commit_failed', 'git_revision_failed',
+]);
 
 const host = process.env.LIA_PRODUCTION_RUNTIME_HOST || DEFAULT_HOST;
 const rawPort = process.env.LIA_PRODUCTION_RUNTIME_PORT || String(DEFAULT_PORT);
 const port = Number.parseInt(rawPort, 10);
+const rawInternalBackendPort =
+  process.env.LIA_HERMES_BACKEND_PORT || String(DEFAULT_INTERNAL_BACKEND_PORT);
+const INTERNAL_BACKEND_PORT = Number.parseInt(rawInternalBackendPort, 10);
 const allowNonLocalhost = process.env.LIA_PRODUCTION_RUNTIME_ALLOW_NON_LOCALHOST === NON_LOCALHOST_GATE;
 
 let controlledAdapter = null;
@@ -120,8 +162,26 @@ function parseJsonBody(response) {
 function requestLocal(targetPort, pathname, options = {}) {
   const method = options.method || 'GET';
   const timeout = options.timeout || 1200;
+  const requestBody = typeof options.body === 'string' ? options.body : '';
+  const headers = { ...(options.headers || {}) };
+  const maxResponseBytes =
+    Number.isInteger(options.maxResponseBytes) && options.maxResponseBytes > 0
+      ? options.maxResponseBytes
+      : MAX_RESPONSE_BYTES;
+
+  if (requestBody.length > 0) {
+    headers['Content-Length'] = Buffer.byteLength(requestBody);
+  }
 
   return new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const request = httpRequest(
       {
         host: DEFAULT_HOST,
@@ -129,20 +189,51 @@ function requestLocal(targetPort, pathname, options = {}) {
         method,
         path: pathname,
         timeout,
+        headers,
       },
       (response) => {
-        let body = '';
+        let responseBody = '';
+        let responseBytes = 0;
 
         response.setEncoding('utf8');
+
         response.on('data', (chunk) => {
-          body += chunk;
+          if (settled) return;
+
+          responseBytes += Buffer.byteLength(chunk, 'utf8');
+
+          if (responseBytes > maxResponseBytes) {
+            finish({
+              ok: false,
+              statusCode: response.statusCode || 0,
+              headers: response.headers,
+              body: '',
+              error: 'response_too_large',
+            });
+            response.destroy();
+            request.destroy();
+            return;
+          }
+
+          responseBody += chunk;
         });
+
         response.on('end', () => {
-          resolve({
+          finish({
             ok: true,
             statusCode: response.statusCode || 0,
             headers: response.headers,
-            body,
+            body: responseBody,
+          });
+        });
+
+        response.on('error', (error) => {
+          finish({
+            ok: false,
+            statusCode: response.statusCode || 0,
+            headers: response.headers,
+            body: '',
+            error: error.message,
           });
         });
       },
@@ -151,8 +242,9 @@ function requestLocal(targetPort, pathname, options = {}) {
     request.on('timeout', () => {
       request.destroy(new Error('request_timeout'));
     });
+
     request.on('error', (error) => {
-      resolve({
+      finish({
         ok: false,
         statusCode: 0,
         headers: {},
@@ -160,7 +252,65 @@ function requestLocal(targetPort, pathname, options = {}) {
         error: error.message,
       });
     });
+
+    if (requestBody.length > 0) {
+      request.write(requestBody);
+    }
+
     request.end();
+  });
+}
+
+function readJsonRequestBody(request) {
+  return new Promise((resolve) => {
+    let body = '';
+    let bytes = 0;
+    let completed = false;
+
+    const finish = (result) => {
+      if (completed) return;
+      completed = true;
+      resolve(result);
+    };
+
+    request.on('data', (chunk) => {
+      if (completed) return;
+
+      bytes += chunk.length;
+
+      if (bytes > MAX_REQUEST_BYTES) {
+        finish({
+          ok: false,
+          error: 'payload_too_large',
+        });
+        return;
+      }
+
+      body += chunk.toString('utf8');
+    });
+
+    request.on('end', () => {
+      if (completed) return;
+
+      try {
+        finish({
+          ok: true,
+          body: JSON.parse(body || '{}'),
+        });
+      } catch {
+        finish({
+          ok: false,
+          error: 'invalid_json',
+        });
+      }
+    });
+
+    request.on('error', () => {
+      finish({
+        ok: false,
+        error: 'invalid_request',
+      });
+    });
   });
 }
 
@@ -341,6 +491,321 @@ async function readControlledAdapter() {
   return isSanitizedAdapterPayload(payload) ? payload : createDegradedAdapterPayload();
 }
 
+function createSafeHermesError(error = 'backend_unavailable') {
+  return {
+    ok: false,
+    error,
+  };
+}
+
+function sanitizeHermesPayload(payload) {
+  if (
+    payload?.ok === true &&
+    payload?.integration === 'hermes' &&
+    typeof payload?.model === 'string' &&
+    payload.model.length > 0 &&
+    payload.model.length <= 128 &&
+    typeof payload?.response === 'string' &&
+    payload.response.trim().length > 0 &&
+    Buffer.byteLength(payload.response, 'utf8') <= 64 * 1024
+  ) {
+    return {
+      ok: true,
+      integration: 'hermes',
+      model: payload.model,
+      response: payload.response.trim(),
+    };
+  }
+
+  if (
+    payload?.ok === false &&
+    typeof payload?.error === 'string' &&
+    ALLOWED_HERMES_ERRORS.has(payload.error)
+  ) {
+    return createSafeHermesError(payload.error);
+  }
+
+  return null;
+}
+
+function sanitizeHermesStatusPayload(payload) {
+  if (
+    payload?.ok === true
+    && payload?.service === 'lia-agent-backend'
+    && payload?.integration === 'hermes'
+    && payload?.mode === 'guarded_prompt_execution'
+    && typeof payload?.configured === 'boolean'
+    && typeof payload?.runtimeDetected === 'boolean'
+    && ['available', 'unavailable'].includes(payload?.state)
+    && Number.isSafeInteger(payload?.requiredMarkers)
+    && Number.isSafeInteger(payload?.detectedMarkers)
+    && typeof payload?.executionEnabled === 'boolean'
+    && typeof payload?.toolsEnabled === 'boolean'
+    && typeof payload?.memoryWriteEnabled === 'boolean'
+    && typeof payload?.handoffEnabled === 'boolean'
+    && typeof payload?.multiplexEnabled === 'boolean'
+    && payload?.isolationStrategy === 'one_process_per_tenant'
+  ) {
+    return {
+      ok: true,
+      integration: 'hermes',
+      mode: payload.mode,
+      configured: payload.configured,
+      runtimeDetected: payload.runtimeDetected,
+      state: payload.state,
+      executionEnabled: payload.executionEnabled,
+      toolsEnabled: payload.toolsEnabled,
+      memoryWriteEnabled: payload.memoryWriteEnabled,
+      handoffEnabled: payload.handoffEnabled,
+      multiplexEnabled: payload.multiplexEnabled,
+      isolationStrategy: payload.isolationStrategy,
+    };
+  }
+  return null;
+}
+
+async function proxyHermesStatus(response) {
+  const upstream = await requestLocal(
+    INTERNAL_BACKEND_PORT,
+    HERMES_STATUS_PATH,
+    {
+      method: 'GET',
+      timeout: 2200,
+      maxResponseBytes: MAX_RESPONSE_BYTES,
+      headers: { Accept: 'application/json' },
+    },
+  );
+
+  if (!upstream.ok) {
+    sendJson(response, 503, {
+      ok: false,
+      integration: 'hermes',
+      error: 'backend_unavailable',
+    });
+    return;
+  }
+
+  const sanitized = sanitizeHermesStatusPayload(parseJsonBody(upstream));
+
+  if (sanitized === null) {
+    sendJson(response, 502, {
+      ok: false,
+      integration: 'hermes',
+      error: 'invalid_backend_response',
+    });
+    return;
+  }
+
+  sendJson(response, 200, sanitized);
+}
+
+async function proxyHermesQuery(request, response) {
+  const contentType = String(request.headers['content-type'] || '').toLowerCase();
+
+  if (!contentType.includes('application/json')) {
+    sendJson(response, 415, createSafeHermesError('unsupported_media_type'));
+    return;
+  }
+
+  const parsedRequest = await readJsonRequestBody(request);
+
+  if (!parsedRequest.ok) {
+    const statusCode = parsedRequest.error === 'payload_too_large' ? 413 : 400;
+    sendJson(response, statusCode, createSafeHermesError(parsedRequest.error));
+    return;
+  }
+
+  const query = typeof parsedRequest.body?.query === 'string'
+    ? parsedRequest.body.query.trim()
+    : '';
+
+  if (query.length === 0 || query.length > MAX_QUERY_CHARACTERS) {
+    sendJson(response, 400, {
+      ...createSafeHermesError('invalid_query'),
+      maxCharacters: MAX_QUERY_CHARACTERS,
+    });
+    return;
+  }
+
+  const upstream = await requestLocal(
+    INTERNAL_BACKEND_PORT,
+    HERMES_QUERY_PATH,
+    {
+      method: 'POST',
+      timeout: QUERY_TIMEOUT_MS,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query }),
+    },
+  );
+
+  if (!upstream.ok) {
+    sendJson(response, 502, createSafeHermesError('backend_unavailable'));
+    return;
+  }
+
+  const sanitized = sanitizeHermesPayload(parseJsonBody(upstream));
+
+  if (sanitized === null) {
+    sendJson(response, 502, createSafeHermesError('invalid_backend_response'));
+    return;
+  }
+
+  const allowedStatusCodes = new Set([200, 400, 502, 503]);
+  const statusCode = allowedStatusCodes.has(upstream.statusCode)
+    ? upstream.statusCode
+    : 502;
+
+  sendJson(response, statusCode, sanitized);
+}
+
+function createSafeProjectWorkflowError(error = 'backend_unavailable', stage) {
+  return {
+    ok: false,
+    integration: 'project_workflow',
+    ...(PROJECT_WORKFLOW_STAGES.has(stage) ? { stage } : {}),
+    error,
+  };
+}
+
+function sanitizeProjectWorkflowPayload(payload) {
+  if (
+    payload?.ok === true
+    && payload?.integration === 'project_workflow'
+    && payload?.projectId === 'lia-hermes'
+    && typeof payload?.executionId === 'string'
+    && /^[A-Za-z0-9_-]{1,128}$/.test(payload.executionId)
+    && ['analyzed', 'ready_for_review', 'verified', 'committed'].includes(payload?.status)
+    && typeof payload?.resultText === 'string'
+    && payload.resultText.length > 0
+    && payload.resultText.length <= 6000
+  ) {
+    const receipt = {
+      ok: true,
+      integration: 'project_workflow',
+      mode: 'isolated_codex_workflow',
+      projectId: 'lia-hermes',
+      executionId: payload.executionId,
+      status: payload.status,
+      resultText: payload.resultText,
+      executionSummary: payload.status === 'committed'
+        ? 'La tarea terminó, fue verificada y quedó guardada en un commit local.'
+        : payload.status === 'verified'
+          ? 'La tarea terminó y superó las verificaciones configuradas.'
+          : 'La tarea terminó y está lista para revisión.',
+    };
+    if (payload.status !== 'ready_for_review' && payload.status !== 'analyzed') {
+      const verification = payload.verification;
+      if (
+        verification?.status !== 'verified'
+        || !Number.isSafeInteger(verification?.checksPassed)
+        || !Number.isSafeInteger(verification?.totalChecks)
+        || verification.checksPassed < 0
+        || verification.totalChecks < verification.checksPassed
+      ) return null;
+      receipt.verification = {
+        status: 'verified',
+        checksPassed: verification.checksPassed,
+        totalChecks: verification.totalChecks,
+      };
+    }
+    if (payload.status === 'committed') {
+      if (typeof payload.commit !== 'string' || !/^[0-9a-fA-F]{40,64}$/.test(payload.commit)) return null;
+      receipt.commit = payload.commit;
+    }
+    return receipt;
+  }
+
+  if (
+    payload?.ok === false
+    && (payload?.integration === undefined || payload.integration === 'project_workflow')
+    && PROJECT_WORKFLOW_ERRORS.has(payload?.error)
+  ) {
+    return createSafeProjectWorkflowError(payload.error, payload.stage);
+  }
+  return null;
+}
+
+async function proxyProjectTaskWorkflow(request, response) {
+  const contentType = String(request.headers['content-type'] || '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    sendJson(response, 415, createSafeProjectWorkflowError('unsupported_media_type'));
+    return;
+  }
+  const parsedRequest = await readJsonRequestBody(request);
+  if (!parsedRequest.ok) {
+    sendJson(response, parsedRequest.error === 'payload_too_large' ? 413 : 400, createSafeProjectWorkflowError(parsedRequest.error));
+    return;
+  }
+  const body = parsedRequest.body;
+  const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
+  const projectId = typeof body?.projectId === 'string' ? body.projectId.trim() : '';
+  const instruction = typeof body?.instruction === 'string' ? body.instruction.trim() : '';
+  const validCapabilities = Array.isArray(body?.requestedCapabilities)
+    && body.requestedCapabilities.length === PROJECT_CAPABILITIES.length
+    && PROJECT_CAPABILITIES.every((capability) => body.requestedCapabilities.includes(capability));
+  if (
+    keys.length !== 4
+    || !['projectId', 'instruction', 'priority', 'requestedCapabilities'].every((key) => keys.includes(key))
+    || projectId !== 'lia-hermes'
+    || instruction.length === 0
+    || instruction.length > MAX_QUERY_CHARACTERS
+    || !PROJECT_PRIORITIES.has(body?.priority)
+    || !validCapabilities
+  ) {
+    sendJson(response, 400, createSafeProjectWorkflowError('invalid_task', 'planning'));
+    return;
+  }
+
+  const upstream = await requestLocal(INTERNAL_BACKEND_PORT, PROJECT_WORKFLOW_PATH, {
+    method: 'POST',
+    timeout: PROJECT_WORKFLOW_TIMEOUT_MS,
+    maxResponseBytes: MAX_RESPONSE_BYTES,
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, instruction, priority: body.priority, requestedCapabilities: PROJECT_CAPABILITIES }),
+  });
+  if (!upstream.ok) {
+    sendJson(response, 502, createSafeProjectWorkflowError('backend_unavailable'));
+    return;
+  }
+  const sanitized = sanitizeProjectWorkflowPayload(parseJsonBody(upstream));
+  if (sanitized === null) {
+    sendJson(response, 502, createSafeProjectWorkflowError('invalid_backend_response'));
+    return;
+  }
+  const statusCode = upstream.statusCode >= 200 && upstream.statusCode <= 504 ? upstream.statusCode : 502;
+  sendJson(response, statusCode, sanitized);
+}
+
+function safeTaskError(error = 'backend_unavailable') { return { ok: false, integration: 'project_task', error }; }
+async function proxyProjectTaskSubmit(request, response) {
+  const contentType = String(request.headers['content-type'] || '').toLowerCase();
+  if (!contentType.includes('application/json')) return sendJson(response, 415, safeTaskError('unsupported_media_type'));
+  const parsed = await readJsonRequestBody(request);
+  if (!parsed.ok) return sendJson(response, parsed.error === 'payload_too_large' ? 413 : 400, safeTaskError(parsed.error));
+  const body = parsed.body;
+  if (!PROJECT_TASK_ID.test(body?.taskId)) return sendJson(response, 400, safeTaskError('invalid_task_id'));
+  const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
+  const instruction = typeof body?.instruction === 'string' ? body.instruction.trim() : '';
+  const validCapabilities = Array.isArray(body?.requestedCapabilities)
+    && body.requestedCapabilities.length === PROJECT_CAPABILITIES.length
+    && PROJECT_CAPABILITIES.every((capability) => body.requestedCapabilities.includes(capability));
+  if (keys.length !== 5 || !['taskId', 'projectId', 'instruction', 'priority', 'requestedCapabilities'].every((key) => keys.includes(key)) || body.projectId !== 'lia-hermes' || instruction.length === 0 || instruction.length > MAX_QUERY_CHARACTERS || !PROJECT_PRIORITIES.has(body.priority) || !validCapabilities) return sendJson(response, 400, safeTaskError('invalid_task'));
+  const upstream = await requestLocal(INTERNAL_BACKEND_PORT, PROJECT_TASKS_PATH, { method: 'POST', timeout: PROJECT_SUBMIT_TIMEOUT_MS, maxResponseBytes: MAX_RESPONSE_BYTES, headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!upstream.ok) return sendJson(response, 503, safeTaskError('backend_unavailable'));
+  const sanitized = sanitizeProjectTaskPayload(parseJsonBody(upstream));
+  sendJson(response, sanitized ? upstream.statusCode : 502, sanitized ?? safeTaskError('invalid_backend_response'));
+}
+
+async function proxyProjectTaskStatus(taskId, response) {
+  const upstream = await requestLocal(INTERNAL_BACKEND_PORT, `${PROJECT_TASKS_PATH}/${taskId}`, { timeout: PROJECT_STATUS_TIMEOUT_MS, maxResponseBytes: MAX_RESPONSE_BYTES, headers: { Accept: 'application/json' } });
+  if (!upstream.ok) return sendJson(response, 503, safeTaskError('backend_unavailable'));
+  const sanitized = sanitizeProjectTaskPayload(parseJsonBody(upstream));
+  sendJson(response, sanitized ? upstream.statusCode : 502, sanitized ?? safeTaskError('invalid_backend_response'));
+}
+
 function createRuntimeServer(distExists) {
   return createServer(async (request, response) => {
     const requestUrl = new URL(request.url || '/', `http://${host}:${port}`);
@@ -371,6 +836,65 @@ function createRuntimeServer(distExists) {
 
       sendJson(response, 200, await readControlledAdapter());
       return;
+    }
+
+    if (requestUrl.pathname === SAME_ORIGIN_HERMES_STATUS_PATH) {
+      if (request.method !== 'GET') {
+        sendJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed',
+          allowedMethods: ['GET'],
+        });
+        return;
+      }
+
+      if (requestUrl.search !== '') {
+        sendJson(response, 400, {
+          ok: false,
+          integration: 'hermes',
+          error: 'invalid_request',
+        });
+        return;
+      }
+
+      await proxyHermesStatus(response);
+      return;
+    }
+
+    if (requestUrl.pathname === SAME_ORIGIN_QUERY_PATH) {
+      if (request.method !== 'POST') {
+        sendJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed',
+          allowedMethods: ['POST'],
+        });
+        return;
+      }
+
+      await proxyHermesQuery(request, response);
+      return;
+    }
+
+    if (requestUrl.pathname === SAME_ORIGIN_PROJECT_WORKFLOW_PATH) {
+      if (request.method !== 'POST') {
+        sendJson(response, 405, { ok: false, error: 'method_not_allowed', allowedMethods: ['POST'] });
+        return;
+      }
+      await proxyProjectTaskWorkflow(request, response);
+      return;
+    }
+
+    if (requestUrl.pathname === SAME_ORIGIN_PROJECT_TASKS_PATH) {
+      if (request.method !== 'POST') return sendJson(response, 405, { ok: false, error: 'method_not_allowed', allowedMethods: ['POST'] });
+      if (requestUrl.search !== '') return sendJson(response, 400, safeTaskError('invalid_task'));
+      await proxyProjectTaskSubmit(request, response); return;
+    }
+    const taskStatusMatch = requestUrl.pathname.match(/^\/api\/lia-agent\/projects\/tasks\/([^/]+)$/);
+    if (taskStatusMatch) {
+      if (request.method !== 'GET') return sendJson(response, 405, { ok: false, error: 'method_not_allowed', allowedMethods: ['GET'] });
+      if (requestUrl.search !== '') return sendJson(response, 400, safeTaskError('invalid_task_id'));
+      if (!PROJECT_TASK_ID.test(taskStatusMatch[1])) return sendJson(response, 400, safeTaskError('invalid_task_id'));
+      await proxyProjectTaskStatus(taskStatusMatch[1], response); return;
     }
 
     if (requestUrl.pathname.startsWith('/api/')) {
@@ -415,7 +939,14 @@ async function shutdownAndExit(server, exitCode = 0) {
   process.exit(exitCode);
 }
 
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
+if (
+  !Number.isInteger(port) ||
+  port < 1 ||
+  port > 65535 ||
+  !Number.isInteger(INTERNAL_BACKEND_PORT) ||
+  INTERNAL_BACKEND_PORT < 1 ||
+  INTERNAL_BACKEND_PORT > 65535
+) {
   console.error(JSON.stringify(createStartupSnapshot(false, existsSync(path.join(distDir, 'index.html'))), null, 2));
   process.exit(1);
 }

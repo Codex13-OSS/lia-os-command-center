@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { CognitiveSpaceEngine } from './components/CognitiveSpaceEngine';
 import { NeuralCore } from './components/NeuralCore';
-import { activity, agenda, alerts, tracking } from './data/liaOsExecutiveData';
+import { activity, agenda, tracking } from './data/liaOsExecutiveData';
 import { getExecutiveAgendaEventsForDay, getExecutiveTodayDayId } from './data/executiveAgendaData';
 import { connectorPremiumStyles, mobileLÍAFixStyles, styles } from './styles/liaOsStyles';
 import { ExecutiveAgendaTimeline } from './components/ExecutiveAgendaTimeline';
@@ -13,10 +13,20 @@ import { ExecutiveEnvironmentCard } from './components/ExecutiveEnvironmentCard'
 import { DynamicCommandLayer } from './components/DynamicCommandLayer';
 import { LiaAgentBridgeStatusCard } from './components/LiaAgentBridgeStatusCard';
 import { LiaAgentBackendStatusCard } from './components/LiaAgentBackendStatusCard';
+import { LiaLoginScreen } from './components/LiaLoginScreen';
+import { requestLiaHermesResponse } from './integrations/liaHermesChatClient';
+import { DashboardShellR3 } from './components/dashboard-r3/DashboardShellR3';
+import { AgendaShellR3 } from './components/agenda-r3/AgendaShellR3';
+import { ProjectsShellR3 } from './components/projects-r3/ProjectsShellR3';
+import { DashboardIconR3 } from './components/dashboard-r3/DashboardIconR3';
+import type { LiaConversationController } from './components/lia-r3/liaConversationController';
+import './styles/agendaExecutiveR3.css';
 
-type View = 'dashboard' | 'agenda' | 'tracking' | 'documents' | 'alerts';
+type View = 'dashboard' | 'agenda' | 'projects' | 'tracking' | 'documents' | 'alerts';
 
 const DOCUMENT_GENERATOR_URL = 'http://38.242.222.25:3023';
+const agendaR3Enabled = true;
+const liaConversationR3Enabled = true;
 
 export default function App() {
   const [logged, setLogged] = useState(false);
@@ -33,7 +43,6 @@ export default function App() {
     'Esperando instrucción ejecutiva.',
   ]);
   const [activityFeed, setActivityFeed] = useState(activity);
-  const [, setAlertsList] = useState(alerts);
   const [livePulse, setLivePulse] = useState(0);
   const [liaMessages, setLÍAMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([
     {
@@ -45,12 +54,16 @@ export default function App() {
   const [mobileOrbListening, setMobileOrbListening] = useState(false);
   const [mobileLÍAOpen, setMobileLÍAOpen] = useState(false);
   const [activeLiaAction, setActiveLiaAction] = useState<string | null>(null);
+  const [liaQueryPending, setLiaQueryPending] = useState(false);
+  const [liaPanelOpen, setLiaPanelOpen] = useState(false);
+  const liaQueryPendingRef = useRef(false);
   const mobileInputRef = useRef<HTMLInputElement | null>(null);
   const orbTimeoutRef = useRef<number | null>(null);
 
   const viewContext: Record<View, string> = {
     dashboard: 'Centro ejecutivo',
     agenda: 'Agenda ejecutiva',
+    projects: 'Proyectos',
     tracking: 'Seguimiento operativo',
     documents: 'Documentos',
     alerts: 'Alertas',
@@ -115,24 +128,7 @@ export default function App() {
     window.open(DOCUMENT_GENERATOR_URL, '_blank', 'noopener,noreferrer');
   };
 
-  const addDocument = (title = 'Documento listo para revisión') => {
-    const stamp = new Date().toLocaleTimeString('es-MX', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
 
-    addActivity(`${title}: generador documental abierto a las ${stamp}.`);
-    openDocumentGenerator();
-  };
-
-  const addAlert = (title = 'Nuevo recordatorio ejecutivo') => {
-    setAlertsList((prev) => [
-      ['Alta', title, 'Alerta ejecutiva preparada. Confirmación pendiente.'],
-      ...prev,
-    ].slice(0, 6));
-
-    setView('alerts');
-  };
 
   const runLÍAAction = (instruction: string, result: string, onConfirm?: () => void) => {
     const flowContext = viewContext[view];
@@ -255,39 +251,80 @@ export default function App() {
     runLÍAAction(label, result, () => addActivity(activityText));
   };
 
-  const sendLÍA = () => {
+  const sendLÍA = async () => {
     const clean = message.trim();
-    if (!clean) return;
 
-    const lower = clean.toLowerCase();
+    if (!clean || liaQueryPendingRef.current) return;
 
-    if (lower.includes('documento') || lower.includes('reporte') || lower.includes('contrato')) {
-      runLÍAAction(
-        clean,
-        'Documento conectado al centro documental con estado, responsable y decisión pendiente.',
-        () => addDocument(clean.length > 34 ? `${clean.slice(0, 34)}…` : clean)
-      );
-    } else if (lower.includes('recordatorio') || lower.includes('alerta')) {
-      runLÍAAction(
-        clean,
-        'Recordatorio conectado al centro de alertas con origen, prioridad y validación pendiente.',
-        () => addAlert(clean.length > 36 ? `${clean.slice(0, 36)}…` : clean)
-      );
-    } else if (lower.includes('resumen') || lower.includes('agenda')) {
-      runLÍAAction(
-        clean,
-        'Resumen conectado a agenda: objetivo, riesgos y salida esperada preparados.',
-        () => addActivity('Resumen ejecutivo solicitado por texto.')
-      );
-    } else {
-      runLÍAAction(
-        clean,
-        'Instrucción conectada al flujo ejecutivo. LÍA actualizó contexto y siguiente movimiento.',
-        () => addActivity(`LÍA procesó: ${clean.length > 44 ? `${clean.slice(0, 44)}…` : clean}`)
-      );
-    }
+    const pendingText = 'Consultando el núcleo de LÍA...';
 
+    liaQueryPendingRef.current = true;
+    setLiaQueryPending(true);
+    setActiveLiaAction(clean);
+    setLÍAState('Procesando');
     setMessage('');
+    setLÍAMessages((current) => [
+      ...current.slice(-4),
+      { role: 'user' as const, text: clean },
+      { role: 'assistant' as const, text: pendingText },
+    ].slice(-6));
+
+    try {
+      const result = await requestLiaHermesResponse(clean);
+      const responseText = result.ok ? result.response : result.message;
+
+      setLÍAMessages((current) => {
+        const next = [...current];
+
+        for (let index = next.length - 1; index >= 0; index -= 1) {
+          const item = next[index];
+
+          if (item.role === 'assistant' && item.text === pendingText) {
+            next[index] = {
+              role: 'assistant',
+              text: responseText,
+            };
+            return next.slice(-6);
+          }
+        }
+
+        return [
+          ...next,
+          {
+            role: 'assistant' as const,
+            text: responseText,
+          },
+        ].slice(-6);
+      });
+
+      if (result.ok) {
+        pushLÍALog(`Hermes · ${result.model} · respuesta recibida`);
+        addActivity(
+          `LÍA respondió: ${clean.length > 44 ? `${clean.slice(0, 44)}…` : clean}`,
+        );
+      } else {
+        pushLÍALog('Hermes · consulta no completada');
+      }
+    } finally {
+      liaQueryPendingRef.current = false;
+      setLiaQueryPending(false);
+      setActiveLiaAction(null);
+      setLÍAState('En línea');
+    }
+  };
+
+  const liaConversationController: LiaConversationController = {
+    message,
+    messages: liaMessages,
+    pending: liaQueryPending,
+    open: liaPanelOpen,
+    setMessage,
+    submit: () => {
+      setLiaPanelOpen(true);
+      void sendLÍA();
+    },
+    openPanel: () => setLiaPanelOpen(true),
+    closePanel: () => setLiaPanelOpen(false),
   };
 
   const closeMobileLÍA = () => {
@@ -354,105 +391,74 @@ export default function App() {
 
   if (!logged) {
     return (
-      <main className="lia-login-premium">
-        <style>{styles}</style>
-        <style>{connectorPremiumStyles}</style>
-        <style>{mobileLÍAFixStyles}</style>
+      <LiaLoginScreen
+        email={loginEmail}
+        password={loginPassword}
+        error={loginError}
+        onEmailChange={setLoginEmail}
+        onPasswordChange={setLoginPassword}
+        onSubmit={() => {
+          if (loginEmail !== 'ejecutivo@lia.local' || loginPassword !== 'lia2026') {
+            setLoginError('Credenciales de acceso: ejecutivo@lia.local / lia2026');
+            return;
+          }
 
-        <div className="login-cinematic-bg" aria-hidden="true" />
-        <div className="login-mesh-glow" aria-hidden="true" />
-
-        <header className="login-brand-premium">
-          <div className="login-brand-mark">LÍA</div>
-          <div>
-            <strong>LÍA O.S</strong>
-            <span>Centro de mando ejecutivo</span>
-          </div>
-        </header>
-
-        <aside className="login-sync-panel">
-          <p className="login-eyebrow">Centro de mando ejecutivo</p>
-          <h1>NÚCLEO COGNITIVO</h1>
-          <p>
-            Acceso ejecutivo seguro. Verificando identidad, enlazando contexto operativo
-            y preparando el mapa cognitivo de dirección.
-          </p>
-        </aside>
-
-        <section className="login-orb-stage" aria-label="Núcleo cognitivo LÍA">
-          <div className="orb-halo-system">
-            <NeuralCore />
-          </div>
-        </section>
-
-        <section className="executive-access-panel">
-          <div className="access-panel-head">
-            <p className="login-eyebrow">ACCESO EJECUTIVO</p>
-            <h2>Verificación requerida</h2>
-            <p>Ingresa con tus credenciales para iniciar el centro de comando.</p>
-          </div>
-
-          <form
-            className="login-premium-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-
-              if (loginEmail !== 'ejecutivo@lia.local' || loginPassword !== 'lia2026') {
-                setLoginError('Credenciales de acceso: ejecutivo@lia.local / lia2026');
-                return;
-              }
-
-              setLoginError(null);
-              setLogged(true);
-            }}
-          >
-            <label className="login-field">
-              <span>Correo ejecutivo</span>
-              <input
-                type="email"
-                value={loginEmail}
-                onChange={(event) => setLoginEmail(event.target.value)}
-                placeholder="ejecutivo@lia.local"
-                autoComplete="email"
-                className="login-autofill-dark-fix-v088"
-              />
-            </label>
-
-            <label className="login-field">
-              <span>Clave de acceso</span>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(event) => setLoginPassword(event.target.value)}
-                placeholder="lia2026"
-                autoComplete="current-password"
-                className="login-autofill-dark-fix-v088"
-              />
-            </label>
-
-            {loginError ? <p className="login-error">{loginError}</p> : null}
-
-            <button type="submit" className="login-premium-submit">
-              Iniciar sesión <span>→</span>
-            </button>
-
-            <button type="button" className="login-biometric">
-              Acceso biométrico
-            </button>
-          </form>
-        </section>
-
-      </main>
+          setLoginError(null);
+          setLogged(true);
+        }}
+      />
     );
+  }
+
+  if ((() => view === 'dashboard')()) {
+    return (
+      <DashboardShellR3
+        onDashboard={() => setView('dashboard')}
+        onAgenda={() => setView('agenda')}
+        onProjects={() => setView('projects')}
+        onTracking={() => setView('tracking')}
+        onDocuments={openDocumentGenerator}
+        onAlerts={() => setView('alerts')}
+        onLogout={() => setLogged(false)}
+        conversationController={liaConversationR3Enabled ? liaConversationController : undefined}
+      />
+    );
+  }
+
+  if (view === 'agenda' && agendaR3Enabled) {
+    return <AgendaShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={() => setLogged(false)} />;
+  }
+
+  if (view === 'projects') {
+    return <ProjectsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={() => setLogged(false)} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} />;
   }
 
   const nav = [
     ['dashboard', 'Inicio'],
     ['agenda', 'Agenda'],
+    ['projects', 'Proyectos'],
     ['tracking', 'Seguimiento'],
     ['documents', 'Generador de documentos'],
     ['alerts', 'Alertas'],
   ] as const;
+
+  const mobileTabLabels: Record<View, string> = {
+    dashboard: 'Inicio',
+    agenda: 'Agenda',
+    projects: 'Proyectos',
+    tracking: 'Seguimiento',
+    documents: 'Documentos',
+    alerts: 'Alertas',
+  };
+
+  const mobileTabIcons: Record<View, 'inicio' | 'agenda' | 'procesos' | 'seguimiento' | 'documentos' | 'alertas'> = {
+    dashboard: 'inicio',
+    agenda: 'agenda',
+    projects: 'procesos',
+    tracking: 'seguimiento',
+    documents: 'documentos',
+    alerts: 'alertas',
+  };
 
   const handleMobileNavLink = (id: View) => {
     setMobileNavOpen(false);
@@ -485,6 +491,21 @@ export default function App() {
         <span />
         <strong>Menú</strong>
       </button>
+
+      <nav className="mobile-tabbar" aria-label="Navegación principal móvil">
+        {nav.map(([id]) => (
+          <button
+            key={`tab-${id}`}
+            type="button"
+            className={view === id ? 'mobile-tab active' : 'mobile-tab'}
+            onClick={() => handleMobileNavLink(id)}
+            aria-current={view === id ? 'page' : undefined}
+          >
+            <DashboardIconR3 name={mobileTabIcons[id]} />
+            <span>{mobileTabLabels[id]}</span>
+          </button>
+        ))}
+      </nav>
 
       {mobileNavOpen && (
         <div className="mobile-nav-layer" role="presentation">
@@ -704,19 +725,25 @@ export default function App() {
           <div className="lia-input">
             <input
               value={message}
+              disabled={liaQueryPending}
               onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && sendLÍA()}
-              placeholder="Habla con LÍA..."
+              onKeyDown={(e) => e.key === 'Enter' && void sendLÍA()}
+              placeholder={liaQueryPending ? "LÍA está procesando..." : "Habla con LÍA..."}
             />
-            <button aria-label="Preparar instrucción para LÍA" onClick={sendLÍA}>↗</button>
+            <button aria-label="Enviar instrucción a LÍA" disabled={liaQueryPending} onClick={() => void sendLÍA()}>↗</button>
           </div>
           <small>Escribe o prepara una instrucción.</small>
         </div>
 
         <section className="lia-response-panel-v411">
           <p className="eyebrow">ÚLTIMA RESPUESTA</p>
-          <strong>Centro ejecutivo listo.</strong>
-          <span>Puedo ayudarte con agenda, prioridades y seguimiento.</span>
+          <strong>{liaQueryPending ? 'LÍA está procesando...' : 'Respuesta de LÍA'}</strong>
+          <span>
+            {[...liaMessages]
+              .reverse()
+              .find((item) => item.role === 'assistant')?.text ||
+              'Puedo ayudarte con agenda, prioridades y seguimiento.'}
+          </span>
         </section>
 
         <div className="quick-actions lia-context-actions-v411">
@@ -804,8 +831,8 @@ export default function App() {
         </div>
 
         <div className="mobile-lia-stream">
-          {liaMessages.slice(-3).map((item, index) => (
-            <div className={`lia-bubble ${item.role} ${item.role === 'assistant' && index === liaMessages.length - 1 ? 'lia-action-response-v090' : ''}`} key={`mobile-${item.role}-${index}-${item.text}`}>
+          {liaMessages.slice(-3).map((item, index, visibleMessages) => (
+            <div className={`lia-bubble ${item.role} ${item.role === 'assistant' && index === visibleMessages.length - 1 ? 'lia-action-response-v090' : ''}`} key={`mobile-${item.role}-${index}-${item.text}`}>
               {item.text}
             </div>
           ))}
@@ -815,11 +842,12 @@ export default function App() {
           <input
             ref={mobileInputRef}
             value={message}
+            disabled={liaQueryPending}
             onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && sendLÍA()}
-            placeholder="Habla con LÍA..."
+            onKeyDown={(e) => e.key === 'Enter' && void sendLÍA()}
+            placeholder={liaQueryPending ? "LÍA está procesando..." : "Habla con LÍA..."}
           />
-          <button onClick={sendLÍA}>↑</button>
+          <button disabled={liaQueryPending} onClick={() => void sendLÍA()}>↑</button>
         </div>
       </section>
     )}

@@ -1,0 +1,229 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { Router } from 'express';
+import type { LiaAgentConfig } from '../config.js';
+import { validateProjectTaskRequest } from '../contracts/projectExecutorValidation.js';
+import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
+import { PROJECT_TASK_ID, SAFE_TASK_ERROR_MESSAGES, isActiveTaskCompletedStages, isSafeTaskStages, type ProjectTaskStage, type ProjectTaskStore, type SafeTaskError, type SafeTaskReceipt } from '../contracts/projectTask.js';
+import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
+import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
+import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
+import { methodNotAllowed } from '../middleware/methodNotAllowed.js';
+import { resolveAuthorizedProject } from '../services/projectRegistry.js';
+import { runProjectTaskDurableExecution } from '../services/projectTaskDurableExecutionRunner.js';
+
+type ObservableStage = Extract<ProjectTaskStage, 'planning' | 'hermes' | 'codex' | 'verification' | 'commit'>;
+export type AsyncWorkflowExecutor = (onStage: (stage: ObservableStage) => void) => Promise<ProjectTaskWorkflowResult>;
+export type ProjectTasksDependencies = { store: ProjectTaskStore; registry?: ProjectRegistrySource; verificationRegistry?: ProjectVerificationRegistry; executeWorkflow?: (request: ProjectTaskRequest, onStage: (stage: ObservableStage) => void) => Promise<ProjectTaskWorkflowResult> };
+
+const fingerprint = (request: { projectId: string; instruction: string; priority: string; requestedCapabilities: string[] }) => createHash('sha256').update(JSON.stringify({ projectId: request.projectId, instruction: request.instruction, priority: request.priority, requestedCapabilities: [...request.requestedCapabilities].sort() })).digest('hex');
+const safeReceipt = (result: Extract<ProjectTaskWorkflowResult, { ok: true }>): SafeTaskReceipt | undefined => {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(result.executionId)) return undefined;
+  if (typeof result.resultText !== 'string' || result.resultText.length < 1 || result.resultText.length > 6000) return undefined;
+  if ((result.status === 'verified' || result.status === 'committed') && (!result.verification || !Number.isSafeInteger(result.verification.checksPassed) || !Number.isSafeInteger(result.verification.totalChecks) || result.verification.checksPassed < 0 || result.verification.totalChecks < result.verification.checksPassed)) return undefined;
+  if (result.status === 'committed' && (!result.commit || !/^[0-9a-fA-F]{40,64}$/.test(result.commit))) return undefined;
+  if (result.stages !== undefined && !isSafeTaskStages(result.stages)) return undefined;
+  return ({ executionId: result.executionId, status: result.status, resultText: result.resultText,
+  ...(result.stages !== undefined ? { stages: [...result.stages] } : {}),
+  ...(result.verification ? { verification: { status: 'verified', checksPassed: result.verification.checksPassed, totalChecks: result.verification.totalChecks } } : {}),
+  ...(result.commit ? { commit: result.commit } : {}),
+  });
+};
+const genericFailure = (): SafeTaskError => ({ code: 'workflow_failed', message: SAFE_TASK_ERROR_MESSAGES.workflow_failed });
+
+/** Layer 18: try to record completion evidence for the crash-window safety net. */
+function tryRecordCompletionEvidence(
+  store: ProjectTaskStore,
+  taskId: string,
+  receipt: SafeTaskReceipt,
+): void {
+  // Structural guard: only durable stores support completion evidence.
+  const durable = store as unknown as Record<string, unknown>;
+  if (typeof durable.recordCompletionEvidence !== 'function') return;
+  try {
+    // Read lineage from the store to build completion evidence.
+    const readRun = durable.readTaskExecutionRunByTask as ((id: string) => unknown) | undefined;
+    const readInvocation = durable.readTaskExecutionInvocationByExecutionRun as ((id: string) => unknown) | undefined;
+    const readAttempt = durable.readTaskExecutionLaunchAttemptByInvocation as ((id: string) => unknown) | undefined;
+    const readResult = durable.readTaskExecutionLaunchResultByLaunchAttempt as ((id: string) => unknown) | undefined;
+    const readSnapshot = durable.readValidatedProposalSnapshotByLaunchResult as ((id: string) => unknown) | undefined;
+    const readCodexStart = durable.readCodexStartEvidenceByTask as ((id: string) => unknown) | undefined;
+    const readVerifyStart = durable.readVerificationStartEvidenceByTask as ((id: string) => unknown) | undefined;
+    const readCommitStart = durable.readCommitStartEvidenceByTask as ((id: string) => unknown) | undefined;
+    const recordEvidence = durable.recordCompletionEvidence as ((input: Record<string, unknown>) => unknown) | undefined;
+
+    if (!readRun || !readInvocation || !readAttempt || !readResult || !readSnapshot || !recordEvidence) return;
+
+    const executionRun = readRun(taskId) as Record<string, unknown> | undefined;
+    if (!executionRun) return;
+    const invocation = readInvocation(executionRun.executionRunId as string) as Record<string, unknown> | undefined;
+    if (!invocation) return;
+    const launchAttempt = readAttempt(invocation.invocationId as string) as Record<string, unknown> | undefined;
+    if (!launchAttempt) return;
+    const launchResult = readResult(launchAttempt.launchAttemptId as string) as Record<string, unknown> | undefined;
+    if (!launchResult) return;
+    const snapshot = readSnapshot(launchResult.launchResultId as string) as Record<string, unknown> | undefined;
+    if (!snapshot) return;
+
+    const codexStart = readCodexStart?.(taskId) as Record<string, unknown> | undefined;
+    const verifyStart = readVerifyStart?.(taskId) as Record<string, unknown> | undefined;
+    const commitStart = readCommitStart?.(taskId) as Record<string, unknown> | undefined;
+
+    recordEvidence({
+      taskId,
+      executionRunId: executionRun.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: launchAttempt.launchAttemptId,
+      launchResultId: launchResult.launchResultId,
+      snapshotId: snapshot.snapshotId,
+      codexStartId: codexStart?.codexStartId ?? null,
+      verificationStartId: verifyStart?.verificationStartId ?? null,
+      commitStartId: commitStart?.commitStartId ?? null,
+      receipt,
+    });
+  } catch {
+    // Evidence failure must not block completion.
+  }
+}
+
+const FAILURE_STAGES = new Set(['planning', 'hermes', 'approval', 'codex', 'verification', 'commit']);
+const safeFailure = (result: Extract<ProjectTaskWorkflowResult, { ok: false }>): SafeTaskError => {
+  if (!FAILURE_STAGES.has(result.stage) || !Object.hasOwn(SAFE_TASK_ERROR_MESSAGES, result.error)) return genericFailure();
+  return {
+    stage: result.stage,
+    code: result.error,
+    message: SAFE_TASK_ERROR_MESSAGES[result.error],
+    ...(result.projectId && /^[A-Za-z0-9._-]{1,120}$/.test(result.projectId) ? { projectId: result.projectId } : {}),
+    ...(result.executionId && /^[A-Za-z0-9_-]{1,128}$/.test(result.executionId) ? { executionId: result.executionId } : {}),
+    ...(result.completedStages !== undefined && isSafeTaskStages(result.completedStages) ? { completedStages: [...result.completedStages] } : {}),
+  } as SafeTaskError;
+};
+
+export function createProjectTasksRouter(config: LiaAgentConfig, dependencies: ProjectTasksDependencies): Router {
+  const router = Router();
+  router.route('/api/projects/tasks').post(async (req, res) => {
+    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body) || !PROJECT_TASK_ID.test(req.body.taskId)) return void res.status(400).json({ ok: false, integration: 'project_task', error: 'invalid_task_id' });
+    const { taskId, ...body } = req.body;
+    const validation = validateProjectTaskRequest(body);
+    if (!validation.success) return void res.status(400).json({ ok: false, integration: 'project_task', error: 'invalid_task' });
+    if (!dependencies.registry) return void res.status(503).json({ ok: false, integration: 'project_task', error: 'registry_unavailable' });
+    const authorization = await resolveAuthorizedProject(validation.request.projectId, dependencies.registry);
+    if (!authorization.ok) return void res.status(authorization.error === 'project_not_found' ? 404 : authorization.error === 'project_disabled' ? 403 : 503).json({ ok: false, integration: 'project_task', error: authorization.error });
+    const reserved = dependencies.store.createOrGet(taskId, fingerprint(validation.request), validation.request);
+    if (reserved.kind === 'conflict') return void res.status(409).json({ ok: false, integration: 'project_task', error: 'task_id_conflict' });
+    if (reserved.kind === 'capacity') return void res.status(503).json({ ok: false, integration: 'project_task', error: 'task_registry_full' });
+    if (reserved.kind === 'created') setImmediate(() => {
+      const observe = (stage: ObservableStage) => dependencies.store.transition(taskId, stage);
+      const run = runProjectTaskDurableExecution({
+        store: dependencies.store,
+        taskId,
+        workerId: `lia-durable-runner-${randomUUID()}`,
+        config,
+        request: validation.request,
+        registry: dependencies.registry!,
+        verificationRegistry: dependencies.verificationRegistry,
+        onStage: observe,
+        ...(dependencies.executeWorkflow !== undefined ? { executeWorkflow: dependencies.executeWorkflow } : {}),
+      });
+      void run.then((result) => {
+        if (result.ok) { const receipt = safeReceipt(result); if (receipt) { tryRecordCompletionEvidence(dependencies.store, taskId, receipt); dependencies.store.complete(taskId, receipt); } else dependencies.store.fail(taskId, genericFailure()); }
+        else if (result.error === 'local_resume_available') {
+          // Layer 13: the task keeps its durable resumable state (non-terminal,
+          // validated proposal snapshot available). It is NOT terminalized and
+          // nothing is retried: zero Hermes, zero Codex, zero new
+          // attempt/result/lease operations. The snapshot is evidence only;
+          // fresh LÍA policy evaluation is mandatory before any later action.
+          return;
+        }
+        else dependencies.store.fail(taskId, safeFailure(result));
+      }).catch(() => dependencies.store.fail(taskId, genericFailure()));
+    });
+    const receiptStatus = reserved.record.status;
+    res.status(reserved.kind === 'created' ? 202 : 200).json({ ok: true, integration: 'project_task', taskId, status: receiptStatus, alreadyKnown: reserved.kind === 'known' });
+  }).all(methodNotAllowed(['POST']));
+
+  router.route('/api/projects/tasks/:taskId').get((req, res) => {
+    if (!PROJECT_TASK_ID.test(req.params.taskId)) return void res.status(400).json({ ok: false, integration: 'project_task', error: 'invalid_task_id' });
+    const record = dependencies.store.get(req.params.taskId);
+    if (!record) return void res.status(404).json({ ok: false, integration: 'project_task', error: 'task_not_found' });
+    if (record.status === 'completed') return void res.json({ ok: true, integration: 'project_task', taskId: record.taskId, status: record.status, terminal: true, receipt: record.receipt });
+    if (record.status === 'failed') return void res.json({ ok: true, integration: 'project_task', taskId: record.taskId, status: record.status, terminal: true, error: record.error });
+    const completedStages = isActiveTaskCompletedStages(record.completedStages ?? [])
+      ? [...(record.completedStages ?? [])]
+      : [];
+    res.json({
+      ok: true,
+      integration: 'project_task',
+      taskId: record.taskId,
+      status: record.status,
+      terminal: false,
+      completedStages,
+    });
+  }).all(methodNotAllowed(['GET']));
+
+  // Layer 14: Controlled Local Resume Decision route.
+  // POST /api/projects/tasks/:taskId/resume
+  // Triggers the resume path for a task in local_resume_available state.
+  router.route('/api/projects/tasks/:taskId/resume').post(async (req, res) => {
+    const { taskId } = req.params;
+    if (!PROJECT_TASK_ID.test(taskId)) return void res.status(400).json({ ok: false, integration: 'project_task', error: 'invalid_task_id' });
+
+    const task = dependencies.store.get(taskId);
+    if (!task) return void res.status(404).json({ ok: false, integration: 'project_task', error: 'task_not_found' });
+
+    // Check task is in a resumable state
+    if (
+      task.terminalAt !== undefined
+      || task.status === 'completed'
+      || task.status === 'failed'
+    ) {
+      return void res.status(409).json({
+        ok: false,
+        integration: 'project_task',
+        error: 'task_not_resumable',
+        status: task.status,
+      });
+    }
+
+    if (!dependencies.registry) return void res.status(503).json({ ok: false, integration: 'project_task', error: 'registry_unavailable' });
+    const authorization = await resolveAuthorizedProject(task.intent.projectId, dependencies.registry);
+    if (!authorization.ok) return void res.status(authorization.error === 'project_not_found' ? 404 : authorization.error === 'project_disabled' ? 403 : 503).json({ ok: false, integration: 'project_task', error: authorization.error });
+
+    // Run the resume path
+    const observe = (stage: ObservableStage) => dependencies.store.transition(taskId, stage);
+    const run = runProjectTaskDurableExecution({
+      store: dependencies.store,
+      taskId,
+      workerId: `lia-resume-runner-${randomUUID()}`,
+      config,
+      request: task.intent,
+      registry: dependencies.registry!,
+      verificationRegistry: dependencies.verificationRegistry,
+      onStage: observe,
+      resume: true,
+      ...(dependencies.executeWorkflow !== undefined ? { executeWorkflow: dependencies.executeWorkflow } : {}),
+    });
+
+    void run.then((result) => {
+      if (result.ok) {
+        const receipt = safeReceipt(result);
+        if (receipt) { tryRecordCompletionEvidence(dependencies.store, taskId, receipt); dependencies.store.complete(taskId, receipt); }
+        else dependencies.store.fail(taskId, genericFailure());
+      } else if (result.error === 'local_resume_available') {
+        // Still resumable — resume decision hasn't been reached.
+        return;
+      } else {
+        dependencies.store.fail(taskId, safeFailure(result));
+      }
+    }).catch(() => dependencies.store.fail(taskId, genericFailure()));
+
+    res.status(202).json({
+      ok: true,
+      integration: 'project_task',
+      taskId,
+      status: task.status,
+      message: 'Resume decision in progress.',
+    });
+  }).all(methodNotAllowed(['POST']));
+
+  return router;
+}

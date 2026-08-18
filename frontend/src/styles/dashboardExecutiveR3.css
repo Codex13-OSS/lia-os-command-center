@@ -1,0 +1,992 @@
+/* R3-5D — FINAL 2026 frosted-glass executive system. */
+.lia-dash-r3-shell {
+  --lia-dash-r3-sidebar-width: 206px;
+  --r3-line-top: rgba(214, 239, 255, .28);
+  --r3-line-left: rgba(111, 164, 204, .14);
+  --r3-text: #e8f2fa;
+  --r3-muted: #a0b5c5;
+  --r3-blue: #55adf2;
+  --r3-structural: linear-gradient(155deg, rgba(8, 23, 39, .56), rgba(5, 16, 29, .48));
+  --r3-instrument: linear-gradient(145deg, rgba(10, 29, 48, .62), rgba(7, 21, 36, .54));
+  --r3-floating: linear-gradient(145deg, rgba(8, 26, 43, .42), rgba(5, 18, 31, .35));
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: 100dvh;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: var(--lia-dash-r3-sidebar-width) minmax(0, 1fr) 300px;
+  grid-template-rows: 70px minmax(0, 1fr);
+  overflow: hidden;
+  color: var(--r3-text);
+  background:
+    radial-gradient(ellipse at 51% 42%, rgba(15, 68, 105, .14), transparent 48%),
+    linear-gradient(180deg, #071522 0%, #030d18 52%, #020811 100%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  transition: grid-template-columns 300ms cubic-bezier(.22, .8, .25, 1);
+}
+.lia-dash-r3-shell *, .lia-dash-r3-shell *::before, .lia-dash-r3-shell *::after { box-sizing: border-box; }
+.lia-dash-r3-shell button { font: inherit; }
+.lia-dash-r3-ambient { position: absolute; z-index: -1; inset: 0; overflow: hidden; pointer-events: none; }
+.lia-dash-r3-ambient > i { position: absolute; display: block; pointer-events: none; }
+.lia-dash-r3-ambient-map {
+  left: 19%; top: 10%; width: 66%; height: 76%;
+  background: radial-gradient(ellipse, rgba(42, 137, 199, .25), rgba(12, 70, 108, .10) 43%, transparent 72%);
+  opacity: .62;
+}
+.lia-dash-r3-ambient-top { left: -9%; bottom: -19%; width: 52%; height: 52%; background: radial-gradient(ellipse, rgba(20, 112, 124, .17), transparent 69%); }
+.lia-dash-r3-ambient-rail { right: -9%; top: 8%; width: 32%; height: 90%; background: radial-gradient(ellipse, rgba(26, 112, 99, .13), transparent 70%); }
+.lia-dash-r3-ambient-grain {
+  inset: 0; opacity: .055;
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(210, 232, 246, .28) 0 .4px, transparent .5px),
+    radial-gradient(circle at 70% 65%, rgba(93, 130, 154, .24) 0 .45px, transparent .55px);
+  background-size: 19px 23px, 29px 31px;
+}
+
+/* Structural glass: sidebar, header and rail. */
+.lia-dash-r3-sidebar-shell {
+  container: lia-dash-r3-sidebar / inline-size;
+  position: relative; z-index: 5; grid-column: 1; grid-row: 1 / -1;
+  min-width: 0; padding: 27px 18px 15px; display: flex; flex-direction: column;
+  border: solid transparent; border-width: 1px 1px 1px 0;
+  border-top-color: var(--r3-line-top); border-right-color: rgba(93, 145, 184, .12); border-bottom-color: rgba(23, 56, 81, .08);
+  background: var(--r3-structural);
+  box-shadow: 20px 0 48px rgba(0, 4, 11, .36), inset 1px 0 rgba(216, 239, 255, .10), inset 0 1px rgba(255,255,255,.07);
+  backdrop-filter: blur(14px) saturate(132%);
+  transition: padding 300ms cubic-bezier(.22, .8, .25, 1), background 220ms ease;
+}
+.lia-dash-r3-sidebar-shell::before {
+  content: ""; position: absolute; z-index: -1; top: 9%; left: 0; width: 42%; height: 260px; pointer-events: none;
+  border-radius: 0 80% 80% 0; background: linear-gradient(90deg, rgba(74, 153, 214, .10), transparent); opacity: .8;
+}
+.lia-dash-r3-sidebar-shell::after {
+  content: ""; position: absolute; top: 18px; left: 12px; width: 42%; height: 24px; pointer-events: none;
+  border-radius: 50%; background: linear-gradient(120deg, rgba(223, 242, 255, .13), transparent 72%); filter: blur(5px);
+}
+.lia-dash-r3-brand { position: relative; min-height: 76px; padding: 0 4px 22px 12px; }
+.lia-dash-r3-brand::after { content: ""; position: absolute; bottom: 0; left: 12px; width: 24px; height: 1px; background: linear-gradient(90deg, rgba(105, 180, 234, .55), transparent); }
+.lia-dash-r3-brand-copy { max-width: 170px; opacity: 1; transform: translateX(0); transition: opacity 200ms ease, max-width 300ms ease, transform 300ms ease; }
+.lia-dash-r3-brand strong { display: block; color: #edf7ff; font-size: 27px; line-height: 1; letter-spacing: -.75px; white-space: nowrap; text-shadow: 0 2px 14px rgba(44, 139, 209, .18); }
+.lia-dash-r3-brand-copy > span { display: block; margin-top: 9px; color: #9db1c2; font-size: 12px; line-height: 1.42; white-space: nowrap; }
+.lia-dash-r3-brand-mark {
+  position: absolute; top: -3px; left: 50%; width: 44px; height: 44px; display: grid; place-items: center;
+  color: #cceaff; border: solid transparent; border-width: 1px; border-top-color: rgba(197, 230, 252, .48); border-left-color: rgba(83, 169, 232, .28);
+  border-radius: 50%; background: rgba(9, 28, 45, .72); box-shadow: 0 10px 24px rgba(0, 5, 13, .35), inset 0 1px rgba(255, 255, 255, .08);
+  font-size: 12px; font-weight: 750; letter-spacing: .04em; opacity: 0; transform: translateX(-50%) scale(.84); transition: opacity 200ms ease, transform 300ms ease;
+}
+.lia-dash-r3-navigation { display: flex; flex-direction: column; gap: 7px; padding: 18px 5px 10px; border-radius: 18px; background: linear-gradient(180deg, rgba(16, 43, 67, .16), rgba(4, 16, 28, .04)); box-shadow: inset 0 1px rgba(214,238,253,.035); }
+.lia-dash-r3-nav-item {
+  position: relative; width: 100%; height: 51px; padding: 0 12px; display: flex; align-items: center; gap: 12px;
+  color: #98adbf; border: 1px solid transparent; border-radius: 13px; background: transparent;
+  font-size: 13px; text-align: left; cursor: pointer; transition: color 190ms ease, background 190ms ease, transform 190ms ease;
+}
+.lia-dash-r3-nav-item:hover { color: #dcecf8; background: rgba(37, 107, 159, .09); transform: translateX(2px); }
+.lia-dash-r3-nav-item[aria-disabled="true"] { cursor: default; opacity: .6; transform: none; }
+.lia-dash-r3-nav-item svg { width: 20px; height: 20px; flex: 0 0 auto; }
+.lia-dash-r3-nav-label { flex: 1; min-width: 0; max-width: 140px; overflow: hidden; white-space: nowrap; opacity: 1; transition: opacity 180ms ease, max-width 300ms ease, transform 300ms ease; }
+.lia-dash-r3-nav-item b { min-width: 22px; height: 20px; padding: 0 5px; display: grid; place-items: center; color: #e7f5ff; border-radius: 999px; background: #177eca; box-shadow: 0 4px 12px rgba(12, 102, 170, .25); font-size: 10px; }
+.lia-dash-r3-nav-item-active {
+  color: #e7f5ff; border-top-color: rgba(172, 220, 252, .28); border-left-color: rgba(69, 155, 219, .20);
+  background: linear-gradient(105deg, rgba(34, 126, 194, .25), rgba(20, 87, 139, .12));
+  box-shadow: 0 10px 24px rgba(0, 7, 16, .18), inset 2px 0 rgba(91, 185, 250, .72), inset 0 1px rgba(222, 242, 255, .08);
+}
+.lia-dash-r3-nav-item-active svg { color: #70c1fa; }
+.lia-dash-r3-operator-tile {
+  position: relative; min-height: 68px; margin: auto -3px 0; padding: 11px 38px 11px 10px; display: flex; align-items: center; gap: 10px;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(193, 225, 248, .18); border-left-color: rgba(91, 151, 194, .12); border-radius: 15px;
+  background: rgba(8, 25, 41, .58); box-shadow: 0 13px 28px rgba(0, 5, 13, .28), inset 0 1px rgba(255,255,255,.04);
+}
+.lia-dash-r3-operator-core { position: relative; width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; color: #76c0f4; border-radius: 50%; background: rgba(26, 103, 158, .24); box-shadow: inset 0 1px rgba(200, 232, 252, .12); }
+.lia-dash-r3-operator-core svg { width: 18px; }
+.lia-dash-r3-operator-status { display: none; position: absolute; right: 1px; bottom: 2px; width: 7px; height: 7px; border: 1px solid #071522; border-radius: 50%; background: #4bd28b; box-shadow: 0 0 8px rgba(75, 210, 139, .55); }
+.lia-dash-r3-operator-copy { max-width: 92px; overflow: hidden; white-space: nowrap; opacity: 1; transition: opacity 180ms ease, max-width 300ms ease, transform 300ms ease; }
+.lia-dash-r3-operator-copy strong { display: block; font-size: 12px; }
+.lia-dash-r3-operator-copy span { display: flex; align-items: center; gap: 5px; margin-top: 4px; color: #91a7b9; font-size: 10.5px; }
+.lia-dash-r3-operator-copy span i { width: 6px; height: 6px; border-radius: 50%; background: #43d488; }
+.lia-dash-r3-logout { position: absolute; top: 9px; right: 7px; width: 29px; height: 29px; display: grid; place-items: center; color: #8299ac; border: 0; border-radius: 8px; background: transparent; cursor: pointer; transition: color 180ms ease, background 180ms ease, transform 180ms ease; }
+.lia-dash-r3-logout:hover { color: #e0edf6; background: rgba(70, 139, 190, .12); transform: translateY(-1px); }
+.lia-dash-r3-operator-arrow { position: absolute; right: 12px; bottom: 12px; width: 10px; color: #648097; }
+.lia-dash-r3-sidebar-toggle {
+  position: absolute; z-index: 7; top: 92px; right: -14px; width: 29px; height: 44px; padding: 0; display: grid; place-items: center;
+  color: #a3cbe8; border: solid transparent; border-width: 1px; border-top-color: rgba(199, 228, 248, .26); border-right-color: rgba(74, 132, 175, .15);
+  border-radius: 9px; background: rgba(8, 27, 43, .84); box-shadow: 0 10px 22px rgba(0, 4, 11, .38), inset 0 1px rgba(255,255,255,.06);
+  cursor: pointer; transition: color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+.lia-dash-r3-sidebar-toggle:hover { color: #f0f8ff; background: rgba(13, 43, 67, .94); transform: translateX(1px); }
+.lia-dash-r3-sidebar-toggle svg { width: 16px; }
+.lia-dash-r3-resize-handle { position: absolute; z-index: 6; top: 0; right: -5px; width: 10px; height: 100%; cursor: ew-resize; touch-action: none; }
+.lia-dash-r3-resize-handle::after { content: ""; position: absolute; top: 38%; left: 4px; width: 1px; height: 68px; border-radius: 2px; background: rgba(88, 173, 235, .15); opacity: 0; transition: opacity 180ms ease; }
+.lia-dash-r3-sidebar-shell:hover .lia-dash-r3-resize-handle::after, .lia-dash-r3-resize-handle-active::after { opacity: 1; }
+.lia-dash-r3-sidebar-shell.is-resizing, .lia-dash-r3-shell-resizing { user-select: none; }
+
+.lia-dash-r3-header-shell {
+  position: relative; z-index: 3; grid-column: 2; grid-row: 1; min-width: 0; padding: 11px 22px;
+  display: flex; align-items: center; gap: 12px;
+  border-bottom: 1px solid rgba(79, 128, 164, .10);
+  background: var(--r3-structural);
+  box-shadow: 0 16px 38px rgba(0, 4, 11, .24), inset 0 1px rgba(222, 241, 254, .10);
+  backdrop-filter: blur(14px) saturate(130%);
+}
+.lia-dash-r3-search {
+  width: min(260px, 29%); height: 42px; padding: 0 14px; display: flex; align-items: center; gap: 10px;
+  color: #8da4b7; border: solid transparent; border-width: 1px; border-top-color: rgba(195, 225, 246, .21); border-left-color: rgba(91, 148, 190, .13);
+  border-radius: 13px; background: rgba(8, 25, 41, .72); box-shadow: 0 8px 20px rgba(0, 5, 12, .18), inset 0 1px rgba(255,255,255,.04);
+  font-size: 12px; transition: border-color 190ms ease, background 190ms ease;
+}
+.lia-dash-r3-search:focus-within { border-top-color: rgba(103, 188, 245, .48); background: rgba(9, 29, 47, .82); }
+.lia-dash-r3-search svg { width: 17px; color: #72add8; }
+.lia-dash-r3-focus {
+  min-width: 224px; height: 40px; padding: 0 13px; display: flex; align-items: center; gap: 10px;
+  border-radius: 999px; background: rgba(13, 36, 56, .58); box-shadow: inset 0 1px rgba(195, 226, 247, .11);
+}
+.lia-dash-r3-focus strong { color: #9ccdf0; font-size: 10px; letter-spacing: .1em; }
+.lia-dash-r3-focus span { color: #a5b5c3; font-size: 11px; white-space: nowrap; }
+.lia-dash-r3-temporal-context {
+  min-width: 172px; height: 42px; padding: 6px 12px; display: grid; align-content: center; justify-items: end;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(202, 230, 248, .20); border-left-color: rgba(91, 153, 196, .12);
+  border-radius: 13px; background: linear-gradient(145deg, rgba(12, 36, 57, .64), rgba(7, 23, 38, .48));
+  box-shadow: 0 10px 24px rgba(0, 5, 12, .20), inset 0 1px rgba(255,255,255,.045);
+}
+.lia-dash-r3-temporal-context span { color: #94aabc; font-size: 9.5px; font-weight: 650; letter-spacing: .045em; white-space: nowrap; }
+.lia-dash-r3-temporal-context time { margin-top: 2px; color: #edf7fd; font-size: 14px; font-weight: 720; letter-spacing: .025em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lia-dash-r3-header-controls { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.lia-dash-r3-header-controls button, .lia-dash-r3-avatar {
+  position: relative; width: 38px; height: 38px; display: grid; place-items: center; color: #9db3c5;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(196, 225, 246, .17); border-left-color: rgba(91, 149, 190, .10);
+  border-radius: 11px; background: rgba(9, 25, 41, .55); box-shadow: 0 7px 18px rgba(0, 4, 10, .14); cursor: pointer;
+  transition: color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+.lia-dash-r3-header-controls button:hover { color: #edf7ff; background: rgba(20, 54, 81, .72); transform: translateY(-1px); }
+.lia-dash-r3-header-controls svg { width: 17px; }
+.lia-dash-r3-header-controls button b { position: absolute; top: -3px; right: -3px; min-width: 17px; height: 17px; display: grid; place-items: center; color: white; border-radius: 50%; background: #2b8ed3; font-size: 10px; }
+.lia-dash-r3-avatar { color: #e4f2fb; background: linear-gradient(145deg, rgba(37, 111, 165, .72), rgba(13, 49, 76, .78)); font-size: 11px; font-weight: 750; }
+.lia-dash-r3-header-logout { display: none; }
+
+.lia-dash-r3-rail-shell {
+  position: relative; z-index: 3; grid-column: 3; grid-row: 1 / -1; min-width: 0; padding: 16px 14px;
+  display: flex; flex-direction: column; gap: 13px; overflow: hidden;
+  border-left: 1px solid rgba(102, 154, 192, .11);
+  background: var(--r3-structural);
+  box-shadow: -20px 0 48px rgba(0, 4, 11, .28), inset 1px 0 rgba(211, 235, 251, .08);
+  backdrop-filter: blur(14px) saturate(128%);
+}
+.lia-dash-r3-weather {
+  position: relative; min-height: 58px; padding: 11px 13px; display: flex; align-items: center; gap: 10px; overflow: hidden;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(205, 232, 249, .24); border-left-color: rgba(91, 160, 204, .15);
+  border-radius: 16px; background: radial-gradient(circle at 12% 20%, rgba(86, 170, 224, .16), transparent 42%), linear-gradient(145deg, rgba(10, 31, 50, .66), rgba(6, 20, 34, .54));
+  box-shadow: 0 17px 36px rgba(0, 4, 11, .30), inset 0 1px rgba(255,255,255,.06);
+}
+.lia-dash-r3-weather::after { content: ""; position: absolute; right: -22px; top: -31px; width: 90px; height: 90px; border-radius: 50%; background: rgba(65, 153, 210, .07); filter: blur(2px); }
+.lia-dash-r3-weather-symbol { width: 32px; height: 32px; display: grid; place-items: center; flex: 0 0 auto; color: #a9d9f5; border-radius: 10px; background: rgba(42, 119, 171, .20); box-shadow: inset 0 1px rgba(215, 239, 253, .10); font-size: 17px; }
+.lia-dash-r3-weather div { min-width: 0; z-index: 1; }
+.lia-dash-r3-weather strong, .lia-dash-r3-weather small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lia-dash-r3-weather strong { color: #e9f5fc; font-size: 11px; font-weight: 650; }.lia-dash-r3-weather strong i { color: #6eaed8; font-style: normal; }
+.lia-dash-r3-weather small { margin-top: 4px; color: #849dad; font-size: 9.5px; letter-spacing: .02em; }
+.lia-dash-r3-rail-summary, .lia-dash-r3-rail-actions, .lia-dash-r3-rail-activity {
+  position: relative; min-width: 0; padding: 15px;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(193, 224, 245, .19); border-left-color: rgba(89, 148, 191, .12);
+  border-radius: 16px; background: var(--r3-instrument);
+  box-shadow: 0 16px 34px rgba(0, 5, 12, .31), inset 0 1px rgba(255,255,255,.055);
+  backdrop-filter: blur(12px) saturate(124%);
+}
+.lia-dash-r3-rail-summary::before, .lia-dash-r3-rail-actions::before, .lia-dash-r3-rail-activity::before {
+  content: ""; position: absolute; top: 0; left: 12px; width: 38%; height: 22px; pointer-events: none;
+  border-radius: 50%; background: linear-gradient(120deg, rgba(218, 239, 252, .08), transparent 72%); filter: blur(5px);
+}
+.lia-dash-r3-rail-activity { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.lia-dash-r3-rail-shell h2, .lia-mobility-r3-module header h2 { margin: 0; color: #b1c8d9; font-size: 9.5px; font-weight: 750; letter-spacing: .12em; }
+.lia-dash-r3-operation-state { margin-top: 12px; padding: 10px 11px; display: flex; align-items: center; gap: 8px; border-radius: 11px; font-size: 12px; }
+.lia-dash-r3-operation-state i { width: 8px; height: 8px; border-radius: 50%; }
+.lia-dash-r3-operation-state.is-stable { color: #ccebdd; background: rgba(18, 75, 57, .32); box-shadow: inset 0 1px rgba(135, 231, 188, .09), 0 8px 20px rgba(0, 20, 12, .14); }
+.lia-dash-r3-operation-state.is-stable i { background: #55d797; box-shadow: 0 0 13px rgba(75, 213, 148, .48); }
+.lia-dash-r3-operation-state.is-attention { color: #f0d6a4; background: rgba(103, 69, 22, .34); box-shadow: inset 0 1px rgba(231, 190, 116, .10), 0 8px 20px rgba(35, 20, 3, .14); }
+.lia-dash-r3-operation-state.is-attention i { background: #d8a24d; box-shadow: 0 0 10px rgba(216, 162, 77, .30); }
+.lia-dash-r3-operation-state.is-critical { color: #efc2bf; background: rgba(101, 40, 38, .34); box-shadow: inset 0 1px rgba(226, 139, 132, .10), 0 8px 20px rgba(38, 7, 6, .14); }
+.lia-dash-r3-operation-state.is-critical i { background: #d36a64; box-shadow: 0 0 10px rgba(211, 106, 100, .28); }
+.lia-dash-r3-attention-summary { margin: 11px 0 0; }
+.lia-dash-r3-attention-summary div { padding: 6px 1px; display: flex; align-items: center; justify-content: space-between; }
+.lia-dash-r3-attention-summary dt { color: #91a6b7; font-size: 11px; }
+.lia-dash-r3-attention-summary dd { margin: 0; color: #e8f3fb; font-size: 14px; font-weight: 700; }
+.lia-dash-r3-local-toggle, .lia-dash-r3-more-activity, .lia-mobility-r3-details-toggle {
+  padding: 0; color: #71b8e8; border: 0; background: transparent; font-size: 11px; cursor: pointer; transition: color 180ms ease, transform 180ms ease;
+}
+.lia-dash-r3-local-toggle { margin-top: 9px; }
+.lia-dash-r3-local-toggle:hover, .lia-dash-r3-more-activity:hover, .lia-mobility-r3-details-toggle:hover { color: #b9e1fa; transform: translateX(2px); }
+.lia-dash-r3-action-grid { margin-top: 11px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.lia-dash-r3-action-grid button {
+  min-width: 0; min-height: 54px; padding: 8px 5px; display: grid; place-items: center; gap: 4px; color: #a9bfce;
+  border: 0; border-radius: 11px; background: rgba(16, 42, 64, .58); box-shadow: inset 0 1px rgba(191, 224, 246, .09);
+  font-size: 10.5px; cursor: pointer; transition: color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+.lia-dash-r3-action-grid button:hover { color: #ecf7ff; background: rgba(25, 70, 103, .72); transform: translateY(-2px); }
+.lia-dash-r3-action-grid button[aria-disabled="true"] { opacity: .55; cursor: default; transform: none; }
+.lia-dash-r3-action-grid svg { width: 18px; color: #69b5e8; }
+.lia-dash-r3-activity-list { position: relative; margin-top: 9px; min-height: 0; overflow: hidden; }
+.lia-dash-r3-activity-list::before { content: ""; position: absolute; top: 20px; bottom: 18px; left: 16px; width: 1px; background: linear-gradient(rgba(74, 146, 197, .28), rgba(74, 146, 197, .03)); }
+.lia-dash-r3-activity-row { position: relative; min-width: 0; padding: 7px 0; display: grid; grid-template-columns: 34px minmax(0, 1fr) 7px; align-items: center; gap: 8px; }
+.lia-dash-r3-activity-icon { z-index: 1; width: 33px; height: 33px; display: grid; place-items: center; border-radius: 10px; background: rgba(17, 46, 70, .88); box-shadow: inset 0 1px rgba(185, 221, 246, .08); }
+.lia-dash-r3-activity-icon svg { width: 16px; }
+.lia-dash-r3-activity-row strong, .lia-dash-r3-activity-row small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lia-dash-r3-activity-row strong { color: #d9e7f1; font-size: 11px; font-weight: 650; }
+.lia-dash-r3-activity-row small { margin-top: 3px; color: #8fa4b5; font-size: 10.5px; }
+.lia-dash-r3-activity-row > i { width: 6px; height: 6px; border-radius: 50%; background: #4da7e6; }
+.lia-dash-r3-status-warning { background: #efb552 !important; }.lia-dash-r3-status-critical { background: #ef6e70 !important; }
+.lia-dash-r3-activity-warning { color: #e9b961; }.lia-dash-r3-activity-critical { color: #ef8587; }.lia-dash-r3-activity-info { color: #69b6ec; }
+.lia-dash-r3-more-activity { margin-top: auto; padding-top: 10px; text-align: left; }
+.lia-dash-r3-stats { padding-top: 8px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.lia-dash-r3-stats div { min-width: 0; padding: 7px 4px; border-radius: 8px; background: rgba(12, 35, 54, .48); text-align: center; }
+.lia-dash-r3-stats span, .lia-dash-r3-stats small { display: block; color: #849bad; font-size: 10px; }.lia-dash-r3-stats strong { display: block; margin: 2px 0; font-size: 14px; }
+
+/* Main content and instrument glass. */
+.lia-dash-r3-main { position: relative; z-index: 2; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; padding: 14px 18px 16px; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
+.lia-dash-r3-metric-frames { flex: 0 0 105px; min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
+.lia-dash-r3-metric-card {
+  position: relative; min-width: 0; overflow: hidden; padding: 13px 12px; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(200, 229, 248, .22); border-left-color: rgba(94, 154, 198, .13); border-right-color: rgba(43, 83, 113, .06);
+  border-radius: 15px; background: var(--r3-instrument);
+  box-shadow: 0 16px 34px rgba(0, 4, 11, .31), inset 0 1px rgba(255,255,255,.055);
+  backdrop-filter: blur(12px) saturate(126%); transition: transform 190ms ease, background 190ms ease;
+}
+.lia-dash-r3-metric-card::before {
+  content: ""; position: absolute; top: -5px; left: 10px; width: 38%; height: 27px; border-radius: 50%;
+  background: linear-gradient(120deg, rgba(225, 241, 252, .09), transparent 72%); filter: blur(5px); pointer-events: none;
+}
+.lia-dash-r3-metric-card:hover { transform: translateY(-2px); background: linear-gradient(145deg, rgba(11, 31, 50, .68), rgba(7, 21, 35, .58)); }
+.lia-dash-r3-metric-card:nth-child(1) { background: radial-gradient(circle at 13% 28%, rgba(78,174,232,.12), transparent 34%), var(--r3-instrument); }
+.lia-dash-r3-metric-card:nth-child(2) { background: radial-gradient(circle at 14% 28%, rgba(225,166,69,.13), transparent 35%), var(--r3-instrument); }
+.lia-dash-r3-metric-card:nth-child(3) { background: radial-gradient(circle at 14% 28%, rgba(103,145,181,.11), transparent 35%), var(--r3-instrument); }
+.lia-dash-r3-metric-card.lia-dash-r3-priority-critical { background: radial-gradient(circle at 14% 28%, rgba(225,96,90,.105), transparent 35%), var(--r3-instrument); }
+.lia-dash-r3-metric-icon { position: relative; width: 42px; height: 42px; display: grid; place-items: center; color: #72bdf0; border-radius: 12px; background: rgba(19, 65, 98, .46); box-shadow: inset 0 1px rgba(199, 229, 249, .10); }
+.lia-dash-r3-metric-icon svg { width: 20px; }
+.lia-dash-r3-priority-warning .lia-dash-r3-metric-icon { color: #f1c273; background: rgba(114, 75, 23, .36); box-shadow: 0 0 20px rgba(218, 147, 43, .13), inset 0 1px rgba(255, 225, 174, .10); }
+.lia-dash-r3-priority-critical .lia-dash-r3-metric-icon { color: #f18b8c; background: rgba(112, 39, 44, .33); }
+.lia-dash-r3-metric-copy { min-width: 0; }
+.lia-dash-r3-metric-copy h2 { margin: 0; overflow: hidden; color: #a4b8c9; font-size: 10px; font-weight: 700; letter-spacing: .08em; white-space: nowrap; text-overflow: ellipsis; }
+.lia-dash-r3-metric-copy > strong { display: block; margin-top: 3px; overflow: hidden; color: #edf6fc; font-size: clamp(22px, 2vw, 30px); line-height: 1; letter-spacing: -.04em; white-space: nowrap; text-overflow: ellipsis; }
+.lia-dash-r3-metric-copy p { margin: 5px 0 0; overflow: hidden; color: #91a7b9; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.lia-dash-r3-metric-state { position: absolute; right: 10px; bottom: 8px; display: flex; align-items: center; gap: 5px; }
+.lia-dash-r3-metric-state i { width: 17px; height: 2px; border-radius: 2px; background: #4ba8e8; }.lia-dash-r3-metric-state b { color: #7892a6; font-size: 10px; letter-spacing: .08em; }
+.lia-dash-r3-priority-warning .lia-dash-r3-metric-state i { background: #e7ad50; }.lia-dash-r3-priority-critical .lia-dash-r3-metric-state i { background: #e97072; }
+
+/* Hero map and floating optical glass. */
+.lia-dash-r3-map-frame { position: relative; z-index: 3; min-width: 0; min-height: 350px; flex: 1 1 auto; margin-top: 12px; overflow: hidden; border: 1px solid rgba(140,190,223,.20); border-radius: 19px; box-shadow: 0 28px 58px rgba(0,3,9,.46), 0 0 42px rgba(24,101,151,.10), inset 0 1px rgba(224,242,254,.10); }
+.lia-mobility-r3-map { position: relative; isolation: isolate; width: 100%; height: 100%; overflow: hidden; border-radius: inherit; background: #04101b; box-shadow: inset 0 1px rgba(192, 226, 249, .09); }
+.lia-mobility-r3-map::before { content: ""; position: absolute; z-index: 2; inset: 0; pointer-events: none; background: radial-gradient(circle at 78% 22%, rgba(63, 153, 216, .10), transparent 30%), linear-gradient(105deg, rgba(1, 7, 13, .30), transparent 45%); }
+.lia-mobility-r3-map::after { content: ""; position: absolute; z-index: 4; inset: 0; pointer-events: none; border-radius: inherit; box-shadow: inset 0 0 75px rgba(0, 4, 10, .44), inset 0 -32px 54px rgba(0, 4, 10, .32), inset 0 1px rgba(210, 235, 251, .10); }
+.lia-mobility-r3-map-surface { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; background: radial-gradient(circle at 70% 25%, #163149, #081725 48%, #030b14); }
+.lia-mobility-r3-map-zoom { transform-origin: 56% 48%; transition: transform 220ms ease; }
+.lia-mobility-r3-terrain path { fill: rgba(21, 48, 67, .35); stroke: rgba(99, 142, 171, .08); }.lia-mobility-r3-water { fill: url(#mobility-water-r3); }.lia-mobility-r3-shoreline { fill: none; stroke: rgba(89, 153, 194, .20); stroke-width: 2; }
+.lia-mobility-r3-parks path { fill: rgba(22, 65, 61, .28); }.lia-mobility-r3-blocks path { fill: rgba(30, 55, 72, .52); stroke: rgba(109, 154, 183, .09); }
+.lia-mobility-r3-secondary-streets path { fill: none; stroke: rgba(111, 150, 178, .12); stroke-width: 1.2; }.lia-mobility-r3-main-streets path { fill: none; stroke: rgba(128, 175, 206, .32); stroke-width: 4.5; }.lia-mobility-r3-avenue-edge { stroke: rgba(4, 10, 17, .72) !important; stroke-width: 8px !important; }
+.lia-mobility-r3-urban-lights circle { fill: #80b7d7; opacity: .38; }.lia-mobility-r3-urban-lights circle:nth-child(n+17) { display: none; }
+.lia-mobility-r3-optical-secondary { fill: none; stroke: rgba(96, 146, 181, .08); stroke-width: 1.5; }.lia-mobility-r3-optical-main { fill: none; stroke: rgba(119, 170, 204, .14); stroke-width: 3; }
+.lia-mobility-r3-optical-block { fill: rgba(39, 68, 86, .11); stroke: rgba(119, 164, 192, .07); }.lia-mobility-r3-optical-light { fill: #86bddc; opacity: .25; }.lia-mobility-r3-optical-boundary { fill: none; stroke: rgba(91, 140, 174, .07); }
+.lia-mobility-r3-map-labels text { fill: #8ba9bc; font-size: 10px; font-weight: 700; letter-spacing: 1.4px; opacity: .62; }
+.lia-mobility-r3-route-alternative-group { opacity: 0; transition: opacity 200ms ease; }.lia-mobility-r3-route-alternative-visible { opacity: .55; }
+.lia-mobility-r3-route-alternative-underlay { fill: none; stroke: rgba(1, 7, 13, .84); stroke-width: 7; }.lia-mobility-r3-route-alternative { fill: none; stroke: #6c8ba0; stroke-width: 2; stroke-dasharray: 6 8; }
+.lia-mobility-r3-route-glow { fill: none; stroke: rgba(68, 167, 236, .20); stroke-width: 13; filter: url(#mobility-glow-r3); }.lia-mobility-r3-route-bed { fill: none; stroke: rgba(1, 8, 14, .84); stroke-width: 8; }
+.lia-mobility-r3-route { fill: none; stroke: url(#mobility-route-r3); stroke-width: 4; stroke-linecap: round; stroke-dasharray: 18 8 3 8; filter: drop-shadow(0 0 3px rgba(78, 170, 236, .5)); animation: lia-mobility-r3-flow 6.4s linear infinite; }
+.lia-mobility-r3-map-node text { fill: #e0edf5; font-size: 12px; font-weight: 700; paint-order: stroke; stroke: rgba(2, 9, 16, .94); stroke-width: 5px; stroke-linejoin: round; }
+.lia-mobility-r3-node-core { fill: #0a2438; stroke: #91d0f8; stroke-width: 2; }.lia-mobility-r3-node-center { fill: #edf9ff; }
+.lia-mobility-r3-origin-halo, .lia-mobility-r3-midpoint-halo { fill: rgba(58, 154, 221, .12); stroke: rgba(102, 193, 249, .24); }.lia-mobility-r3-destination-ring { fill: url(#mobility-destination-r3); stroke: rgba(213, 240, 255, .68); stroke-width: 1.5; }
+.lia-mobility-r3-location-halo { fill: rgba(38, 147, 220, .08); stroke: rgba(236, 184, 96, .34); transform-origin: center; animation: lia-mobility-r3-halo 4.4s ease-in-out infinite; }
+.lia-mobility-r3-simulation { position: absolute; z-index: 7; top: 14px; left: 16px; max-width: 220px; padding: 9px 11px; border-radius: 10px; background: rgba(3, 13, 23, .46); box-shadow: inset 0 1px rgba(207, 233, 249, .08); backdrop-filter: blur(4px); }
+.lia-mobility-r3-simulation strong, .lia-mobility-r3-simulation span, .lia-mobility-r3-simulation em { display: block; }.lia-mobility-r3-simulation strong { color: #9ed4f8; font-size: 10px; letter-spacing: .1em; }.lia-mobility-r3-simulation span { margin-top: 3px; color: #a4b7c5; font-size: 10.5px; }.lia-mobility-r3-simulation em { margin-top: 2px; color: #7892a5; font-size: 10px; font-style: normal; }
+.lia-mobility-r3-endpoint-summary {
+  display: none;
+}
+.lia-mobility-r3-map-controls { position: absolute; z-index: 8; top: 14px; right: 14px; padding: 4px; display: grid; gap: 3px; border-radius: 12px; background: rgba(5, 18, 30, .58); box-shadow: 0 12px 26px rgba(0, 4, 10, .30), inset 0 1px rgba(201, 230, 249, .09); backdrop-filter: blur(6px); }
+.lia-mobility-r3-map-controls button { width: 34px; height: 34px; padding: 0; display: grid; place-items: center; color: #93aec1; border: 0; border-radius: 9px; background: transparent; cursor: pointer; transition: color 180ms ease, background 180ms ease, transform 180ms ease; }.lia-mobility-r3-map-controls button:hover, .lia-mobility-r3-map-controls button[aria-pressed="true"] { color: #eef8ff; background: rgba(49, 139, 204, .20); transform: scale(1.04); }.lia-mobility-r3-map-controls button:disabled { opacity: .4; cursor: default; transform: none; }.lia-mobility-r3-map-controls svg { width: 18px; }
+.lia-mobility-r3-meeting {
+  position: absolute; z-index: 6; top: 76px; left: 4.5%; width: min(340px, 39%); max-height: calc(100% - 150px); padding: 18px 18px 14px; overflow: hidden;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(220, 239, 251, .34); border-left-color: rgba(128, 183, 220, .21); border-right-color: rgba(52, 97, 129, .08);
+  border-radius: 18px; background: var(--r3-floating);
+  box-shadow: 0 28px 58px rgba(0,3,9,.54), -9px 0 28px rgba(24,111,145,.13), inset 0 1px rgba(255,255,255,.075);
+  backdrop-filter: blur(10px) saturate(132%); transition: max-height 300ms cubic-bezier(.22,.8,.25,1), transform 200ms ease;
+}
+.lia-mobility-r3-meeting-expanded {
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #36536a transparent;
+}
+.lia-mobility-r3-meeting-expanded::-webkit-scrollbar {
+  width: 6px;
+}
+.lia-mobility-r3-meeting-expanded::-webkit-scrollbar-track {
+  background: transparent;
+}
+.lia-mobility-r3-meeting-expanded::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #36536a;
+}
+.lia-mobility-r3-meeting::before { content: ""; position: absolute; top: -4px; left: 13px; width: 46%; height: 28px; border-radius: 50%; background: linear-gradient(120deg, rgba(233, 246, 255, .14), transparent 72%); filter: blur(5px); pointer-events: none; }
+.lia-mobility-r3-meeting::after { content: none; }
+.lia-mobility-r3-status-ribbon { position: absolute; top: 15px; right: 0; padding: 7px 10px 7px 12px; border-radius: 8px 0 0 8px; font-size: 10px; font-weight: 800; letter-spacing: .09em; }
+.lia-mobility-r3-status-ribbon.is-on_time { color: #ccebdd; background: rgba(32, 91, 67, .88); box-shadow: -7px 7px 18px rgba(5, 34, 23, .22), inset 0 1px rgba(178, 225, 202, .13); }
+.lia-mobility-r3-status-ribbon.is-leave_soon { color: #ffe2a4; background: rgba(121, 79, 23, .88); box-shadow: -7px 7px 18px rgba(42, 24, 4, .25), inset 0 1px rgba(255, 231, 183, .16); }
+.lia-mobility-r3-status-ribbon.is-leave_now { color: #ffdf9a; background: rgba(151, 88, 16, .90); box-shadow: -7px 7px 18px rgba(58, 29, 2, .27), inset 0 1px rgba(255, 223, 154, .16); }
+.lia-mobility-r3-status-ribbon.is-late { color: #f5c7c3; background: rgba(124, 43, 39, .90); box-shadow: -7px 7px 18px rgba(48, 8, 6, .27), inset 0 1px rgba(245, 199, 195, .14); }
+.lia-mobility-r3-status-ribbon.is-pending { color: #c7d7e3; background: rgba(55, 76, 94, .90); box-shadow: -7px 7px 18px rgba(8, 18, 27, .24), inset 0 1px rgba(199, 215, 227, .12); }
+.lia-mobility-r3-meeting header { padding-right: 96px; display: flex; align-items: center; justify-content: space-between; }.lia-mobility-r3-meeting header span { color: #9fb7c9; font-size: 10px; font-weight: 700; letter-spacing: .1em; }.lia-mobility-r3-meeting header strong { color: #f0f7fc; font-size: 17px; }
+.lia-mobility-r3-meeting h2 { margin: 13px 0 5px; color: #edf6fc; font-size: 18px; line-height: 1.16; }.lia-mobility-r3-meeting > p { margin: 0; display: flex; align-items: center; gap: 7px; color: #b4c6d3; font-size: 11px; }.lia-mobility-r3-meeting > p svg { width: 15px; color: #6cb8eb; }.lia-mobility-r3-meeting > p small { color: #879fb1; font-size: 10.5px; }
+.lia-mobility-r3-primary-status { margin-top: 12px; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; border-radius: 10px; background: rgba(9, 31, 49, .56); }.lia-mobility-r3-primary-status span { color: #91a8ba; font-size: 10.5px; }.lia-mobility-r3-primary-status strong { color: #f0c779; font-size: 12px; }
+.lia-mobility-r3-decision-values { margin: 10px 0 0; display: grid; grid-template-columns: 1.25fr .8fr .8fr; gap: 6px; }.lia-mobility-r3-decision-values div { min-width: 0; padding: 7px 8px; border-radius: 9px; background: rgba(8,28,45,.38); box-shadow: inset 0 1px rgba(210,236,252,.05); }.lia-mobility-r3-decision-values dt { color: #a0b5c5; font-size: 10px; white-space: nowrap; }.lia-mobility-r3-decision-values dd { margin: 3px 0 0; color: #edf6fc; font-size: 15px; font-weight: 750; white-space: nowrap; }
+.lia-mobility-r3-details-toggle { margin-top: 10px; }
+.lia-mobility-r3-transfer-details { padding-top: 10px; }.lia-mobility-r3-transfer-details dl { margin: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }.lia-mobility-r3-transfer-details dt, .lia-mobility-r3-buffers span, .lia-mobility-r3-transfer-details p { color: #8ca3b5; font-size: 10.5px; }.lia-mobility-r3-transfer-details dd { margin: 2px 0 0; color: #dbe9f2; font-size: 11px; }.lia-mobility-r3-buffers { margin-top: 8px; display: flex; gap: 9px; flex-wrap: wrap; }.lia-mobility-r3-buffers b { color: #cedee9; }.lia-mobility-r3-transfer-details p { margin: 6px 0 0; }
+.lia-mobility-r3-profile { margin-top: 8px; display: flex; gap: 5px; }.lia-mobility-r3-profile button { padding: 5px 8px; color: #96adbe; border: 0; border-radius: 7px; background: rgba(13, 43, 65, .58); font-size: 10px; cursor: pointer; }.lia-mobility-r3-profile button[aria-pressed="true"] { color: #e9f6ff; background: rgba(39, 119, 176, .60); }
+.lia-mobility-r3-telemetry {
+  position: absolute; z-index: 6; right: 5%; bottom: 17px; width: min(450px, 48%); padding: 8px 10px; display: grid; grid-template-columns: repeat(4, 1fr);
+  border: solid transparent; border-width: 1px; border-top-color: rgba(218, 239, 252, .31); border-left-color: rgba(118, 175, 214, .16); border-radius: 15px;
+  background: linear-gradient(145deg, rgba(7,24,39,.36), rgba(4,15,27,.29)); box-shadow: 0 22px 46px rgba(0,3,9,.46), inset 0 1px rgba(255,255,255,.06);
+  backdrop-filter: blur(8px) saturate(128%);
+}
+.lia-mobility-r3-telemetry::before { content: ""; position: absolute; top: -3px; left: 11px; width: 31%; height: 22px; border-radius: 50%; background: linear-gradient(120deg, rgba(231, 245, 253, .11), transparent 72%); filter: blur(4px); pointer-events: none; }
+.lia-mobility-r3-telemetry > div { position: relative; min-width: 0; padding: 5px 10px; }.lia-mobility-r3-telemetry > div + div::before { content: ""; position: absolute; top: 22%; bottom: 22%; left: 0; width: 1px; background: linear-gradient(transparent, rgba(128, 174, 205, .23), transparent); }
+.lia-mobility-r3-telemetry span, .lia-mobility-r3-telemetry strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.lia-mobility-r3-telemetry span { color: #9bb0c0; font-size: 10.5px; }.lia-mobility-r3-telemetry strong { margin-top: 3px; color: #eff7fc; font-size: 15px; }.lia-mobility-r3-telemetry i { display: block; width: 22px; height: 2px; margin-top: 5px; border-radius: 2px; background: #52abe7; }
+.lia-mobility-r3-telemetry-secondary { display: none; }
+.lia-mobility-r3-source-state { position: absolute; z-index: 7; top: 50%; left: 50%; width: 280px; padding: 20px; display: grid; place-items: center; gap: 7px; text-align: center; border-radius: 15px; background: rgba(5, 18, 30, .78); transform: translate(-50%, -50%); backdrop-filter: blur(8px); }.lia-mobility-r3-source-state svg { width: 24px; color: #67b7ec; }.lia-mobility-r3-source-state strong { font-size: 13px; }.lia-mobility-r3-source-state span { color: #91a7b8; font-size: 11px; }
+
+/* Lower instrument modules. */
+.lia-mobility-r3-lower { flex: 0 0 185px; min-width: 0; margin-top: 12px; display: grid; grid-template-columns: 1.05fr .9fr 1.05fr; gap: 11px; }
+.lia-mobility-r3-module {
+  position: relative; min-width: 0; overflow: hidden; padding: 14px 15px;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(197, 227, 247, .21); border-left-color: rgba(92, 151, 194, .13);
+  border-radius: 15px; background: var(--r3-instrument);
+  box-shadow: 0 16px 34px rgba(0,4,11,.30), inset 0 1px rgba(255,255,255,.055); backdrop-filter: blur(12px) saturate(124%);
+}
+.lia-mobility-r3-module header { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 7px; }.lia-mobility-r3-module header h2 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.lia-mobility-r3-module header > span, .lia-mobility-r3-module header button { color: #6faed8; border: 0; background: transparent; font-size: 10.5px; white-space: nowrap; }
+.lia-mobility-r3-traffic-kpi { position: absolute; z-index: 2; top: 42px; left: 18px; display: flex; align-items: baseline; gap: 5px; }.lia-mobility-r3-traffic-kpi strong { color: #eef7fc; font-size: 27px; line-height: 1; }.lia-mobility-r3-traffic-kpi span, .lia-mobility-r3-traffic-kpi em { color: #92a8b9; font-size: 10.5px; font-style: normal; }.lia-mobility-r3-traffic-kpi em { color: #e8b75f; }
+.lia-mobility-r3-chart { width: 100%; height: 115px; margin-top: 18px; overflow: visible; }.lia-mobility-r3-chart-grid { fill: none; stroke: rgba(111, 154, 184, .11); }.lia-mobility-r3-chart-normal { fill: none; stroke: rgba(155, 185, 205, .24); stroke-dasharray: 4 5; }.lia-mobility-r3-chart polygon { fill: rgba(49, 145, 211, .13); }.lia-mobility-r3-chart polyline { fill: none; stroke: #5eb7ed; stroke-width: 2.6; }.lia-mobility-r3-chart circle { fill: #bde7ff; stroke: #2d8dcc; stroke-width: 3; filter: drop-shadow(0 0 5px rgba(82,177,235,.55)); }
+.lia-mobility-r3-chart-foot { margin-top: -10px; display: flex; justify-content: space-between; color: #8fa5b5; font-size: 10.5px; }.lia-mobility-r3-chart-foot b { color: #d6e7f2; }
+.lia-mobility-r3-punctuality { position: relative; width: 104px; height: 104px; margin: 9px auto 0; }.lia-mobility-r3-punctuality svg { width: 100%; height: 100%; transform: rotate(-90deg); filter: drop-shadow(0 0 8px rgba(221, 157, 53, .16)); }.lia-mobility-r3-punctuality circle { fill: none; stroke: rgba(102, 139, 165, .18); stroke-width: 8; }.lia-mobility-r3-punctuality .lia-mobility-r3-ring { stroke: #e5ad50; stroke-width: 8; stroke-linecap: round; stroke-dasharray: 264; }.lia-mobility-r3-punctuality > div { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }.lia-mobility-r3-punctuality strong { font-size: 25px; line-height: 1; }.lia-mobility-r3-punctuality span { margin-top: 4px; color: #e3b764; font-size: 10.5px; }
+.lia-mobility-r3-risk-details { margin: -4px 0 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }.lia-mobility-r3-risk-details div { min-width: 0; text-align: center; }.lia-mobility-r3-risk-details dt { min-height: 25px; color: #899faf; font-size: 10.5px; line-height: 1.15; }.lia-mobility-r3-risk-details dd { margin: 2px 0 0; color: #e2edf4; font-size: 11px; font-weight: 650; white-space: nowrap; }.lia-mobility-r3-delay dd { color: #e5b35e; }
+.lia-mobility-r3-transfers { position: relative; height: 128px; margin-top: 9px; display: flex; flex-direction: column; justify-content: center; gap: 9px; }.lia-mobility-r3-transfers::before { content: ""; position: absolute; top: 18px; bottom: 18px; left: 48px; width: 1px; background: linear-gradient(transparent, rgba(84, 150, 197, .24), transparent); }
+.lia-mobility-r3-transfers > div { position: relative; min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; }.lia-mobility-r3-transfers > div::before { content: ""; position: absolute; z-index: 1; left: 45px; width: 7px; height: 7px; border-radius: 50%; background: #63b7ed; box-shadow: 0 0 0 3px rgba(41, 115, 165, .20); }
+.lia-mobility-r3-transfers time { color: #d8e7f1; font-size: 11px; font-weight: 700; text-align: right; }.lia-mobility-r3-transfers p { min-width: 0; margin: 0 0 0 4px; }.lia-mobility-r3-transfers p strong, .lia-mobility-r3-transfers p span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.lia-mobility-r3-transfers p strong { color: #dce9f2; font-size: 11px; }.lia-mobility-r3-transfers p span { margin-top: 3px; color: #8da4b5; font-size: 10.5px; }.lia-mobility-r3-transfers small { padding: 5px 7px; border-radius: 999px; color: #efc477; background: rgba(106, 72, 24, .30); font-size: 10px; white-space: nowrap; }
+.lia-mobility-r3-sim-note, .lia-mobility-r3-quiet-state { margin: 4px 0 0; color: #8097a8; font-size: 10.5px; }.lia-mobility-r3-lower-state { place-items: center; color: #8fa6b7; border-radius: 15px; background: rgba(7, 21, 35, .52); }
+
+/* Stable reveals and accessible states. */
+.lia-r3-reveal { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 300ms cubic-bezier(.22,.8,.25,1), opacity 220ms ease; }
+.lia-r3-reveal-open { grid-template-rows: 1fr; opacity: 1; }.lia-r3-reveal-inner { min-height: 0; overflow: hidden; }
+.lia-dash-r3-secondary-actions { margin-top: 8px; }
+.lia-dash-r3-sidebar-toggle:focus-visible, .lia-dash-r3-nav-item:focus-visible, .lia-dash-r3-logout:focus-visible, .lia-dash-r3-header-controls button:focus-visible, .lia-mobility-r3-map-controls button:focus-visible, .lia-mobility-r3-profile button:focus-visible, .lia-dash-r3-action-grid button:focus-visible, .lia-dash-r3-local-toggle:focus-visible, .lia-dash-r3-more-activity:focus-visible, .lia-mobility-r3-details-toggle:focus-visible { outline: 2px solid #64b8ef; outline-offset: 2px; }
+
+/* Adaptive sidebar states. */
+.lia-dash-r3-sidebar-shell.is-compact { padding-right: 9px; padding-left: 9px; }
+.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-brand { padding-inline: 0; }.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-brand::after { left: 50%; transform: translateX(-50%); }
+.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-brand-copy { max-width: 0; opacity: 0; transform: translateX(-8px); }.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-brand-mark { opacity: 1; transform: translateX(-50%) scale(1); }
+.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-nav-item { justify-content: center; padding-inline: 0; gap: 0; }.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-nav-label { flex: 0; max-width: 0; opacity: 0; transform: translateX(-6px); }.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-nav-item b { position: absolute; top: 3px; right: 1px; min-width: 18px; height: 18px; }
+.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-operator-tile { width: 52px; min-height: 94px; margin-inline: auto; padding: 9px 0 42px; justify-content: center; }.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-operator-copy { max-width: 0; opacity: 0; }.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-operator-status { display: block; }.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-logout { top: auto; right: 50%; bottom: 5px; width: 36px; height: 32px; transform: translateX(50%); }.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-operator-arrow { opacity: 0; }
+.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-brand { padding-inline: clamp(5px, 6cqi, 12px); }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-brand-copy > span { opacity: 0; }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-nav-item { padding-inline: clamp(7px, 7cqi, 12px); gap: clamp(7px, 6cqi, 11px); }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-copy { max-width: 72px; }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-arrow { opacity: 0; }
+.lia-dash-r3-sidebar-shell.is-compact [data-tooltip]::after, .lia-dash-r3-sidebar-shell.is-intermediate [data-tooltip]::after { content: attr(data-tooltip); position: absolute; z-index: 30; top: 50%; left: calc(100% + 7px); width: max-content; padding: 7px 9px; color: #deeffb; border-radius: 8px; background: rgba(7, 22, 36, .94); box-shadow: 0 8px 20px rgba(0,3,9,.5), inset 0 1px rgba(204,231,249,.10); font-size: 11px; line-height: 1; pointer-events: none; opacity: 0; transform: translate(5px,-50%); transition: opacity 180ms ease, transform 180ms ease; }
+.lia-dash-r3-sidebar-shell.is-compact [data-tooltip]:hover::after, .lia-dash-r3-sidebar-shell.is-compact [data-tooltip]:focus-visible::after, .lia-dash-r3-sidebar-shell.is-compact [data-tooltip]:focus-within::after, .lia-dash-r3-sidebar-shell.is-intermediate [data-tooltip]:hover::after, .lia-dash-r3-sidebar-shell.is-intermediate [data-tooltip]:focus-visible::after, .lia-dash-r3-sidebar-shell.is-intermediate [data-tooltip]:focus-within::after { opacity: 1; transform: translate(0,-50%); }
+@container lia-dash-r3-sidebar (max-width: 144px) {
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-brand-copy { max-width: 0; opacity: 0; }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-brand-mark { opacity: 1; transform: translateX(-50%) scale(.94); }
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-nav-item { justify-content: center; gap: 0; }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-nav-label { flex: 0; max-width: 0; opacity: 0; }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-nav-item b { position: absolute; top: 3px; right: 2px; min-width: 18px; height: 18px; }
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-tile { justify-content: center; padding-inline: 8px; }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-copy { max-width: 0; opacity: 0; }.lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-status { display: block; }
+}
+@container lia-dash-r3-sidebar (min-width: 145px) { .lia-dash-r3-sidebar-shell.is-intermediate [data-tooltip]::after { content: none; } }
+
+/* Responsive layout. */
+@media (max-width: 1320px) {
+  .lia-dash-r3-shell { grid-template-columns: var(--lia-dash-r3-sidebar-width) minmax(0, 1fr) 270px; }
+  .lia-dash-r3-main { padding-inline: 13px; }.lia-dash-r3-metric-card { padding-inline: 10px; grid-template-columns: 38px minmax(0,1fr); gap: 8px; }.lia-dash-r3-metric-icon { width: 38px; height: 38px; }
+  .lia-dash-r3-focus { min-width: 0; }.lia-dash-r3-focus span { display: none; }.lia-dash-r3-search { width: min(210px, 25%); }
+}
+@media (max-width: 1120px) {
+  .lia-dash-r3-shell { height: auto; min-height: 100dvh; grid-template-columns: var(--lia-dash-r3-sidebar-width) minmax(0,1fr); grid-template-rows: 70px auto auto; overflow-x: hidden; overflow-y: auto; }
+  .lia-dash-r3-sidebar-shell { position: sticky; top: 0; height: 100dvh; }
+  .lia-dash-r3-header-shell { grid-column: 2; }.lia-dash-r3-main { grid-column: 2; min-height: 850px; overflow: visible; }
+  .lia-dash-r3-rail-shell { grid-column: 2; grid-row: 3; padding: 14px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); overflow: visible; background: rgba(5, 17, 29, .58); backdrop-filter: blur(9px); }
+  .lia-dash-r3-rail-activity { min-height: 240px; }
+}
+@media (max-width: 900px) {
+  .lia-dash-r3-header-shell { padding-inline: 14px; }.lia-dash-r3-search { width: 44px; padding: 0; justify-content: center; }.lia-dash-r3-search span { display: none; }.lia-dash-r3-temporal-context { min-width: 150px; padding-inline: 9px; }
+  .lia-dash-r3-metric-frames { flex-basis: 220px; grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .lia-dash-r3-map-frame { min-height: 480px; }.lia-mobility-r3-meeting { width: min(340px, 48%); }.lia-mobility-r3-telemetry { width: 58%; }
+  .lia-mobility-r3-endpoint-summary {
+    display: block;
+    margin-top: 5px;
+    color: #91a9ba;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: normal;
+  }
+  .lia-mobility-r3-lower { flex-basis: auto; grid-template-columns: repeat(2, minmax(0,1fr)); }.lia-mobility-r3-module { min-height: 185px; }.lia-mobility-r3-module:last-child { grid-column: 1 / -1; }
+  .lia-dash-r3-rail-shell { grid-template-columns: 1fr 1fr; }.lia-dash-r3-rail-activity { grid-column: 1 / -1; }
+}
+@media (max-width: 720px) {
+  .lia-dash-r3-shell { --lia-dash-r3-sidebar-width: 72px; }.lia-dash-r3-sidebar-toggle { display: none; }.lia-dash-r3-focus { display: none; }.lia-dash-r3-temporal-context { min-width: 132px; }.lia-dash-r3-temporal-context span { font-size: 8.5px; }.lia-dash-r3-header-controls { gap: 4px; }.lia-dash-r3-header-controls button:nth-child(2) { display: none; }
+  .lia-dash-r3-main { padding: 10px; }.lia-dash-r3-metric-frames { flex-basis: auto; grid-template-columns: 1fr; }.lia-dash-r3-metric-card { min-height: 98px; background: rgba(8, 24, 40, .70); backdrop-filter: blur(7px); }
+  .lia-dash-r3-main { padding-bottom: max(10px, env(safe-area-inset-bottom, 0px)); }
+  .lia-mobility-r3-simulation { max-width: calc(100% - 78px); }
+  .lia-mobility-r3-origin text,
+  .lia-mobility-r3-destination text {
+    display: none;
+  }
+  .lia-dash-r3-map-frame { min-height: 620px; }.lia-mobility-r3-meeting { top: 72px; left: 14px; right: 14px; width: auto; max-height: calc(100% - 190px); overflow: hidden; background: rgba(5, 18, 31, .42); backdrop-filter: blur(3px); }.lia-mobility-r3-telemetry { right: 12px; bottom: 14px; width: calc(100% - 24px); background: rgba(4, 16, 28, .34); backdrop-filter: blur(2px); }
+  .lia-mobility-r3-lower, .lia-dash-r3-rail-shell { grid-template-columns: 1fr; }.lia-mobility-r3-module:last-child, .lia-dash-r3-rail-activity { grid-column: auto; }
+}
+@media (pointer: coarse) { .lia-dash-r3-resize-handle { display: none; } }
+
+/* Exactly four infinite animations: route, destination, map scan and traffic endpoint. */
+@keyframes lia-mobility-r3-flow { to { stroke-dashoffset: -74; } }
+@keyframes lia-mobility-r3-halo { 50% { opacity: .46; transform: scale(1.12); } }
+@keyframes lia-r3-ambient-drift { to { opacity: .62; transform: translate3d(2.5%, 1.5%, 0) scale(1.03); } }
+/* R3-5C — live executive motion and operational feedback. */
+/* Coordinated one-shot entrance: header, metrics, map, instruments, lower modules, rail. */
+.lia-dash-r3-header-shell { animation: lia-r3-enter 360ms cubic-bezier(.22,.8,.25,1) both; }
+.lia-dash-r3-metric-card {
+  animation: lia-r3-enter 390ms cubic-bezier(.22,.8,.25,1) both;
+  animation-delay: calc(70ms + var(--lia-metric-index) * 42ms);
+}
+.lia-dash-r3-map-frame { animation: lia-r3-enter 420ms 190ms cubic-bezier(.22,.8,.25,1) both; }
+.lia-mobility-r3-meeting { animation: lia-r3-panel-enter 390ms 285ms cubic-bezier(.22,.8,.25,1) both; }
+.lia-mobility-r3-telemetry { animation: lia-r3-enter 390ms 330ms cubic-bezier(.22,.8,.25,1) both; }
+.lia-mobility-r3-module {
+  animation: lia-r3-enter 410ms cubic-bezier(.22,.8,.25,1) both;
+}
+.lia-mobility-r3-module:nth-child(1) { animation-delay: 390ms; }
+.lia-mobility-r3-module:nth-child(2) { animation-delay: 430ms; }
+.lia-mobility-r3-module:nth-child(3) { animation-delay: 470ms; }
+.lia-dash-r3-rail-shell { animation: lia-r3-enter 430ms 420ms cubic-bezier(.22,.8,.25,1) both; }
+
+/* Header availability and immediate controls. */
+.lia-dash-r3-focus { position: relative; padding-left: 25px; }
+.lia-dash-r3-focus::before {
+  content: ""; position: absolute; left: 10px; top: 50%; width: 7px; height: 7px; border-radius: 50%;
+  background: #60c89b; box-shadow: 0 0 0 4px rgba(65, 176, 132, .11); transform: translateY(-50%);
+  animation: lia-r3-status-arrive 420ms 160ms ease-out both;
+}
+.lia-dash-r3-search { position: relative; overflow: hidden; transition: border-color 190ms ease, background 190ms ease; }
+.lia-dash-r3-search::after {
+  content: ""; position: absolute; inset: -30% 42% -30% -10%; pointer-events: none;
+  background: radial-gradient(circle, rgba(94, 182, 239, .16), transparent 68%); opacity: 0; transform: translateX(-8px);
+  transition: opacity 190ms ease, transform 190ms ease;
+}
+.lia-dash-r3-search:focus-within::after, .lia-dash-r3-search:hover::after { opacity: 1; transform: translateX(0); }
+.lia-dash-r3-search svg { position: relative; z-index: 1; transition: color 180ms ease, transform 180ms ease; }
+.lia-dash-r3-search:hover svg { color: #bfe8ff; transform: translateX(1px); }
+.lia-dash-r3-header-controls button { transition: color 175ms ease, background 175ms ease, transform 175ms ease; }
+.lia-dash-r3-header-controls button:hover { transform: translateY(-1px); }
+.lia-dash-r3-header-controls button:active { transform: translateY(0); transition-duration: 70ms; }
+.lia-dash-r3-header-controls button b { animation: lia-r3-badge-arrive 360ms 240ms cubic-bezier(.2,.8,.2,1) both; }
+
+/* Metrics: semantic indicators, one shared priority breath, no changing values. */
+.lia-dash-r3-metric-state { position: relative; }
+.lia-dash-r3-priority-mark { transform-origin: center; }
+.lia-dash-r3-metric-card:nth-child(1) .lia-dash-r3-priority-mark { animation: lia-r3-status-arrive 430ms 300ms ease-out both; }
+.lia-dash-r3-metric-card:nth-child(2) .lia-dash-r3-priority-mark {
+  background: #e4ad54; box-shadow: 0 0 0 4px rgba(228,173,84,.09);
+}
+.lia-dash-r3-metric-card:nth-child(3) .lia-dash-r3-priority-mark { background: #62b7e8; }
+.lia-dash-r3-metric-card.lia-dash-r3-priority-critical .lia-dash-r3-priority-mark { background: #e06c63; }
+.lia-dash-r3-metric-card:nth-child(2):hover .lia-dash-r3-priority-mark,
+.lia-dash-r3-metric-card.lia-dash-r3-priority-critical:hover .lia-dash-r3-priority-mark { animation: lia-r3-interaction-pulse 680ms ease-out both; }
+.lia-dash-r3-metric-card:active { transform: translateY(0); transition-duration: 70ms; }
+
+/* Map scan is the single global/map environmental drift. */
+.lia-mobility-r3-map-scan {
+  position: absolute; z-index: 4; top: -20%; bottom: -20%; left: -38%; width: 34%; pointer-events: none; opacity: .075;
+  background:
+    linear-gradient(105deg, transparent 9%, rgba(139, 211, 255, .32) 48%, transparent 88%),
+    radial-gradient(ellipse at center, rgba(74, 164, 224, .24), transparent 68%);
+  transform: translate3d(0, 0, 0) rotate(4deg);
+  animation: lia-mobility-r3-map-scan 14.8s linear infinite;
+}
+
+/* Three-layer route with directional marks. */
+.lia-mobility-r3-route-glow { stroke: rgba(71, 171, 238, .23); stroke-width: 14; }
+.lia-mobility-r3-route-bed { stroke: rgba(1, 7, 13, .91); stroke-width: 9; }
+.lia-mobility-r3-route {
+  stroke-width: 4; stroke-dasharray: 18 8 3 8;
+}
+.lia-mobility-r3-route-directions path {
+  fill: none; stroke: rgba(195, 232, 255, .78); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
+  filter: drop-shadow(0 0 3px rgba(74, 169, 231, .58));
+}
+
+/* Each route node communicates a distinct role. */
+.lia-mobility-r3-origin-halo {
+  transform-origin: center; animation: lia-r3-origin-arrive 920ms 360ms ease-out both;
+}
+.lia-mobility-r3-midpoint-activity {
+  fill: none; stroke: rgba(101, 189, 241, .40); stroke-width: 1.5; stroke-dasharray: 8 5;
+  transform-origin: center; animation: lia-r3-midpoint-arrive 1080ms 480ms ease-out both;
+}
+.lia-mobility-r3-transfer-mark { fill: none; stroke: #b8e3fb; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.lia-mobility-r3-location-halo {
+  fill: rgba(39, 146, 218, .08); stroke: rgba(236, 184, 96, .34);
+}
+.lia-mobility-r3-destination-ring { filter: drop-shadow(0 0 6px rgba(224, 169, 77, .20)); }
+
+/* Meeting panel: route connection, localized light and one-shot reflection. */
+.lia-mobility-r3-meeting { transition: max-height 300ms cubic-bezier(.22,.8,.25,1), transform 200ms ease; }
+.lia-mobility-r3-meeting::before {
+  top: -6px; left: -25%; width: 34%; height: 115%; border-radius: 0; filter: none;
+  background: linear-gradient(102deg, transparent, rgba(233,246,255,.12), transparent);
+  opacity: 0; transform: translateX(0); animation: lia-r3-reflection 440ms 560ms ease-out both;
+}
+.lia-mobility-r3-meeting::after { transition: opacity 190ms ease; }
+.lia-mobility-r3-meeting:hover, .lia-mobility-r3-meeting:focus-within { transform: translateY(-1px); }
+.lia-mobility-r3-meeting:hover::before, .lia-mobility-r3-meeting:focus-within::before { animation: lia-r3-reflection 440ms ease-out both; }
+.lia-mobility-r3-meeting:hover::after, .lia-mobility-r3-meeting:focus-within::after { opacity: .88; }
+.lia-mobility-r3-meeting header::after {
+  content: ""; position: absolute; left: 100%; top: 52%; width: clamp(38px, 9vw, 118px); height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, rgba(105,184,235,.48), transparent);
+}
+.lia-mobility-r3-meeting header::before {
+  content: ""; position: absolute; right: -1px; top: -1px; width: 74px; height: 55px; pointer-events: none;
+  background: radial-gradient(circle at top right, rgba(99,181,235,.16), transparent 68%);
+}
+.lia-r3-reveal { transform: translateY(-6px); transition: grid-template-rows 320ms cubic-bezier(.22,.8,.25,1), opacity 300ms ease, transform 320ms cubic-bezier(.22,.8,.25,1); }
+.lia-r3-reveal-open { transform: translateY(0); }
+
+/* Telemetry reads once across the four stable segments. */
+.lia-mobility-r3-telemetry { overflow: hidden; }
+.lia-mobility-r3-telemetry::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: linear-gradient(90deg, transparent, rgba(116, 199, 248, .13), transparent);
+  transform: translateX(-100%); animation: lia-r3-telemetry-read 880ms 430ms ease-out both;
+}
+.lia-mobility-r3-telemetry > div { transition: background 200ms ease, transform 200ms ease; }
+.lia-mobility-r3-telemetry > div::after {
+  content: ""; position: absolute; right: 10px; top: 8px; width: 4px; height: 4px; border-radius: 50%; background: #5fb9ea;
+  box-shadow: 0 0 0 3px rgba(65,153,207,.09); opacity: .72;
+}
+.lia-mobility-r3-telemetry > div:hover { background: rgba(49, 130, 184, .08); transform: translateY(-1px); }
+.lia-mobility-r3-telemetry > div:hover i { opacity: 1; transform: scaleX(1.35); }
+.lia-mobility-r3-telemetry i { transform-origin: left; opacity: .76; transition: opacity 200ms ease, transform 200ms ease; }
+.lia-mobility-r3-telemetry-traffic i, .lia-mobility-r3-telemetry-traffic::after { background: #df9860 !important; }
+
+/* Traffic reveal and the fourth (endpoint) live loop. */
+.lia-mobility-r3-chart polygon { opacity: 0; animation: lia-r3-chart-area 760ms 480ms ease-out forwards; }
+.lia-mobility-r3-chart polyline {
+  stroke-dasharray: 420; stroke-dashoffset: 420; animation: lia-r3-chart-reveal 920ms 440ms cubic-bezier(.22,.8,.25,1) forwards;
+}
+.lia-mobility-r3-chart .lia-mobility-r3-chart-wave {
+  fill: none; stroke: rgba(98, 190, 241, .46); stroke-width: 1.5; filter: none; transform-box: fill-box; transform-origin: center;
+  animation: lia-r3-chart-endpoint 3.2s ease-out infinite;
+}
+.lia-mobility-r3-chart .lia-mobility-r3-chart-endpoint { fill: #bde7ff; stroke: #2d8dcc; }
+.lia-mobility-r3-traffic-kpi em { position: relative; font-weight: 700; }
+.lia-mobility-r3-traffic-kpi em::after { content: "↗"; margin-left: 3px; color: #efc477; }
+
+/* Punctuality loads from zero and retains the real computed offset. */
+.lia-mobility-r3-punctuality .lia-mobility-r3-ring {
+  animation: lia-r3-ring-load 980ms 470ms cubic-bezier(.22,.8,.25,1) both;
+}
+.lia-mobility-r3-punctuality::after {
+  content: ""; position: absolute; inset: 7px; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: linear-gradient(115deg, transparent 30%, rgba(255,231,184,.12), transparent 65%);
+  transform: translateX(-8px); transition: opacity 190ms ease, transform 440ms ease;
+}
+.lia-mobility-r3-punctuality:hover::after { opacity: 1; transform: translateX(8px); }
+
+/* Transfer timeline advances only once toward the undisclosed next position. */
+.lia-mobility-r3-transfers { overflow: hidden; }
+.lia-mobility-r3-transfers::after {
+  content: ""; position: absolute; z-index: 0; left: 47px; top: 50%; width: 3px; height: 46%; pointer-events: none;
+  background: linear-gradient(#67b8eb, transparent); transform-origin: top; animation: lia-r3-timeline-progress 720ms 600ms ease-out both;
+}
+.lia-mobility-r3-transfer-active::before { background: #9bdcff !important; box-shadow: 0 0 0 4px rgba(53,144,204,.20) !important; }
+.lia-mobility-r3-transfers > div { z-index: 1; }
+
+/* Rail rhythm, connected activity and tactile actions. */
+.lia-dash-r3-rail-summary { background: radial-gradient(circle at 88% 14%, rgba(42,154,112,.10), transparent 35%), var(--r3-instrument); }
+.lia-dash-r3-rail-actions { background: radial-gradient(circle at 12% 12%, rgba(74,168,225,.10), transparent 36%), var(--r3-instrument); }
+.lia-dash-r3-rail-activity { background: radial-gradient(circle at 88% 12%, rgba(211,86,83,.07), transparent 34%), var(--r3-instrument); }
+.lia-dash-r3-operation-state { animation: lia-r3-stable-arrive 620ms 590ms ease-out both; }
+.lia-dash-r3-action-grid button { position: relative; overflow: hidden; transition: color 175ms ease, background 175ms ease, transform 175ms ease; }
+.lia-dash-r3-action-grid button::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: linear-gradient(105deg, transparent, rgba(103,187,239,.11)); transform: translateX(-8px); transition: opacity 175ms ease, transform 175ms ease;
+}
+.lia-dash-r3-action-grid button:hover::after { opacity: 1; transform: translateX(0); }
+.lia-dash-r3-action-grid button:hover svg { transform: translateX(2px); }
+.lia-dash-r3-action-grid button:active { transform: translateY(0); transition-duration: 70ms; }
+.lia-dash-r3-action-grid svg { position: relative; z-index: 1; transition: transform 175ms ease; }
+.lia-dash-r3-activity-list::before {
+  content: ""; position: absolute; left: 16px; top: 18px; bottom: 18px; width: 1px;
+  background: linear-gradient(rgba(82,166,219,.16), rgba(82,166,219,.42), rgba(82,166,219,.08));
+}
+.lia-dash-r3-activity-row { animation: lia-r3-activity-enter 360ms cubic-bezier(.22,.8,.25,1) both; animation-delay: calc(560ms + var(--lia-activity-index, 0) * 55ms); }
+.lia-dash-r3-rail-activity { display: flex; flex-direction: column; }
+.lia-dash-r3-activity-list { flex: 1; }
+.lia-dash-r3-more-activity { margin-top: auto; }
+
+/* Global focus and tactile behavior. */
+.lia-mobility-r3-details-toggle, .lia-mobility-r3-profile button, .lia-dash-r3-local-toggle, .lia-dash-r3-more-activity {
+  transition: color 175ms ease, background 175ms ease, transform 175ms ease;
+}
+.lia-mobility-r3-details-toggle:hover, .lia-mobility-r3-profile button:hover, .lia-dash-r3-local-toggle:hover, .lia-dash-r3-more-activity:hover { transform: translateY(-1px); }
+.lia-mobility-r3-details-toggle:active, .lia-mobility-r3-profile button:active, .lia-dash-r3-local-toggle:active, .lia-dash-r3-more-activity:active { transform: translateY(0); transition-duration: 70ms; }
+
+@keyframes lia-r3-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes lia-r3-panel-enter { from { opacity: 0; transform: translate(-5px, 6px); } to { opacity: 1; transform: translate(0, 0); } }
+@keyframes lia-r3-status-arrive { from { opacity: 0; transform: translateY(-50%) scale(.7); } to { opacity: 1; transform: translateY(-50%) scale(1); } }
+@keyframes lia-r3-badge-arrive { from { opacity: 0; transform: translateY(-3px) scale(.8); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes lia-r3-interaction-pulse { 45% { opacity: .52; transform: scale(1.12); } }
+@keyframes lia-mobility-r3-map-scan { to { transform: translate3d(410%, 0, 0) rotate(4deg); } }
+@keyframes lia-r3-origin-arrive { 0% { opacity: .2; transform: scale(.78); } 55% { opacity: .44; transform: scale(1.08); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes lia-r3-midpoint-arrive { from { opacity: 0; transform: rotate(-36deg) scale(.85); } to { opacity: .8; transform: rotate(0) scale(1); } }
+@keyframes lia-r3-reflection { 0% { opacity: 0; transform: translateX(0); } 35% { opacity: .7; } 100% { opacity: 0; transform: translateX(430%); } }
+@keyframes lia-r3-telemetry-read { 0% { opacity: 0; transform: translateX(-100%); } 35% { opacity: 1; } 100% { opacity: 0; transform: translateX(100%); } }
+@keyframes lia-r3-chart-area { from { opacity: 0; } to { opacity: 1; } }
+@keyframes lia-r3-chart-reveal { to { stroke-dashoffset: 0; } }
+@keyframes lia-r3-chart-endpoint { 0% { opacity: .7; transform: scale(.48); } 72%, 100% { opacity: 0; transform: scale(1.34); } }
+@keyframes lia-r3-ring-load { from { stroke-dashoffset: 264; } }
+@keyframes lia-r3-timeline-progress { from { opacity: 0; transform: scaleY(0); } to { opacity: .8; transform: scaleY(1); } }
+@keyframes lia-r3-stable-arrive { 0% { opacity: 0; transform: translateY(4px); } 60% { opacity: 1; transform: translateY(0); } 78% { opacity: .72; } 100% { opacity: 1; } }
+@keyframes lia-r3-activity-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .lia-dash-r3-shell *, .lia-dash-r3-shell *::before, .lia-dash-r3-shell *::after {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+  }
+  .lia-mobility-r3-route { stroke-dashoffset: 0; }
+  .lia-mobility-r3-map-scan { opacity: .035; transform: translate3d(165%, 0, 0) rotate(4deg); }
+  .lia-mobility-r3-chart polyline { stroke-dashoffset: 0; }
+  .lia-mobility-r3-chart polygon { opacity: 1; }
+  .lia-mobility-r3-chart .lia-mobility-r3-chart-wave { opacity: .34; transform: scale(.8); }
+  .lia-r3-reveal { transform: none; }
+}
+
+
+/* =========================================================
+   LÍA MOBILE — native phone layout
+   ========================================================= */
+
+.lia-dash-r3-mobile-nav {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .lia-dash-r3-shell {
+    --lia-dash-r3-sidebar-width: 0px !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr) !important;
+    width: 100% !important;
+    min-height: 100dvh !important;
+    height: auto !important;
+    padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px)) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  .lia-dash-r3-sidebar-shell {
+    position: fixed !important;
+    z-index: 60 !important;
+    inset: auto 0 0 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    pointer-events: none;
+  }
+
+  .lia-dash-r3-brand,
+  .lia-dash-r3-navigation,
+  .lia-dash-r3-operator-tile,
+  .lia-dash-r3-sidebar-toggle,
+  .lia-dash-r3-resize-handle {
+    display: none !important;
+  }
+
+  .lia-dash-r3-mobile-nav {
+    pointer-events: auto;
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+    margin: 0 max(8px, env(safe-area-inset-right, 0px))
+      max(8px, env(safe-area-inset-bottom, 0px))
+      max(8px, env(safe-area-inset-left, 0px));
+    padding: 8px 10px;
+    border: 1px solid rgba(160, 207, 238, .18);
+    border-radius: 26px;
+    background: rgba(6, 20, 34, .86);
+    box-shadow:
+      0 16px 40px rgba(0, 0, 0, .48),
+      inset 0 1px rgba(234, 248, 255, .08);
+    backdrop-filter: blur(24px) saturate(145%);
+    -webkit-backdrop-filter: blur(24px) saturate(145%);
+  }
+
+  .lia-dash-r3-mobile-nav-item {
+    position: relative;
+    min-width: 0;
+    min-height: 58px;
+    border: 0;
+    border-radius: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    color: #8098aa;
+    background: transparent;
+    font: inherit;
+  }
+
+  .lia-dash-r3-mobile-nav-item svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .lia-dash-r3-mobile-nav-item span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 9.5px;
+    font-weight: 650;
+  }
+
+  .lia-dash-r3-mobile-nav-item b {
+    position: absolute;
+    top: 3px;
+    right: 16%;
+    min-width: 17px;
+    height: 17px;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    color: white;
+    background: #258fd0;
+    font-size: 9px;
+  }
+
+  .lia-dash-r3-mobile-nav-item.is-active {
+    color: #d9f2ff;
+    background: linear-gradient(145deg, rgba(31, 108, 158, .66), rgba(11, 50, 79, .86));
+    box-shadow:
+      inset 0 1px rgba(226, 247, 255, .12),
+      0 6px 18px rgba(15, 101, 158, .26);
+  }
+
+  .lia-dash-r3-header-shell {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 40 !important;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    min-width: 0 !important;
+    min-height: 64px !important;
+    padding:
+      max(8px, env(safe-area-inset-top, 0px))
+      12px
+      8px !important;
+    display: grid !important;
+    grid-template-columns: 42px minmax(126px, 1fr) auto !important;
+    gap: 8px !important;
+    align-items: center !important;
+    background: rgba(4, 15, 26, .74);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
+  }
+
+  .lia-dash-r3-search {
+    width: 42px !important;
+    min-width: 42px !important;
+    height: 42px !important;
+    padding: 0 !important;
+    order: 1;
+  }
+
+  .lia-dash-r3-search input,
+  .lia-dash-r3-search span {
+    display: none !important;
+  }
+
+  .lia-dash-r3-search button {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  .lia-dash-r3-focus {
+    display: none !important;
+  }
+
+  .lia-dash-r3-temporal-context {
+    order: 2;
+    min-width: 0 !important;
+    width: 100% !important;
+    padding: 6px 10px !important;
+  }
+
+  .lia-dash-r3-temporal-context span {
+    font-size: 8px !important;
+  }
+
+  .lia-dash-r3-temporal-context time {
+    font-size: clamp(18px, 6vw, 25px) !important;
+  }
+
+  .lia-dash-r3-header-controls {
+    order: 3;
+    min-width: 0;
+    gap: 4px !important;
+  }
+
+  .lia-dash-r3-header-controls button {
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .lia-dash-r3-header-controls button:nth-child(2),
+  .lia-dash-r3-header-controls button:last-child {
+    display: none !important;
+  }
+
+  .lia-dash-r3-header-logout {
+    display: grid !important;
+    place-items: center !important;
+  }
+
+  .lia-dash-r3-avatar {
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .lia-dash-r3-main {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding:
+      12px
+      12px
+      calc(18px + env(safe-area-inset-bottom, 0px)) !important;
+    overflow: visible !important;
+  }
+
+  .lia-dash-r3-rail-shell {
+    grid-column: 1 !important;
+    width: auto !important;
+    margin: 0 12px 18px !important;
+  }
+
+  .lia-dash-r3-metric-frames {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  .lia-dash-r3-metric-card {
+    min-height: 112px !important;
+    padding: 15px 16px !important;
+    grid-template-columns: 54px minmax(0, 1fr) !important;
+  }
+
+  .lia-dash-r3-map-frame {
+    min-height: 560px !important;
+    height: auto !important;
+  }
+
+  .lia-mobility-r3-meeting {
+    left: 14px !important;
+    right: 14px !important;
+    width: auto !important;
+    max-height: none !important;
+  }
+
+  .lia-mobility-r3-telemetry {
+    left: 12px !important;
+    right: 12px !important;
+    bottom: 12px !important;
+    width: auto !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .lia-mobility-r3-lower {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .lia-dash-r3-header-shell {
+    grid-template-columns: 38px minmax(112px, 1fr) auto !important;
+    padding-inline: 8px !important;
+  }
+
+  .lia-dash-r3-header-controls button {
+    width: 38px !important;
+    height: 38px !important;
+  }
+
+  .lia-dash-r3-avatar {
+    width: 38px !important;
+    height: 38px !important;
+  }
+
+  .lia-dash-r3-mobile-nav {
+    margin-inline: 6px;
+    padding-inline: 5px;
+  }
+
+  .lia-dash-r3-mobile-nav-item {
+    min-height: 56px;
+  }
+}
+
+/* iPad / tablet: comfortable touch sidebar instead of a compressed desktop rail. */
+@media (min-width: 721px) and (max-width: 1180px) {
+  .lia-dash-r3-nav-item {
+    min-height: 54px;
+    padding-inline: 14px;
+    font-size: 13.5px;
+  }
+
+  .lia-dash-r3-nav-item svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .lia-dash-r3-navigation {
+    gap: 8px;
+    padding: 16px 6px 10px;
+  }
+
+  .lia-dash-r3-sidebar-shell {
+    padding: 22px 16px 14px;
+  }
+
+  .lia-dash-r3-brand {
+    min-height: 72px;
+    padding-bottom: 20px;
+  }
+
+  .lia-dash-r3-main {
+    padding-inline: 16px;
+  }
+}
+
+/* lia-r3-mobile-nav-viewport-fix-v1
+   Phone authority: the R3 primary navigation belongs to the viewport,
+   never to the vertical content flow of the sidebar. */
+@media (max-width: 720px) {
+  .lia-dash-r3-mobile-nav {
+    position: fixed !important;
+    left: max(8px, env(safe-area-inset-left, 0px)) !important;
+    right: max(8px, env(safe-area-inset-right, 0px)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
+    width: auto !important;
+    margin: 0 !important;
+    z-index: 2147483000 !important;
+  }
+
+  .lia-dash-r3-main {
+    padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}

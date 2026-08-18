@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "lia-agent-backend-deploy/v1",
+  "operationId": "v500-hermes-YYYYMMDDTHHMMSSZ",
+  "expectedRepoRoot": "/opt/executive-platform-demo-hermes",
+  "expectedBranch": "feat/lia-os-v500-hermes-adapter-foundation",
+  "expectedHead": "REPLACE_WITH_AUTHORIZED_40_CHAR_COMMIT_SHA",
+  "expectedTag": "REPLACE_WITH_AUTHORIZED_RELEASE_TAG",
+  "sourceBackendDir": "/opt/executive-platform-demo-hermes/backend/lia-agent",
+  "deployDir": "/opt/lia-agent-backend",
+  "backupRoot": "/opt/lia-agent-backups",
+  "pm2ProcessName": "lia-agent-backend",
+  "host": "127.0.0.1",
+  "port": 3014,
+  "expectedCurrentVersion": "v4.10.0-a",
+  "expectedTargetVersion": "v5.0.0",
+  "expectedCurrentScript": "dist/server.js",
+  "expectedTargetScript": "dist/server.js",
+  "healthPath": "/health",
+  "statusPath": "/api/status",
+  "allowedServicePorts": [
+    3004,
+    3014,
+    3023
+  ],
+  "applyAuthorization": "APPLY:lia-agent-backend:v500-hermes-YYYYMMDDTHHMMSSZ",
+  "rollback": {
+    "backupDir": "/opt/lia-agent-backups/REPLACE_WITH_SELECTED_BACKUP"
+  }
+}

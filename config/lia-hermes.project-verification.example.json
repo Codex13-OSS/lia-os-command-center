@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "projectId": "lia-hermes",
+      "checks": [
+        {
+          "id": "scripts-tests",
+          "executable": "node",
+          "args": ["--test", "scripts/tests/*.test.mjs"],
+          "timeoutMs": 120000
+        },
+        {
+          "id": "backend-typecheck",
+          "executable": "npm",
+          "args": ["--prefix", "backend/lia-agent", "run", "typecheck"],
+          "timeoutMs": 120000
+        },
+        {
+          "id": "frontend-build",
+          "executable": "npm",
+          "args": ["--prefix", "frontend", "run", "build"],
+          "timeoutMs": 300000
+        }
+      ]
+    }
+  ]
+}

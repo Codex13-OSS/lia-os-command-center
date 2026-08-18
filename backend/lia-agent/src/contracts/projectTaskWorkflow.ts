@@ -1,0 +1,74 @@
+import type { ProjectCodexCommitError } from './projectCodexCommit.js';
+import type { ProjectCodexExecutionError } from './projectCodexExecution.js';
+import type { ProjectResolutionResult } from './projectRegistry.js';
+import type { ProjectOrchestrationExecutionError } from './projectOrchestrationExecution.js';
+import type { SafeTaskStage } from './projectTask.js';
+
+export type ProjectTaskWorkflowStage =
+  | 'planning'
+  | 'hermes'
+  | 'approval'
+  | 'codex'
+  | 'verification'
+  | 'commit';
+
+type ProjectResolutionError = Extract<ProjectResolutionResult, { ok: false }>['error'];
+type ProjectVerificationError =
+  | 'check_failed'
+  | 'check_timeout'
+  | 'verification_unavailable'
+  | 'invalid_generated_path';
+
+type ProjectVisualVerificationError =
+  | 'visual_check_failed'
+  | 'visual_check_timeout'
+  | 'visual_verification_unavailable';
+
+export type ProjectTaskWorkflowError =
+  | 'invalid_task'
+  | ProjectResolutionError
+  | ProjectOrchestrationExecutionError
+  | ProjectCodexExecutionError
+  | ProjectVerificationError
+  | ProjectVisualVerificationError
+  | ProjectCodexCommitError
+  | 'local_commit_requires_run_tests'
+  | 'invalid_hermes_json'
+  | 'invalid_hermes_proposal'
+  | 'external_launch_outcome_unknown'
+  | 'workflow_interrupted'
+  | 'local_resume_available'
+  | 'resume_refused'
+  | 'human_approval_required'
+  | 'codex_start_not_recorded'
+  | 'codex_result_not_recorded';
+
+/** Safe workflow receipt. Internal plans, paths, prompts, process output and commands are excluded. */
+export type ProjectTaskWorkflowResult =
+  | {
+      ok: true;
+      projectId: string;
+      executionId: string;
+      status: 'analyzed' | 'ready_for_review' | 'verified' | 'committed';
+      executionSummary: string;
+      resultText: string;
+      verification?: {
+        status: 'verified';
+        checksPassed: number;
+        totalChecks: number;
+      };
+      commit?: string;
+      /** Completed workflow phases in canonical order. Never includes internal data. */
+      stages?: readonly SafeTaskStage[];
+    }
+  | {
+      ok: false;
+      projectId?: string;
+      executionId?: string;
+      status: 'failed';
+      stage: ProjectTaskWorkflowStage;
+      error: ProjectTaskWorkflowError;
+      summary: string;
+      /** Phases completed before the terminal failure. Never includes internal data. */
+      completedStages?: readonly SafeTaskStage[];
+    };

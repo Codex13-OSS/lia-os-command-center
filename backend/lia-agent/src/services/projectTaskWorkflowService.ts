@@ -1,0 +1,640 @@
+import type { LiaAgentConfig } from '../config.js';
+import type { ProjectCodexCommitResult } from '../contracts/projectCodexCommit.js';
+import type { ProjectCodexExecutionResult } from '../contracts/projectCodexExecution.js';
+import type { ProjectCodexHandoff } from '../contracts/projectCodexHandoff.js';
+import { isExternalLaunchOutcomeUnknownError } from '../contracts/projectTaskDurableExecution.js';
+import type { ProjectTaskExecutionLaunchResultOutcome } from '../contracts/projectTaskExecutionLaunchResult.js';
+import type { ProjectTaskRequest } from '../contracts/projectExecutor.js';
+import type { ProjectRegistrySource } from '../contracts/projectRegistry.js';
+import type { SafeTaskStage } from '../contracts/projectTask.js';
+import type { ProjectTaskWorkflowResult } from '../contracts/projectTaskWorkflow.js';
+import type { ProjectOrchestrationProposal } from '../contracts/projectOrchestration.js';
+import type { ProjectVerificationRegistry } from '../contracts/projectVerification.js';
+import type { HermesExecutionResult, HermesQueryExecutor } from './hermesExecutor.js';
+import { executeHermesSupervisor } from './hermesSupervisorExecutor.js';
+import { commitVerifiedProjectCodexWorkspace } from './projectCodexCommit.js';
+import { executeProjectCodexHandoff } from './projectCodexExecutor.js';
+import { buildProjectCodexHandoff } from './projectCodexHandoff.js';
+import {
+  verifyProjectCodexWorkspace,
+  type ProjectCodexVerificationResult,
+} from './projectCodexVerification.js';
+import {
+  verifyProjectVisualWorkspace,
+  type ProjectVisualVerificationResult,
+} from './projectVisualVerification.js';
+import { planProjectTask } from './projectExecutionPlanner.js';
+import {
+  buildProjectOrchestrationPrompt,
+  buildProjectOrchestrationRepairPrompt,
+} from './projectOrchestrationPrompt.js';
+import { validateProjectOrchestrationProposal } from './projectOrchestrationValidation.js';
+
+type CodexExecutor = (handoff: ProjectCodexHandoff) => Promise<ProjectCodexExecutionResult>;
+type VerificationExecutor = typeof verifyProjectCodexWorkspace;
+type VisualVerificationExecutor = typeof verifyProjectVisualWorkspace;
+type CommitExecutor = typeof commitVerifiedProjectCodexWorkspace;
+
+const MAX_RESULT_TEXT_CHARS = 6_000;
+
+function buildCommittedResultText(
+  verification: { checksPassed: number; totalChecks: number },
+  commit: string,
+): string {
+  const finalResult = `Final verified result: ${verification.checksPassed}/${verification.totalChecks} checks passed and local commit ${commit} was created and validated.`;
+  return finalResult.slice(0, MAX_RESULT_TEXT_CHARS);
+}
+
+export interface ProjectTaskWorkflowDependencies {
+  executeHermes?: HermesQueryExecutor;
+  executeCodex?: CodexExecutor;
+  executeVerification?: VerificationExecutor;
+  executeVisualVerification?: VisualVerificationExecutor;
+  executeCommit?: CommitExecutor;
+  /** Internal observability only. Receives no workflow internals. */
+  onStage?: (stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => void | Promise<void>;
+  /**
+   * Optional durable pre-Hermes launch gate. Invoked exactly once per live
+   * workflow process, after planning and prompt preparation and immediately
+   * before the first real Hermes external call (and therefore before the
+   * observable `hermes` stage). It admits entry into ONE live external phase.
+   * When it reports an already-crossed/ambiguous launch it must throw
+   * ExternalLaunchOutcomeUnknownError; the workflow then fails closed without
+   * any Hermes call and without observing the `hermes` stage. Any other throw
+   * propagates as a pre-launch failure. In-process Hermes repair calls after
+   * a successful gate are not re-gated.
+   */
+  beforeExternalLaunch?: () => void | Promise<void>;
+  /** Internal, bounded diagnostics. Never includes prompts, responses, paths or process output. */
+  onHermesProposalAttempt?: (outcome:
+    | 'initial_invalid_json'
+    | 'initial_invalid_structure'
+    | 'repair_succeeded'
+    | 'repair_invalid_json'
+    | 'repair_invalid_structure'
+  ) => void | Promise<void>;
+  /**
+   * Optional durable post-Hermes evidence seam. Invoked at most once per live
+   * workflow with ONLY the small final outcome class of the WHOLE admitted
+   * live Hermes phase (initial call plus the existing bounded repair/retry).
+   * It never receives the raw Hermes response, the parsed proposal, prompts,
+   * capabilities, paths or credentials. The workflow records the final
+   * outcome durably before any local approval/blocked-action decision, handoff
+   * validation, capability check or Codex call. When the callback throws, the
+   * workflow fails closed as external_launch_outcome_unknown with zero Codex
+   * and zero Hermes retry, because the observed outcome could not be durably
+   * confirmed. Without this dependency the workflow keeps its legacy direct
+   * behavior and records nothing.
+   */
+  recordExternalLaunchResult?: (outcomeClass: ProjectTaskExecutionLaunchResultOutcome) => void | Promise<void>;
+  /**
+   * Optional durable post-Hermes validated-proposal snapshot seam (Layer 13).
+   * Invoked at most once per live workflow at the proposal_valid site with
+   * ONLY the normalized validated proposal object — never the raw Hermes
+   * response, prompts, capabilities, paths or credentials. It atomically
+   * durably confirms the proposal_valid outcome together with its snapshot
+   * BEFORE any local approval/blocked-action decision, handoff validation,
+   * capability check or Codex call. When it throws, the observed outcome could
+   * not be durably confirmed: the workflow fails closed as
+   * external_launch_outcome_unknown with zero Codex and zero Hermes retry.
+   * Without this dependency the proposal_valid site falls back to the legacy
+   * recordExternalLaunchResult behavior (direct/non-durable compatibility).
+   */
+  recordValidatedProposalResult?: (proposal: ProjectOrchestrationProposal) => void | Promise<void>;
+  /**
+   * Optional durable Codex start evidence seam (Layer 15). Invoked at most
+   * once per live workflow, after the observable `codex` stage transition
+   * (which durably transitions the task status to 'codex') and immediately
+   * BEFORE the first real Codex external process call. It durably records
+   * that Codex is about to launch for this task with its exact execution
+   * lineage. The callback receives no arguments (the lineage is captured
+   * by the closure). When the callback throws, Codex still runs (the
+   * start evidence is diagnostic, never gating).
+   */
+  recordCodexStart?: () => void | Promise<void>;
+  /**
+   * Optional durable Codex result evidence seam (Layer 15). Invoked at most
+   * once per live workflow, AFTER executeProjectCodexHandoff returns and
+   * BEFORE any verification, visual-QA, or commit step. Receives ONLY the
+   * safe ProjectCodexExecutionResult — never raw output, paths, or
+   * transcripts. The evidence is recorded durably after the Codex call
+   * completes. When the callback throws, the evidence could not be durably
+   * recorded but execution continues (evidence is state only, never authority).
+   */
+  recordCodexResult?: (result: ProjectCodexExecutionResult) => void | Promise<void>;
+  /**
+   * Optional durable verification start evidence seam (Layer 17). Invoked
+   * at most once per live workflow, after the observable `verification`
+   * stage transition and immediately BEFORE the first real verification
+   * check. Records the exact execution lineage and Codex execution ID.
+   * The callback receives the codex executionId. Evidence only — never
+   * gates execution (verification is safely idempotent).
+   */
+  recordVerificationStart?: (executionId: string) => void | Promise<void>;
+  /**
+   * Optional durable verification result evidence seam (Layer 17). Invoked
+   * at most once per live workflow after BOTH technical and visual
+   * verification complete. Receives ONLY the safe aggregate verification
+   * result — never raw output, paths, or transcripts. Evidence only —
+   * never gates execution.
+   */
+  recordVerificationResult?: (result: {
+    success: boolean;
+    checksPassed: number;
+    totalChecks: number;
+    technicalChecksPassed: number;
+    technicalTotalChecks: number;
+    visualChecksPassed: number;
+    visualTotalChecks: number;
+    error?: string;
+    summary?: string;
+  }) => void | Promise<void>;
+  /**
+   * Optional durable commit start evidence seam (Layer 17). Invoked at
+   * most once per live workflow, after the observable `commit` stage
+   * transition and immediately BEFORE the git commit mutation. MUST throw
+   * on failure — commit is non-idempotent, so failure to record durable
+   * start evidence before the mutation means the boundary must fail closed.
+   */
+  recordCommitStart?: (executionId: string) => void | Promise<void>;
+  /**
+   * Optional durable commit result evidence seam (Layer 17). Invoked at
+   * most once per live workflow after the git commit operation completes.
+   * Receives ONLY the safe commit outcome — never raw output or paths.
+   * Evidence only — never gates execution.
+   */
+  recordCommitResult?: (result: {
+    success: boolean;
+    commitSha?: string;
+    error?: string;
+    summary?: string;
+  }) => void | Promise<void>;
+}
+
+const observe = async (dependencies: ProjectTaskWorkflowDependencies, stage: 'planning' | 'hermes' | 'codex' | 'verification' | 'commit') => {
+  try { await dependencies.onStage?.(stage); } catch { /* State publication must not alter execution. */ }
+};
+
+const observeHermesProposal = async (
+  dependencies: ProjectTaskWorkflowDependencies,
+  outcome: Parameters<NonNullable<ProjectTaskWorkflowDependencies['onHermesProposalAttempt']>>[0],
+) => {
+  try { await dependencies.onHermesProposalAttempt?.(outcome); } catch { /* Diagnostics must not alter execution. */ }
+};
+
+/**
+ * Maps a FINAL Hermes-phase terminal execution error to the closed
+ * launch-result outcome vocabulary. 'execution_disabled' and any unknown
+ * final error are classified as execution_failed; intermediate transient
+ * errors that are followed by the existing bounded retry/repair are never
+ * classified here. invalid_hermes_json / invalid_hermes_proposal are produced
+ * only by the workflow's own parsing/structural validation and are recorded
+ * explicitly at those final-outcome sites.
+ */
+function classifyFinalHermesOutcome(
+  error: Extract<HermesExecutionResult, { ok: false }>['error'],
+): ProjectTaskExecutionLaunchResultOutcome {
+  switch (error) {
+    case 'timeout':
+      return 'timeout';
+    case 'empty_response':
+      return 'empty_response';
+    default:
+      return 'execution_failed';
+  }
+}
+
+function containsNonRetryableHermesAuthorityRequest(value: unknown, approvedCapabilities: readonly string[]): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proposal = value as Record<string, unknown>;
+  if (proposal.requiresHumanApproval === true) return true;
+  if (Array.isArray(proposal.blockedActions) && proposal.blockedActions.length > 0) return true;
+  if (!Array.isArray(proposal.steps)) return false;
+  return proposal.steps.some((step) => {
+    if (typeof step !== 'object' || step === null || Array.isArray(step)) return false;
+    const capabilities = (step as Record<string, unknown>).requiredCapabilities;
+    return Array.isArray(capabilities) && capabilities.some(
+      (capability) => typeof capability === 'string' && !approvedCapabilities.includes(capability),
+    );
+  });
+}
+
+const failed = (
+  stage: Extract<ProjectTaskWorkflowResult, { ok: false }>['stage'],
+  error: Extract<ProjectTaskWorkflowResult, { ok: false }>['error'],
+  summary: string,
+  identifiers: { projectId?: string; executionId?: string } = {},
+  completedStages: readonly SafeTaskStage[] = [],
+): ProjectTaskWorkflowResult => ({
+  ok: false,
+  status: 'failed',
+  stage,
+  error,
+  summary,
+  ...identifiers,
+  ...(completedStages.length > 0 ? { completedStages: [...completedStages] } : {}),
+});
+
+export async function executeProjectTaskWorkflow(
+  config: LiaAgentConfig,
+  request: ProjectTaskRequest,
+  projectRegistrySource: ProjectRegistrySource,
+  verificationRegistry?: ProjectVerificationRegistry,
+  dependencies: ProjectTaskWorkflowDependencies = {},
+): Promise<ProjectTaskWorkflowResult> {
+  const completedStages: SafeTaskStage[] = [];
+  const markStage = (stage: SafeTaskStage): void => {
+    completedStages[completedStages.length] = stage;
+  };
+  const fail = (
+    stage: Extract<ProjectTaskWorkflowResult, { ok: false }>['stage'],
+    error: Extract<ProjectTaskWorkflowResult, { ok: false }>['error'],
+    summary: string,
+    identifiers: { projectId?: string; executionId?: string } = {},
+  ): ProjectTaskWorkflowResult => failed(stage, error, summary, identifiers, completedStages);
+
+  // The final outcome of the admitted live Hermes phase is durably recorded
+  // EXACTLY ONCE. When durable recording fails after admission the outcome is
+  // not durably confirmed: fail closed as external_launch_outcome_unknown with
+  // zero Codex and zero Hermes retry.
+  let launchResultRecorded = false;
+  const recordLaunchResult = async (outcomeClass: ProjectTaskExecutionLaunchResultOutcome): Promise<boolean> => {
+    if (launchResultRecorded) return true;
+    launchResultRecorded = true;
+    if (dependencies.recordExternalLaunchResult === undefined) return true;
+    try {
+      await dependencies.recordExternalLaunchResult(outcomeClass);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // Layer 13: the validated-proposal snapshot seam is guarded by its own
+  // once-flag. It receives ONLY the normalized validated proposal object.
+  let validatedProposalRecorded = false;
+  const recordValidatedProposal = async (proposal: ProjectOrchestrationProposal): Promise<boolean> => {
+    if (validatedProposalRecorded) return true;
+    validatedProposalRecorded = true;
+    if (dependencies.recordValidatedProposalResult === undefined) return false;
+    try {
+      await dependencies.recordValidatedProposalResult(proposal);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const failOutcomeNotDurable = (): ProjectTaskWorkflowResult => fail(
+    'hermes',
+    'external_launch_outcome_unknown',
+    'The external launch outcome is unknown; LÍA will not relaunch automatically.',
+    identifiers,
+  );
+
+  await observe(dependencies, 'planning');
+  const planning = await planProjectTask(request, projectRegistrySource);
+  if (!planning.ok) {
+    return fail('planning', planning.error, 'Project task planning failed.');
+  }
+
+  const { plan } = planning;
+  markStage('planning');
+  const identifiers = { projectId: plan.projectId };
+  let prompt: string;
+  try {
+    prompt = buildProjectOrchestrationPrompt(plan);
+  } catch (error) {
+    return fail(
+      'hermes',
+      error instanceof Error && error.message === 'project_orchestration_prompt_too_large'
+        ? 'prompt_too_large'
+        : 'execution_failed',
+      'Hermes reasoning could not be prepared.',
+      identifiers,
+    );
+  }
+
+  let hermesResult: HermesExecutionResult;
+  if (dependencies.beforeExternalLaunch !== undefined) {
+    try {
+      await dependencies.beforeExternalLaunch();
+    } catch (error) {
+      if (isExternalLaunchOutcomeUnknownError(error)) {
+        return fail(
+          'hermes',
+          'external_launch_outcome_unknown',
+          'The external launch outcome is unknown; LÍA will not relaunch automatically.',
+          identifiers,
+        );
+      }
+      throw error;
+    }
+  }
+  await observe(dependencies, 'hermes');
+  const executeHermes = dependencies.executeHermes ?? executeHermesSupervisor;
+  const retryableHermesErrors = new Set(['timeout', 'execution_failed', 'empty_response']);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      hermesResult = await executeHermes(config, prompt);
+    } catch {
+      hermesResult = { ok: false, error: 'execution_failed' };
+    }
+    if (hermesResult.ok || attempt === 1 || !retryableHermesErrors.has(hermesResult.error)) break;
+  }
+  if (!hermesResult.ok) {
+    if (!(await recordLaunchResult(classifyFinalHermesOutcome(hermesResult.error)))) {
+      return failOutcomeNotDurable();
+    }
+    return fail('hermes', hermesResult.error, 'Hermes reasoning did not complete.', identifiers);
+  }
+
+  let parsed: unknown;
+  let initialError: 'invalid_hermes_json' | 'invalid_hermes_proposal' | undefined;
+  try { parsed = JSON.parse(hermesResult.response); }
+  catch { initialError = 'invalid_hermes_json'; }
+
+  let validation = initialError === undefined
+    ? validateProjectOrchestrationProposal(parsed, plan)
+    : undefined;
+  if (validation !== undefined && !validation.success) {
+    if (containsNonRetryableHermesAuthorityRequest(parsed, plan.approvedCapabilities)) {
+      if (!(await recordLaunchResult('invalid_hermes_proposal'))) {
+        return failOutcomeNotDurable();
+      }
+      return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+    }
+    initialError = 'invalid_hermes_proposal';
+  }
+
+  if (initialError !== undefined) {
+    await observeHermesProposal(dependencies, initialError === 'invalid_hermes_json'
+      ? 'initial_invalid_json'
+      : 'initial_invalid_structure');
+    const repairValidationErrors = initialError === 'invalid_hermes_json'
+      ? [{ path: '$', message: 'response must be valid JSON' }]
+      : validation !== undefined && !validation.success
+        ? validation.errors
+        : [];
+
+    let repairPrompt: string;
+    try { repairPrompt = buildProjectOrchestrationRepairPrompt(plan, repairValidationErrors); }
+    catch { return fail('hermes', 'prompt_too_large', 'Hermes reasoning could not be prepared.', identifiers); }
+    let repairedResult: HermesExecutionResult;
+    try { repairedResult = await executeHermes(config, repairPrompt); }
+    catch { repairedResult = { ok: false, error: 'execution_failed' }; }
+    if (!repairedResult.ok) {
+      if (!(await recordLaunchResult(classifyFinalHermesOutcome(repairedResult.error)))) {
+        return failOutcomeNotDurable();
+      }
+      return fail('hermes', repairedResult.error, 'Hermes reasoning did not complete.', identifiers);
+    }
+    try { parsed = JSON.parse(repairedResult.response); }
+    catch {
+      await observeHermesProposal(dependencies, 'repair_invalid_json');
+      if (!(await recordLaunchResult('invalid_hermes_json'))) {
+        return failOutcomeNotDurable();
+      }
+      return fail('hermes', 'invalid_hermes_json', 'Hermes returned invalid JSON.', identifiers);
+    }
+    validation = validateProjectOrchestrationProposal(parsed, plan);
+    if (!validation.success) {
+      await observeHermesProposal(dependencies, 'repair_invalid_structure');
+      if (!(await recordLaunchResult('invalid_hermes_proposal'))) {
+        return failOutcomeNotDurable();
+      }
+      return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+    }
+    await observeHermesProposal(dependencies, 'repair_succeeded');
+  }
+
+  if (validation === undefined || !validation.success) {
+    if (!(await recordLaunchResult('invalid_hermes_proposal'))) {
+      return failOutcomeNotDurable();
+    }
+    return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+  }
+  // The WHOLE admitted live Hermes phase finished and LÍA obtained a final
+  // proposal that passed the existing parsing/structural validation. DURABLY
+  // record proposal_valid BEFORE any local approval/blocked-action decision,
+  // handoff validation, capability check or Codex call. The receipt is
+  // evidence only: it grants no approval, capability, Codex or retry
+  // authority. When the Layer 13 validated-proposal snapshot seam is present
+  // the proposal_valid Launch Result and its snapshot are persisted ATOMICALLY
+  // as one store operation; otherwise the legacy recordExternalLaunchResult
+  // behavior is kept (direct/non-durable workflow compatibility).
+  if (dependencies.recordValidatedProposalResult !== undefined) {
+    if (!(await recordValidatedProposal(validation.proposal))) {
+      return failOutcomeNotDurable();
+    }
+  } else if (!(await recordLaunchResult('proposal_valid'))) {
+    return failOutcomeNotDurable();
+  }
+  if (validation.proposal.requiresHumanApproval || validation.proposal.blockedActions.length > 0) {
+    return fail('approval', 'human_approval_required', 'Human approval is required.', identifiers);
+  }
+
+  const handoffResult = buildProjectCodexHandoff(plan, validation.proposal);
+  if (!handoffResult.success) {
+    return fail('hermes', 'invalid_hermes_proposal', 'Hermes returned an invalid proposal.', identifiers);
+  }
+  const effectiveCapabilities = handoffResult.handoff.effectiveCapabilities;
+  if (effectiveCapabilities.includes('local_commit') && !effectiveCapabilities.includes('run_tests')) {
+    return fail('hermes', 'invalid_hermes_proposal', 'Local commit requires successful verification.', identifiers);
+  }
+  markStage('hermes');
+
+  let codexResult: ProjectCodexExecutionResult;
+  await observe(dependencies, 'codex');
+  // Layer 15: durably record Codex start evidence BEFORE the external call.
+  // Evidence only — never gates execution.
+  try { await dependencies.recordCodexStart?.(); } catch { /* Evidence recording must not block execution. */ }
+  try {
+    codexResult = await (dependencies.executeCodex ?? executeProjectCodexHandoff)(handoffResult.handoff);
+  } catch {
+    return fail('codex', 'codex_execution_failed', 'Codex execution did not complete.', identifiers);
+  }
+  // Layer 15: durably record Codex result evidence AFTER the call returns.
+  // Evidence only — never gates execution.
+  try { await dependencies.recordCodexResult?.(codexResult); } catch { /* Evidence recording must not block execution. */ }
+  if (!codexResult.success) {
+    return fail('codex', codexResult.error, codexResult.summary, {
+      ...identifiers,
+      executionId: codexResult.executionId,
+    });
+  }
+  markStage('codex');
+
+  const executionIdentifiers = { ...identifiers, executionId: codexResult.executionId };
+  if (!effectiveCapabilities.includes('isolated_worktree_write')) {
+    return {
+      ok: true,
+      ...executionIdentifiers,
+      status: 'analyzed',
+      executionSummary: codexResult.summary,
+      resultText: codexResult.resultText,
+      stages: [...completedStages],
+    };
+  }
+  if (!effectiveCapabilities.includes('run_tests')) {
+    return {
+      ok: true,
+      ...executionIdentifiers,
+      status: 'ready_for_review',
+      executionSummary: codexResult.summary,
+      resultText: codexResult.resultText,
+      stages: [...completedStages],
+    };
+  }
+  if (verificationRegistry === undefined) {
+    return fail(
+      'verification',
+      'verification_unavailable',
+      'Verification is not available for this project.',
+      executionIdentifiers,
+    );
+  }
+
+  let verificationResult: ProjectCodexVerificationResult;
+  await observe(dependencies, 'verification');
+  // Layer 17: durably record verification start evidence BEFORE verification.
+  // Verification is idempotent — evidence recording is best-effort, never gates.
+  try { await dependencies.recordVerificationStart?.(codexResult.executionId); } catch { /* Evidence recording is best-effort. */ }
+  try {
+    verificationResult = await (dependencies.executeVerification ?? verifyProjectCodexWorkspace)(
+      plan.repositoryRoot,
+      plan.projectId,
+      codexResult.executionId,
+      verificationRegistry,
+    );
+  } catch {
+    return fail(
+      'verification',
+      'verification_unavailable',
+      'Verification is not available for this project.',
+      executionIdentifiers,
+    );
+  }
+  if (!verificationResult.success) {
+    try { await dependencies.recordVerificationResult?.({ success: false, checksPassed: verificationResult.checksPassed, totalChecks: verificationResult.totalChecks, technicalChecksPassed: verificationResult.checksPassed, technicalTotalChecks: verificationResult.totalChecks, visualChecksPassed: 0, visualTotalChecks: 0, error: verificationResult.error, summary: verificationResult.summary }); } catch { /* Evidence only */ }
+    return fail('verification', verificationResult.error, verificationResult.summary, executionIdentifiers);
+  }
+  if (verificationResult.executionId !== codexResult.executionId) {
+    return fail(
+      'verification',
+      'invalid_generated_path',
+      'The retained workspace could not be resolved safely.',
+      executionIdentifiers,
+    );
+  }
+  markStage('verification');
+
+  let visualVerificationResult: ProjectVisualVerificationResult;
+  try {
+    visualVerificationResult = await (
+      dependencies.executeVisualVerification ?? verifyProjectVisualWorkspace
+    )(
+      plan.projectId,
+      codexResult.executionId,
+    );
+  } catch {
+    return fail(
+      'verification',
+      'verification_unavailable',
+      'Visual verification is not available for this project.',
+      executionIdentifiers,
+    );
+  }
+
+  if (!visualVerificationResult.success) {
+    try { await dependencies.recordVerificationResult?.({ success: false, checksPassed: verificationResult.checksPassed + visualVerificationResult.checksPassed, totalChecks: verificationResult.totalChecks + visualVerificationResult.totalChecks, technicalChecksPassed: verificationResult.checksPassed, technicalTotalChecks: verificationResult.totalChecks, visualChecksPassed: visualVerificationResult.checksPassed, visualTotalChecks: visualVerificationResult.totalChecks, error: visualVerificationResult.error, summary: visualVerificationResult.summary }); } catch { /* Evidence only */ }
+    return fail(
+      'verification',
+      visualVerificationResult.error === 'visual_check_failed'
+        ? 'visual_check_failed'
+        : visualVerificationResult.error === 'visual_check_timeout'
+          ? 'visual_check_timeout'
+          : 'visual_verification_unavailable',
+      visualVerificationResult.summary,
+      executionIdentifiers,
+    );
+  }
+
+  if (visualVerificationResult.executionId !== codexResult.executionId) {
+    return fail(
+      'verification',
+      'invalid_generated_path',
+      'The retained workspace could not be resolved safely.',
+      executionIdentifiers,
+    );
+  }
+  markStage('visualQa');
+
+  const verification = {
+    status: 'verified' as const,
+    checksPassed:
+      verificationResult.checksPassed
+      + visualVerificationResult.checksPassed,
+    totalChecks:
+      verificationResult.totalChecks
+      + visualVerificationResult.totalChecks,
+  };
+  // Layer 17: durably record verification success evidence.
+  try { await dependencies.recordVerificationResult?.({ success: true, checksPassed: verification.checksPassed, totalChecks: verification.totalChecks, technicalChecksPassed: verificationResult.checksPassed, technicalTotalChecks: verificationResult.totalChecks, visualChecksPassed: visualVerificationResult.checksPassed, visualTotalChecks: visualVerificationResult.totalChecks }); } catch { /* Evidence only */ }
+  if (!effectiveCapabilities.includes('local_commit')) {
+    return {
+      ok: true,
+      ...executionIdentifiers,
+      status: 'verified',
+      executionSummary: codexResult.summary,
+      resultText: codexResult.resultText,
+      verification,
+      stages: [...completedStages],
+    };
+  }
+
+  let commitResult: ProjectCodexCommitResult;
+  await observe(dependencies, 'commit');
+  // Layer 17: durably record commit start evidence BEFORE git mutation.
+  // Commit is non-idempotent — failure to record start evidence is a hard gate.
+  await dependencies.recordCommitStart?.(codexResult.executionId);
+  try {
+    commitResult = await (dependencies.executeCommit ?? commitVerifiedProjectCodexWorkspace)(
+      plan.repositoryRoot,
+      codexResult.executionId,
+      effectiveCapabilities,
+      verificationResult,
+    );
+  } catch {
+    try { await dependencies.recordCommitResult?.({ success: false, error: 'git_commit_failed', summary: 'The local commit could not be created.' }); } catch { /* Evidence only */ }
+    return fail('commit', 'git_commit_failed', 'The local commit could not be created.', executionIdentifiers);
+  }
+  if (!commitResult.success) {
+    try { await dependencies.recordCommitResult?.({ success: false, error: commitResult.error, summary: commitResult.summary }); } catch { /* Evidence only */ }
+    return fail('commit', commitResult.error, commitResult.summary, executionIdentifiers);
+  }
+  if (
+    commitResult.executionId !== codexResult.executionId
+    || !/^[0-9a-fA-F]{40,64}$/.test(commitResult.commit)
+  ) {
+    return fail(
+      'commit',
+      'git_revision_failed',
+      'The local commit revision could not be validated.',
+      executionIdentifiers,
+    );
+  }
+  markStage('commit');
+
+  // Layer 17: durably record commit success evidence.
+  try { await dependencies.recordCommitResult?.({ success: true, commitSha: commitResult.commit, summary: 'The verified workspace was committed locally.' }); } catch { /* Evidence only */ }
+
+  return {
+    ok: true,
+    ...executionIdentifiers,
+    status: 'committed',
+    executionSummary: codexResult.summary,
+    resultText: buildCommittedResultText(verification, commitResult.commit),
+    verification,
+    commit: commitResult.commit,
+    stages: [...completedStages],
+  };
+}

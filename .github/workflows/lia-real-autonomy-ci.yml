@@ -39,6 +39,7 @@ jobs:
         shell: bash
         run: |
           if [ -f qualification/real-autonomy-qualification.mjs ]; then
+            npm run build
             node qualification/real-autonomy-qualification.mjs
           else
             npm run self-check

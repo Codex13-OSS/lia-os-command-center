@@ -1,12 +1,28 @@
 {
   "name": "lia-agent-backend",
-  "version": "4.4.0-b",
+  "version": "5.0.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs",
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "health": "node health.mjs",
-    "self-check": "node self-check.mjs",
-    "local-health-check": "node local-health-check.mjs"
+    "self-check": "npm run typecheck && npm run build && npm test && node self-check.mjs",
+    "local-health-check": "node local-health-check.mjs",
+    "legacy:start": "node server.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
   }
 }

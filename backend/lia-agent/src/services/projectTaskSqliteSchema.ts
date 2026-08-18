@@ -1,0 +1,2172 @@
+import { chmodSync, closeSync, openSync, unlinkSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+
+export const PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION = 1;
+export const PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION = 2;
+export const PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION = 3;
+export const PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION = 4;
+export const PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION = 5;
+export const PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION = 6;
+export const PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION = 7;
+export const PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION = 8;
+export const PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION = 9;
+export const PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION = 10;
+export const PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION = 11;
+export const PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION = 12;
+export const PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION = 13;
+export const PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION = 14;
+export const PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION = 15;
+export const PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION = 16;
+export const PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION = 17;
+export const PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION = 18;
+export const PROJECT_TASK_SQLITE_SCHEMA_V19_VERSION = 19;
+export const PROJECT_TASK_SQLITE_SCHEMA_VERSION = 19;
+
+export const PROJECT_TASK_SQLITE_STAGES = [
+  'accepted',
+  'planning',
+  'hermes',
+  'codex',
+  'verification',
+  'commit',
+  'completed',
+  'failed',
+] as const;
+
+export const PROJECT_TASK_SQLITE_ERRORS = {
+  invalidPath: 'invalid_project_task_sqlite_path',
+  schema: 'invalid_project_task_sqlite_schema',
+  corruptRecord: 'corrupt_project_task_record',
+  closed: 'project_task_sqlite_closed',
+  alreadyExists: 'project_task_sqlite_already_exists',
+} as const;
+
+const STAGE_LIST_SQL = PROJECT_TASK_SQLITE_STAGES.map((stage) => `'${stage}'`).join(', ');
+
+export function createProjectTaskSqliteSchemaV1Sql(): string {
+  return `
+CREATE TABLE project_task_meta (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  schema_version INTEGER NOT NULL CHECK (schema_version >= 1)
+) STRICT;
+
+INSERT INTO project_task_meta (singleton, schema_version)
+VALUES (1, ${PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION});
+
+CREATE TABLE project_tasks (
+  task_id TEXT PRIMARY KEY CHECK (task_id <> ''),
+  fingerprint TEXT NOT NULL CHECK (fingerprint <> ''),
+  intent_json TEXT NOT NULL
+    CHECK (json_valid(intent_json))
+    CHECK (json_type(intent_json, '$') IS 'object'),
+  status TEXT NOT NULL CHECK (status IN (${STAGE_LIST_SQL})),
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+  terminal_at INTEGER CHECK (terminal_at IS NULL OR terminal_at >= 0),
+  receipt_json TEXT
+    CHECK (receipt_json IS NULL OR (json_valid(receipt_json) AND json_type(receipt_json, '$') IS 'object')),
+  error_json TEXT
+    CHECK (error_json IS NULL OR (json_valid(error_json) AND json_type(error_json, '$') IS 'object')),
+  CHECK ((status IN ('completed', 'failed')) = (terminal_at IS NOT NULL)),
+  CHECK ((status = 'completed') = (receipt_json IS NOT NULL)),
+  CHECK ((status = 'failed') = (error_json IS NOT NULL))
+) STRICT;
+
+CREATE INDEX project_tasks_terminal_at
+ON project_tasks(terminal_at)
+WHERE terminal_at IS NOT NULL;
+`;
+}
+
+
+/** Transactionally upgrades supported legacy schemas without rewriting tasks. */
+export function migrateProjectTaskSqliteDatabaseToCurrent(database: DatabaseSync): void {
+  let meta: { singleton: unknown; schema_version: unknown } | undefined;
+  try {
+    meta = database.prepare(
+      'SELECT singleton, schema_version FROM project_task_meta WHERE singleton = 1',
+    ).get() as unknown as typeof meta;
+  } catch {
+    throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+  }
+
+  if (
+    meta?.singleton !== 1
+    || typeof meta.schema_version !== 'number'
+    || !Number.isInteger(meta.schema_version)
+  ) {
+    throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+  }
+
+  if (
+    meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION
+    && meta.schema_version !== PROJECT_TASK_SQLITE_SCHEMA_V19_VERSION
+  ) {
+    throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+  }
+
+  const migrate = (from: number, to: number, sql: string): void => {
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      database.exec(sql);
+      const update = database.prepare(`
+        UPDATE project_task_meta SET schema_version = ?
+        WHERE singleton = 1 AND schema_version = ?
+      `).run(to, from);
+      if (Number(update.changes) !== 1) throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+      database.exec('COMMIT');
+    } catch {
+      try { database.exec('ROLLBACK'); } catch {
+        // Preserve the migration failure.
+      }
+      throw new Error(PROJECT_TASK_SQLITE_ERRORS.schema);
+    }
+  };
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V1_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION, `
+      CREATE TABLE project_task_active_stage_traces (
+        task_id TEXT PRIMARY KEY CHECK (task_id <> ''),
+        completed_stages_json TEXT NOT NULL
+          CHECK (json_valid(completed_stages_json) AND json_type(completed_stages_json, '$') IS 'array')
+      ) STRICT
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V2_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION, `
+      CREATE TABLE project_goals (
+        goal_id TEXT PRIMARY KEY CHECK (goal_id <> ''),
+        project_id TEXT NOT NULL CHECK (project_id <> ''),
+        objective TEXT NOT NULL CHECK (length(objective) BETWEEN 1 AND 20000),
+        status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'blocked', 'exhausted', 'failed')),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+        terminal_at INTEGER CHECK (terminal_at IS NULL OR terminal_at >= created_at),
+        current_attempt INTEGER CHECK (current_attempt IS NULL OR current_attempt >= 0),
+        max_attempts INTEGER NOT NULL CHECK (max_attempts BETWEEN 1 AND 5),
+        continuation_depth_limit INTEGER NOT NULL CHECK (continuation_depth_limit BETWEEN 0 AND 4),
+        terminal_reason TEXT CHECK (terminal_reason IS NULL OR terminal_reason IN (
+          'objective_completed', 'human_intervention_required', 'attempt_limit_reached', 'unrecoverable_failure'
+        )),
+        CHECK ((status = 'active') = (terminal_at IS NULL)),
+        CHECK (
+          (status = 'active' AND terminal_reason IS NULL)
+          OR (status = 'completed' AND terminal_reason = 'objective_completed')
+          OR (status = 'blocked' AND terminal_reason = 'human_intervention_required')
+          OR (status = 'exhausted' AND terminal_reason = 'attempt_limit_reached')
+          OR (status = 'failed' AND terminal_reason = 'unrecoverable_failure')
+        ),
+        CHECK (current_attempt IS NULL OR current_attempt < max_attempts)
+      ) STRICT;
+
+      CREATE TABLE project_task_lineage (
+        task_id TEXT PRIMARY KEY CHECK (task_id <> ''),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        parent_task_id TEXT CHECK (parent_task_id IS NULL OR parent_task_id <> task_id),
+        continuation_depth INTEGER NOT NULL CHECK (continuation_depth >= 0),
+        attempt_number INTEGER NOT NULL CHECK (attempt_number >= 0),
+        UNIQUE (goal_id, task_id),
+        UNIQUE (goal_id, attempt_number),
+        UNIQUE (parent_task_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (goal_id, parent_task_id) REFERENCES project_task_lineage(goal_id, task_id)
+      ) STRICT;
+
+      CREATE INDEX project_task_lineage_goal_id ON project_task_lineage(goal_id, attempt_number);
+      CREATE INDEX project_task_lineage_parent_task_id ON project_task_lineage(parent_task_id)
+        WHERE parent_task_id IS NOT NULL;
+
+      CREATE TRIGGER project_task_lineage_validate_insert
+      BEFORE INSERT ON project_task_lineage
+      BEGIN
+        SELECT CASE WHEN (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'active'
+          THEN RAISE(ABORT, 'project_goal_terminal') END;
+        SELECT CASE WHEN (SELECT json_extract(intent_json, '$.projectId') FROM project_tasks WHERE task_id = NEW.task_id)
+          <> (SELECT project_id FROM project_goals WHERE goal_id = NEW.goal_id)
+          THEN RAISE(ABORT, 'project_task_parent_project_mismatch') END;
+        SELECT CASE WHEN NEW.parent_task_id IS NULL AND NOT (
+          NEW.continuation_depth = 0 AND NEW.attempt_number = 0
+          AND (SELECT current_attempt FROM project_goals WHERE goal_id = NEW.goal_id) IS NULL
+        ) THEN RAISE(ABORT, 'invalid_project_task_lineage') END;
+        SELECT CASE WHEN NEW.parent_task_id IS NOT NULL AND NOT (
+          NEW.continuation_depth = (SELECT continuation_depth + 1 FROM project_task_lineage WHERE task_id = NEW.parent_task_id)
+          AND NEW.attempt_number = (SELECT attempt_number + 1 FROM project_task_lineage WHERE task_id = NEW.parent_task_id)
+          AND (SELECT attempt_number FROM project_task_lineage WHERE task_id = NEW.parent_task_id)
+            = (SELECT current_attempt FROM project_goals WHERE goal_id = NEW.goal_id)
+        ) THEN RAISE(ABORT, 'invalid_project_task_lineage') END;
+        SELECT CASE WHEN NEW.attempt_number >= (SELECT max_attempts FROM project_goals WHERE goal_id = NEW.goal_id)
+          THEN RAISE(ABORT, 'project_goal_attempt_limit_reached') END;
+        SELECT CASE WHEN NEW.continuation_depth > (SELECT continuation_depth_limit FROM project_goals WHERE goal_id = NEW.goal_id)
+          THEN RAISE(ABORT, 'project_goal_continuation_depth_limit_reached') END;
+      END;
+
+      CREATE TRIGGER project_task_lineage_advance_goal
+      AFTER INSERT ON project_task_lineage
+      BEGIN
+        UPDATE project_goals SET current_attempt = NEW.attempt_number WHERE goal_id = NEW.goal_id;
+      END;
+
+      CREATE TRIGGER project_task_lineage_immutable_update
+      BEFORE UPDATE ON project_task_lineage
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lineage_immutable');
+      END;
+
+      CREATE TRIGGER project_task_lineage_immutable_delete
+      BEFORE DELETE ON project_task_lineage
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lineage_immutable');
+      END;
+
+      CREATE TRIGGER project_task_lineage_task_identity_immutable
+      BEFORE UPDATE OF task_id, intent_json ON project_tasks
+      WHEN EXISTS (SELECT 1 FROM project_task_lineage WHERE task_id = OLD.task_id)
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lineage_immutable');
+      END;
+
+      CREATE TRIGGER project_goals_terminal_immutable
+      BEFORE UPDATE OF status, terminal_at, terminal_reason ON project_goals
+      WHEN OLD.status <> 'active'
+      BEGIN
+        SELECT RAISE(ABORT, 'invalid_project_goal_transition');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V3_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION, `
+      CREATE TABLE project_goal_evaluations (
+        evaluation_id TEXT PRIMARY KEY CHECK (length(evaluation_id) = 36),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        task_id TEXT NOT NULL CHECK (task_id <> ''),
+        attempt_number INTEGER NOT NULL CHECK (attempt_number >= 0),
+        evaluator_version TEXT NOT NULL CHECK (evaluator_version = 'completion-evaluator-v1'),
+        decision TEXT NOT NULL CHECK (decision IN ('completed', 'retryable', 'blocked', 'failed')),
+        reason_code TEXT NOT NULL CHECK (reason_code IN (
+          'goal_satisfied', 'partial_result', 'verification_failed', 'visual_verification_failed',
+          'execution_failed', 'human_approval_required', 'forbidden_capability_required',
+          'external_dependency', 'attempt_budget_exhausted', 'continuation_depth_exhausted',
+          'insufficient_evidence'
+        )),
+        summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 500),
+        evidence_fingerprint TEXT NOT NULL CHECK (
+          length(evidence_fingerprint) = 64 AND evidence_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        applied_at INTEGER CHECK (applied_at IS NULL OR applied_at >= created_at),
+        UNIQUE (goal_id, task_id, evaluator_version, evidence_fingerprint),
+        UNIQUE (goal_id, task_id, evaluator_version),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (goal_id, task_id) REFERENCES project_task_lineage(goal_id, task_id),
+        CHECK (
+          (decision = 'completed' AND reason_code = 'goal_satisfied')
+          OR (decision = 'blocked' AND reason_code IN (
+            'human_approval_required', 'forbidden_capability_required', 'external_dependency'
+          ))
+          OR (decision = 'retryable' AND reason_code IN (
+            'partial_result', 'verification_failed', 'visual_verification_failed',
+            'execution_failed', 'insufficient_evidence'
+          ))
+          OR (decision = 'failed' AND reason_code IN (
+            'execution_failed', 'attempt_budget_exhausted', 'continuation_depth_exhausted'
+          ))
+        )
+      ) STRICT;
+
+      CREATE INDEX project_goal_evaluations_goal_created
+      ON project_goal_evaluations(goal_id, created_at DESC, evaluation_id DESC);
+
+      CREATE TRIGGER project_goal_evaluations_validate_insert
+      BEFORE INSERT ON project_goal_evaluations
+      BEGIN
+        SELECT CASE WHEN NEW.attempt_number <>
+          (SELECT attempt_number FROM project_task_lineage
+           WHERE task_id = NEW.task_id AND goal_id = NEW.goal_id)
+          THEN RAISE(ABORT, 'project_goal_evaluation_attempt_mismatch') END;
+      END;
+
+      CREATE TRIGGER project_goal_evaluations_decision_immutable
+      BEFORE UPDATE OF evaluation_id, goal_id, task_id, attempt_number, evaluator_version,
+                       decision, reason_code, summary, evidence_fingerprint, created_at
+      ON project_goal_evaluations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_evaluation_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_evaluations_applied_once
+      BEFORE UPDATE OF applied_at ON project_goal_evaluations
+      WHEN OLD.applied_at IS NOT NULL OR NEW.applied_at IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_evaluation_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_evaluations_validate_apply
+      AFTER UPDATE OF applied_at ON project_goal_evaluations
+      WHEN NEW.applied_at IS NOT NULL
+      BEGIN
+        SELECT CASE
+          WHEN NEW.decision = 'retryable'
+            AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'active'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+          WHEN NEW.decision = 'completed'
+            AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'completed'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+          WHEN NEW.decision = 'blocked'
+            AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'blocked'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+          WHEN NEW.decision = 'failed' AND NEW.reason_code IN (
+            'attempt_budget_exhausted', 'continuation_depth_exhausted'
+          ) AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'exhausted'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+          WHEN NEW.decision = 'failed' AND NEW.reason_code = 'execution_failed'
+            AND (SELECT status FROM project_goals WHERE goal_id = NEW.goal_id) <> 'failed'
+            THEN RAISE(ABORT, 'project_goal_evaluation_incompatible_state')
+        END;
+      END;
+
+      CREATE TRIGGER project_goal_evaluations_immutable_delete
+      BEFORE DELETE ON project_goal_evaluations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_evaluation_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_attempt_terminal_evidence_immutable
+      BEFORE UPDATE OF status, terminal_at, receipt_json, error_json ON project_tasks
+      WHEN OLD.terminal_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM project_task_lineage WHERE task_id = OLD.task_id)
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_attempt_terminal_evidence_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_evaluation_identity_immutable
+      BEFORE UPDATE OF goal_id, project_id, objective, max_attempts, continuation_depth_limit
+      ON project_goals
+      WHEN EXISTS (SELECT 1 FROM project_task_lineage WHERE goal_id = OLD.goal_id)
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_evaluation_incompatible_state');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V4_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION, `
+      CREATE TABLE project_goal_continuation_plans (
+        plan_id TEXT PRIMARY KEY CHECK (length(plan_id) = 36),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        source_evaluation_id TEXT NOT NULL CHECK (source_evaluation_id <> ''),
+        parent_task_id TEXT NOT NULL CHECK (parent_task_id <> ''),
+        parent_attempt_number INTEGER NOT NULL CHECK (parent_attempt_number >= 0),
+        next_attempt_number INTEGER NOT NULL CHECK (next_attempt_number = parent_attempt_number + 1),
+        next_continuation_depth INTEGER NOT NULL CHECK (next_continuation_depth > 0),
+        planner_version TEXT NOT NULL CHECK (planner_version = 'continuation-planner-v1'),
+        status TEXT NOT NULL CHECK (status IN ('planned', 'cancelled')),
+        instruction TEXT NOT NULL CHECK (
+          length(instruction) BETWEEN 1 AND 2000 AND instruction = trim(instruction)
+          AND lower(instruction) NOT LIKE '%deploy%'
+          AND lower(instruction) NOT LIKE '%push%'
+          AND lower(instruction) NOT LIKE '%merge%'
+          AND lower(instruction) NOT LIKE '%production%'
+          AND lower(instruction) NOT LIKE '%secret%'
+          AND lower(instruction) NOT LIKE '%credential%'
+          AND lower(instruction) NOT LIKE '%shell%'
+          AND lower(instruction) NOT LIKE '%sudo%'
+          AND lower(instruction) NOT LIKE '%requestedcapabilities%'
+          AND lower(instruction) NOT LIKE '%approvedcapabilities%'
+          AND lower(instruction) NOT LIKE '%effectivecapabilities%'
+          AND lower(instruction) NOT LIKE '%repository_read%'
+          AND lower(instruction) NOT LIKE '%isolated_worktree_write%'
+          AND lower(instruction) NOT LIKE '%run_tests%'
+          AND lower(instruction) NOT LIKE '%local_commit%'
+        ),
+        reason_code TEXT NOT NULL CHECK (reason_code IN (
+          'continue_partial_result', 'retry_verification_failure', 'retry_visual_failure',
+          'retry_execution_failure', 'retry_insufficient_evidence'
+        )),
+        fingerprint TEXT NOT NULL CHECK (
+          length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        source_evidence_fingerprint TEXT NOT NULL CHECK (
+          length(source_evidence_fingerprint) = 64
+          AND source_evidence_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        cancelled_at INTEGER CHECK (cancelled_at IS NULL OR cancelled_at >= created_at),
+        UNIQUE (source_evaluation_id, planner_version),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (source_evaluation_id) REFERENCES project_goal_evaluations(evaluation_id),
+        FOREIGN KEY (parent_task_id) REFERENCES project_tasks(task_id),
+        CHECK ((status = 'cancelled') = (cancelled_at IS NOT NULL))
+      ) STRICT;
+
+      CREATE INDEX project_goal_continuation_plans_goal_created
+      ON project_goal_continuation_plans(goal_id, created_at ASC, plan_id ASC);
+
+      CREATE INDEX project_goal_continuation_plans_parent
+      ON project_goal_continuation_plans(parent_task_id, parent_attempt_number);
+
+      CREATE TRIGGER project_goal_continuation_plans_validate_insert
+      BEFORE INSERT ON project_goal_continuation_plans
+      BEGIN
+        SELECT CASE WHEN NEW.status <> 'planned' OR NEW.cancelled_at IS NOT NULL
+          THEN RAISE(ABORT, 'invalid_project_goal_continuation_plan') END;
+        SELECT CASE WHEN (SELECT goal_id FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NOT NEW.goal_id
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_goal_mismatch') END;
+        SELECT CASE WHEN (SELECT applied_at FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NULL
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_evaluation_not_applied') END;
+        SELECT CASE WHEN (SELECT decision FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NOT 'retryable'
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_evaluation_not_retryable') END;
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id
+            AND (
+              (reason_code = 'partial_result' AND NEW.reason_code = 'continue_partial_result')
+              OR (reason_code = 'verification_failed' AND NEW.reason_code = 'retry_verification_failure')
+              OR (reason_code = 'visual_verification_failed' AND NEW.reason_code = 'retry_visual_failure')
+              OR (reason_code = 'execution_failed' AND NEW.reason_code = 'retry_execution_failure')
+              OR (reason_code = 'insufficient_evidence' AND NEW.reason_code = 'retry_insufficient_evidence')
+            )
+        ) THEN RAISE(ABORT, 'project_goal_continuation_plan_incompatible') END;
+        SELECT CASE WHEN (SELECT evidence_fingerprint FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NOT NEW.source_evidence_fingerprint
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_evidence_conflict') END;
+        SELECT CASE WHEN (SELECT task_id FROM project_goal_evaluations
+          WHERE evaluation_id = NEW.source_evaluation_id) IS NOT NEW.parent_task_id
+          THEN RAISE(ABORT, 'project_goal_continuation_plan_incompatible') END;
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_task_lineage AS lineage
+          JOIN project_goals AS goal ON goal.goal_id = lineage.goal_id
+          JOIN project_tasks AS task ON task.task_id = lineage.task_id
+          WHERE lineage.task_id = NEW.parent_task_id
+            AND lineage.goal_id = NEW.goal_id
+            AND lineage.attempt_number = NEW.parent_attempt_number
+            AND NEW.next_attempt_number = lineage.attempt_number + 1
+            AND NEW.next_continuation_depth = lineage.continuation_depth + 1
+            AND goal.status = 'active'
+            AND goal.current_attempt = lineage.attempt_number
+            AND NEW.next_attempt_number < goal.max_attempts
+            AND NEW.next_continuation_depth <= goal.continuation_depth_limit
+            AND json_extract(task.intent_json, '$.projectId') = goal.project_id
+        ) THEN RAISE(ABORT, 'project_goal_continuation_plan_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_goal_continuation_plans_identity_immutable
+      BEFORE UPDATE OF plan_id, goal_id, source_evaluation_id, parent_task_id,
+                       parent_attempt_number, next_attempt_number, next_continuation_depth,
+                       planner_version, instruction, reason_code, fingerprint,
+                       source_evidence_fingerprint, created_at
+      ON project_goal_continuation_plans
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_plan_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_continuation_plans_cancel_once
+      BEFORE UPDATE OF status, cancelled_at ON project_goal_continuation_plans
+      WHEN NOT (
+        OLD.status = 'planned' AND OLD.cancelled_at IS NULL
+        AND NEW.status = 'cancelled' AND NEW.cancelled_at IS NOT NULL
+        AND NEW.cancelled_at >= OLD.created_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_plan_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_continuation_plans_immutable_delete
+      BEFORE DELETE ON project_goal_continuation_plans
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_plan_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V5_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION, `
+      CREATE TABLE project_goal_continuation_consumptions (
+        plan_id TEXT PRIMARY KEY CHECK (length(plan_id) = 36),
+        created_task_id TEXT NOT NULL UNIQUE CHECK (length(created_task_id) = 36),
+        consumed_at INTEGER NOT NULL CHECK (consumed_at >= 0),
+        FOREIGN KEY (plan_id) REFERENCES project_goal_continuation_plans(plan_id),
+        FOREIGN KEY (created_task_id) REFERENCES project_tasks(task_id)
+      ) STRICT;
+
+      CREATE TRIGGER project_goal_continuation_consumptions_validate_insert
+      BEFORE INSERT ON project_goal_continuation_consumptions
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_goal_continuation_plans AS plan
+          JOIN project_goal_evaluations AS evaluation
+            ON evaluation.evaluation_id = plan.source_evaluation_id
+          JOIN project_goals AS goal ON goal.goal_id = plan.goal_id
+          JOIN project_task_lineage AS parent_lineage
+            ON parent_lineage.task_id = plan.parent_task_id AND parent_lineage.goal_id = plan.goal_id
+          JOIN project_task_lineage AS child_lineage
+            ON child_lineage.task_id = NEW.created_task_id AND child_lineage.goal_id = plan.goal_id
+          JOIN project_tasks AS child ON child.task_id = NEW.created_task_id
+          WHERE plan.plan_id = NEW.plan_id
+            AND plan.status = 'planned' AND plan.cancelled_at IS NULL
+            AND NEW.consumed_at >= plan.created_at
+            AND evaluation.goal_id = plan.goal_id
+            AND evaluation.task_id = plan.parent_task_id
+            AND evaluation.attempt_number = plan.parent_attempt_number
+            AND evaluation.evidence_fingerprint = plan.source_evidence_fingerprint
+            AND evaluation.applied_at IS NOT NULL AND evaluation.decision = 'retryable'
+            AND goal.status = 'active'
+            AND goal.current_attempt = plan.next_attempt_number
+            AND child_lineage.parent_task_id = plan.parent_task_id
+            AND child_lineage.attempt_number = plan.next_attempt_number
+            AND child_lineage.continuation_depth = plan.next_continuation_depth
+            AND json_extract(child.intent_json, '$.projectId') = goal.project_id
+            AND json_extract(child.intent_json, '$.instruction') = plan.instruction
+            AND json_extract(child.intent_json, '$.priority') = (
+              SELECT json_extract(intent_json, '$.priority')
+              FROM project_tasks WHERE task_id = plan.parent_task_id
+            )
+            AND json_extract(child.intent_json, '$.requestedCapabilities') = (
+              SELECT json_extract(intent_json, '$.requestedCapabilities')
+              FROM project_tasks WHERE task_id = plan.parent_task_id
+            )
+        ) THEN RAISE(ABORT, 'project_continuation_plan_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_goal_continuation_consumptions_immutable_update
+      BEFORE UPDATE ON project_goal_continuation_consumptions
+      BEGIN
+        SELECT RAISE(ABORT, 'project_continuation_consumption_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_continuation_consumptions_immutable_delete
+      BEFORE DELETE ON project_goal_continuation_consumptions
+      BEGIN
+        SELECT RAISE(ABORT, 'project_continuation_consumption_immutable');
+      END;
+
+      CREATE TRIGGER project_goal_continuation_consumed_plan_state_immutable
+      BEFORE UPDATE OF status, cancelled_at ON project_goal_continuation_plans
+      WHEN EXISTS (
+        SELECT 1 FROM project_goal_continuation_consumptions WHERE plan_id = OLD.plan_id
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_continuation_consumption_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V6_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION, `
+      CREATE TABLE project_task_lease_generations (
+        task_id TEXT NOT NULL CHECK (task_id <> ''),
+        lease_id TEXT NOT NULL UNIQUE CHECK (length(lease_id) = 36),
+        lease_owner TEXT NOT NULL CHECK (
+          length(lease_owner) BETWEEN 1 AND 200 AND lease_owner = trim(lease_owner)
+        ),
+        fencing_token INTEGER NOT NULL CHECK (
+          fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        acquired_at INTEGER NOT NULL CHECK (
+          acquired_at BETWEEN 0 AND 9007199254740991
+        ),
+        lease_expires_at INTEGER NOT NULL CHECK (
+          lease_expires_at > acquired_at AND lease_expires_at <= 9007199254740991
+        ),
+        released_at INTEGER CHECK (
+          released_at IS NULL OR released_at BETWEEN acquired_at AND 9007199254740991
+        ),
+        PRIMARY KEY (task_id, fencing_token)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX project_task_lease_one_current_generation
+      ON project_task_lease_generations(task_id)
+      WHERE released_at IS NULL;
+
+      CREATE TRIGGER project_task_lease_validate_insert
+      BEFORE INSERT ON project_task_lease_generations
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_tasks
+          WHERE task_id = NEW.task_id AND status NOT IN ('completed', 'failed')
+        ) THEN RAISE(ABORT, 'project_task_lease_task_unavailable') END;
+        SELECT CASE WHEN NEW.fencing_token <> COALESCE((
+          SELECT MAX(fencing_token) + 1
+          FROM project_task_lease_generations WHERE task_id = NEW.task_id
+        ), 1) THEN RAISE(ABORT, 'project_task_lease_invalid_fencing_token') END;
+      END;
+
+      CREATE TRIGGER project_task_lease_identity_immutable
+      BEFORE UPDATE OF task_id, lease_id, lease_owner, fencing_token, acquired_at
+      ON project_task_lease_generations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lease_generation_immutable');
+      END;
+
+      CREATE TRIGGER project_task_lease_expiry_monotonic
+      BEFORE UPDATE OF lease_expires_at ON project_task_lease_generations
+      WHEN NEW.lease_expires_at <= OLD.lease_expires_at
+        OR OLD.released_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lease_invalid_renewal');
+      END;
+
+      CREATE TRIGGER project_task_lease_release_once
+      BEFORE UPDATE OF released_at ON project_task_lease_generations
+      WHEN OLD.released_at IS NOT NULL OR NEW.released_at IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lease_generation_immutable');
+      END;
+
+      CREATE TRIGGER project_task_lease_generation_immutable_delete
+      BEFORE DELETE ON project_task_lease_generations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_lease_generation_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V7_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION, `
+      CREATE TABLE project_task_dispatch_outbox (
+        dispatch_id TEXT PRIMARY KEY CHECK (
+          length(dispatch_id) = 36
+          AND substr(dispatch_id, 9, 1) = '-' AND substr(dispatch_id, 14, 1) = '-'
+          AND substr(dispatch_id, 19, 1) = '-' AND substr(dispatch_id, 24, 1) = '-'
+          AND dispatch_id = lower(dispatch_id)
+          AND replace(dispatch_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        created_at INTEGER NOT NULL CHECK (created_at BETWEEN 0 AND 9007199254740991),
+        consumed_at INTEGER CHECK (
+          consumed_at IS NULL OR consumed_at BETWEEN created_at AND 9007199254740991
+        ),
+        consumed_lease_id TEXT UNIQUE CHECK (
+          consumed_lease_id IS NULL OR length(consumed_lease_id) = 36
+        ),
+        consumed_fencing_token INTEGER CHECK (
+          consumed_fencing_token IS NULL
+          OR consumed_fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (consumed_lease_id) REFERENCES project_task_lease_generations(lease_id),
+        CHECK (
+          (consumed_at IS NULL AND consumed_lease_id IS NULL AND consumed_fencing_token IS NULL)
+          OR (consumed_at IS NOT NULL AND consumed_lease_id IS NOT NULL
+              AND consumed_fencing_token IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX project_task_dispatch_pending_created
+      ON project_task_dispatch_outbox(created_at ASC, dispatch_id ASC)
+      WHERE consumed_at IS NULL;
+
+      CREATE TRIGGER project_task_dispatch_validate_insert
+      BEFORE INSERT ON project_task_dispatch_outbox
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_tasks
+          WHERE task_id = NEW.task_id AND status = 'accepted'
+        ) THEN RAISE(ABORT, 'project_task_dispatch_task_unavailable') END;
+        SELECT CASE WHEN NEW.consumed_at IS NOT NULL
+          OR NEW.consumed_lease_id IS NOT NULL OR NEW.consumed_fencing_token IS NOT NULL
+          THEN RAISE(ABORT, 'project_task_dispatch_invalid_initial_state') END;
+      END;
+
+      CREATE TRIGGER project_task_dispatch_identity_immutable
+      BEFORE UPDATE OF dispatch_id, task_id, created_at ON project_task_dispatch_outbox
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_dispatch_immutable');
+      END;
+
+      CREATE TRIGGER project_task_dispatch_consume_once
+      BEFORE UPDATE OF consumed_at, consumed_lease_id, consumed_fencing_token
+      ON project_task_dispatch_outbox
+      WHEN OLD.consumed_at IS NOT NULL OR NEW.consumed_at IS NULL
+        OR NEW.consumed_lease_id IS NULL OR NEW.consumed_fencing_token IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_dispatch_immutable');
+      END;
+
+      CREATE TRIGGER project_task_dispatch_validate_consume
+      BEFORE UPDATE OF consumed_at, consumed_lease_id, consumed_fencing_token
+      ON project_task_dispatch_outbox
+      WHEN OLD.consumed_at IS NULL
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_tasks
+          WHERE task_id = OLD.task_id AND status = 'accepted'
+        ) THEN RAISE(ABORT, 'project_task_dispatch_task_unavailable') END;
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_task_lease_generations
+          WHERE task_id = OLD.task_id
+            AND lease_id = NEW.consumed_lease_id
+            AND fencing_token = NEW.consumed_fencing_token
+            AND released_at IS NULL
+            AND NEW.consumed_at >= acquired_at
+            AND NEW.consumed_at < lease_expires_at
+        ) THEN RAISE(ABORT, 'project_task_dispatch_authority_mismatch') END;
+      END;
+
+      CREATE TRIGGER project_task_dispatch_immutable_delete
+      BEFORE DELETE ON project_task_dispatch_outbox
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_dispatch_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V8_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION, `
+      CREATE TABLE project_task_execution_runs (
+        execution_run_id TEXT PRIMARY KEY CHECK (
+          length(execution_run_id) = 36
+          AND substr(execution_run_id, 9, 1) = '-'
+          AND substr(execution_run_id, 14, 1) = '-'
+          AND substr(execution_run_id, 19, 1) = '-'
+          AND substr(execution_run_id, 24, 1) = '-'
+          AND execution_run_id = lower(execution_run_id)
+          AND replace(execution_run_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        dispatch_id TEXT NOT NULL UNIQUE CHECK (length(dispatch_id) = 36),
+        preparation_lease_id TEXT NOT NULL CHECK (length(preparation_lease_id) = 36),
+        preparation_fencing_token INTEGER NOT NULL CHECK (
+          preparation_fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        prepared_at INTEGER NOT NULL CHECK (prepared_at BETWEEN 0 AND 9007199254740991),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (dispatch_id) REFERENCES project_task_dispatch_outbox(dispatch_id),
+        FOREIGN KEY (preparation_lease_id) REFERENCES project_task_lease_generations(lease_id),
+        FOREIGN KEY (task_id, preparation_fencing_token)
+          REFERENCES project_task_lease_generations(task_id, fencing_token)
+      ) STRICT;
+
+      CREATE INDEX project_task_execution_runs_prepared
+      ON project_task_execution_runs(prepared_at ASC, execution_run_id ASC);
+
+      CREATE TRIGGER project_task_execution_runs_validate_insert
+      BEFORE INSERT ON project_task_execution_runs
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_dispatch_outbox AS dispatch
+          JOIN project_task_lease_generations AS lease
+            ON lease.task_id = dispatch.task_id
+           AND lease.lease_id = dispatch.consumed_lease_id
+           AND lease.fencing_token = dispatch.consumed_fencing_token
+          WHERE dispatch.dispatch_id = NEW.dispatch_id
+            AND dispatch.task_id = NEW.task_id
+            AND dispatch.consumed_at IS NOT NULL
+            AND dispatch.consumed_lease_id = NEW.preparation_lease_id
+            AND dispatch.consumed_fencing_token = NEW.preparation_fencing_token
+            AND dispatch.consumed_at = NEW.prepared_at
+        ) THEN RAISE(ABORT, 'project_task_execution_run_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_execution_runs_immutable_update
+      BEFORE UPDATE ON project_task_execution_runs
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_run_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_runs_immutable_delete
+      BEFORE DELETE ON project_task_execution_runs
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_run_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V9_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION, `
+      CREATE TABLE project_task_execution_invocations (
+        invocation_id TEXT PRIMARY KEY CHECK (
+          length(invocation_id) = 36
+          AND substr(invocation_id, 9, 1) = '-'
+          AND substr(invocation_id, 14, 1) = '-'
+          AND substr(invocation_id, 19, 1) = '-'
+          AND substr(invocation_id, 24, 1) = '-'
+          AND invocation_id = lower(invocation_id)
+          AND replace(invocation_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        reservation_lease_id TEXT NOT NULL CHECK (length(reservation_lease_id) = 36),
+        reservation_fencing_token INTEGER NOT NULL CHECK (
+          reservation_fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        reserved_at INTEGER NOT NULL CHECK (reserved_at BETWEEN 0 AND 9007199254740991),
+        FOREIGN KEY (execution_run_id) REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (reservation_lease_id) REFERENCES project_task_lease_generations(lease_id),
+        FOREIGN KEY (task_id, reservation_fencing_token)
+          REFERENCES project_task_lease_generations(task_id, fencing_token)
+      ) STRICT;
+
+      CREATE INDEX project_task_execution_invocations_reserved
+      ON project_task_execution_invocations(reserved_at ASC, invocation_id ASC);
+
+      CREATE TRIGGER project_task_execution_invocations_validate_insert
+      BEFORE INSERT ON project_task_execution_invocations
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_runs AS execution_run
+          JOIN project_task_lease_generations AS lease
+            ON lease.task_id = NEW.task_id
+           AND lease.lease_id = NEW.reservation_lease_id
+           AND lease.fencing_token = NEW.reservation_fencing_token
+          WHERE execution_run.execution_run_id = NEW.execution_run_id
+            AND execution_run.task_id = NEW.task_id
+            AND NEW.reserved_at >= lease.acquired_at
+            AND NEW.reserved_at < lease.lease_expires_at
+            AND (lease.released_at IS NULL OR NEW.reserved_at <= lease.released_at)
+        ) THEN RAISE(ABORT, 'project_task_execution_invocation_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_execution_invocations_immutable_update
+      BEFORE UPDATE ON project_task_execution_invocations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_invocation_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_invocations_immutable_delete
+      BEFORE DELETE ON project_task_execution_invocations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_invocation_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_invocations_preserve_on_lease_release
+      BEFORE UPDATE OF released_at ON project_task_lease_generations
+      WHEN NEW.released_at IS NOT NULL AND EXISTS (
+        SELECT 1 FROM project_task_execution_invocations AS invocation
+        WHERE invocation.task_id = OLD.task_id
+          AND invocation.reservation_lease_id = OLD.lease_id
+          AND invocation.reservation_fencing_token = OLD.fencing_token
+          AND NEW.released_at < invocation.reserved_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_invocation_incompatible');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V10_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION, `
+      CREATE TABLE project_task_execution_launch_attempts (
+        launch_attempt_id TEXT PRIMARY KEY CHECK (
+          length(launch_attempt_id) = 36
+          AND substr(launch_attempt_id, 9, 1) = '-'
+          AND substr(launch_attempt_id, 14, 1) = '-'
+          AND substr(launch_attempt_id, 19, 1) = '-'
+          AND substr(launch_attempt_id, 24, 1) = '-'
+          AND launch_attempt_id = lower(launch_attempt_id)
+          AND replace(launch_attempt_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        launch_lease_id TEXT NOT NULL CHECK (length(launch_lease_id) = 36),
+        launch_fencing_token INTEGER NOT NULL CHECK (
+          launch_fencing_token BETWEEN 1 AND 9007199254740991
+        ),
+        boundary_crossed_at INTEGER NOT NULL CHECK (
+          boundary_crossed_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (invocation_id) REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (execution_run_id) REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (launch_lease_id) REFERENCES project_task_lease_generations(lease_id),
+        FOREIGN KEY (task_id, launch_fencing_token)
+          REFERENCES project_task_lease_generations(task_id, fencing_token)
+      ) STRICT;
+
+      CREATE INDEX project_task_execution_launch_attempts_crossed
+      ON project_task_execution_launch_attempts(boundary_crossed_at ASC, launch_attempt_id ASC);
+
+      CREATE TRIGGER project_task_execution_launch_attempts_validate_insert
+      BEFORE INSERT ON project_task_execution_launch_attempts
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_invocations AS invocation
+          JOIN project_task_execution_runs AS execution_run
+            ON execution_run.execution_run_id = invocation.execution_run_id
+          JOIN project_task_lease_generations AS lease
+            ON lease.task_id = invocation.task_id
+           AND lease.lease_id = NEW.launch_lease_id
+           AND lease.fencing_token = NEW.launch_fencing_token
+          WHERE invocation.invocation_id = NEW.invocation_id
+            AND invocation.execution_run_id = NEW.execution_run_id
+            AND invocation.task_id = NEW.task_id
+            AND execution_run.task_id = NEW.task_id
+            AND NEW.boundary_crossed_at >= invocation.reserved_at
+            AND NEW.boundary_crossed_at >= lease.acquired_at
+            AND NEW.boundary_crossed_at < lease.lease_expires_at
+            AND (lease.released_at IS NULL OR NEW.boundary_crossed_at <= lease.released_at)
+        ) THEN RAISE(ABORT, 'project_task_execution_launch_attempt_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_attempts_immutable_update
+      BEFORE UPDATE ON project_task_execution_launch_attempts
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_attempt_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_attempts_immutable_delete
+      BEFORE DELETE ON project_task_execution_launch_attempts
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_attempt_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_attempts_preserve_on_lease_release
+      BEFORE UPDATE OF released_at ON project_task_lease_generations
+      WHEN NEW.released_at IS NOT NULL AND EXISTS (
+        SELECT 1 FROM project_task_execution_launch_attempts AS attempt
+        WHERE attempt.task_id = OLD.task_id
+          AND attempt.launch_lease_id = OLD.lease_id
+          AND attempt.launch_fencing_token = OLD.fencing_token
+          AND NEW.released_at < attempt.boundary_crossed_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_attempt_incompatible');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION) {
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V11_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION, `
+      CREATE TABLE project_task_execution_launch_results (
+        launch_result_id TEXT PRIMARY KEY CHECK (
+          length(launch_result_id) = 36
+          AND substr(launch_result_id, 9, 1) = '-'
+          AND substr(launch_result_id, 14, 1) = '-'
+          AND substr(launch_result_id, 19, 1) = '-'
+          AND substr(launch_result_id, 24, 1) = '-'
+          AND launch_result_id = lower(launch_result_id)
+          AND replace(launch_result_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        outcome_class TEXT NOT NULL CHECK (outcome_class IN (
+          'proposal_valid', 'timeout', 'execution_failed', 'empty_response',
+          'invalid_hermes_json', 'invalid_hermes_proposal'
+        )),
+        recorded_at INTEGER NOT NULL CHECK (
+          recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (invocation_id) REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (execution_run_id) REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id)
+      ) STRICT;
+
+      CREATE INDEX project_task_execution_launch_results_recorded
+      ON project_task_execution_launch_results(recorded_at ASC, launch_result_id ASC);
+
+      CREATE TRIGGER project_task_execution_launch_results_validate_insert
+      BEFORE INSERT ON project_task_execution_launch_results
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_launch_attempts AS attempt
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.invocation_id = attempt.invocation_id
+          JOIN project_task_execution_runs AS execution_run
+            ON execution_run.execution_run_id = attempt.execution_run_id
+          JOIN project_tasks AS task ON task.task_id = attempt.task_id
+          WHERE attempt.launch_attempt_id = NEW.launch_attempt_id
+            AND attempt.invocation_id = NEW.invocation_id
+            AND attempt.execution_run_id = NEW.execution_run_id
+            AND attempt.task_id = NEW.task_id
+            AND invocation.execution_run_id = NEW.execution_run_id
+            AND invocation.task_id = NEW.task_id
+            AND execution_run.task_id = NEW.task_id
+            AND NEW.recorded_at >= attempt.boundary_crossed_at
+            AND task.status NOT IN ('completed', 'failed')
+        ) THEN RAISE(ABORT, 'project_task_execution_launch_result_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_results_immutable_update
+      BEFORE UPDATE ON project_task_execution_launch_results
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_result_immutable');
+      END;
+
+      CREATE TRIGGER project_task_execution_launch_results_immutable_delete
+      BEFORE DELETE ON project_task_execution_launch_results
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_execution_launch_result_immutable');
+      END;
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION) {
+    // Layer 13: Durable Validated Proposal Snapshot V1. Purely additive: the
+    // snapshot table, its recorded index and its three triggers. ZERO rows are
+    // manufactured for existing data; a historical proposal_valid Launch
+    // Result without a snapshot keeps its exact Layer 12 semantics and is
+    // NEVER silently upgraded into a resumable state.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V12_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION, `
+      CREATE TABLE project_task_validated_proposal_snapshots (
+        snapshot_id TEXT PRIMARY KEY CHECK (
+          length(snapshot_id) = 36
+          AND substr(snapshot_id, 9, 1) = '-'
+          AND substr(snapshot_id, 14, 1) = '-'
+          AND substr(snapshot_id, 19, 1) = '-'
+          AND substr(snapshot_id, 24, 1) = '-'
+          AND snapshot_id = lower(snapshot_id)
+          AND replace(snapshot_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        launch_result_id TEXT NOT NULL UNIQUE CHECK (length(launch_result_id) = 36),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        canonical_proposal_json TEXT NOT NULL CHECK (
+          length(canonical_proposal_json) BETWEEN 1 AND 131072
+          AND json_valid(canonical_proposal_json)
+          AND json_type(canonical_proposal_json, '$') = 'object'
+        ),
+        proposal_sha256 TEXT NOT NULL CHECK (
+          length(proposal_sha256) = 64
+          AND proposal_sha256 NOT GLOB '*[^0-9a-f]*'
+        ),
+        canonical_version TEXT NOT NULL CHECK (
+          canonical_version = 'validated-proposal-canonical-v1'
+        ),
+        execution_mode TEXT NOT NULL CHECK (execution_mode IN ('direct','delegated')),
+        completion_mode TEXT NOT NULL CHECK (completion_mode IN ('analyze','ready_for_review','complete')),
+        requires_human_approval INTEGER NOT NULL CHECK (requires_human_approval IN (0,1)),
+        blocked_actions_json TEXT NOT NULL CHECK (
+          json_valid(blocked_actions_json)
+          AND json_type(blocked_actions_json, '$') = 'array'
+          AND length(blocked_actions_json) <= 512
+        ),
+        recorded_at INTEGER NOT NULL CHECK (
+          recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id)
+      ) STRICT;
+
+      CREATE INDEX project_task_validated_proposal_snapshots_recorded
+      ON project_task_validated_proposal_snapshots(recorded_at ASC, snapshot_id ASC);
+
+      CREATE TRIGGER project_task_validated_proposal_snapshots_validate_insert
+      BEFORE INSERT ON project_task_validated_proposal_snapshots
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_launch_results AS result
+          JOIN project_task_execution_launch_attempts AS attempt
+            ON attempt.launch_attempt_id = result.launch_attempt_id
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.invocation_id = attempt.invocation_id
+          JOIN project_task_execution_runs AS execution_run
+            ON execution_run.execution_run_id = attempt.execution_run_id
+          JOIN project_tasks AS task ON task.task_id = attempt.task_id
+          WHERE result.launch_result_id = NEW.launch_result_id
+            AND result.outcome_class = 'proposal_valid'
+            AND result.launch_attempt_id = NEW.launch_attempt_id
+            AND result.invocation_id = NEW.invocation_id
+            AND result.execution_run_id = NEW.execution_run_id
+            AND result.task_id = NEW.task_id
+            AND attempt.invocation_id = NEW.invocation_id
+            AND attempt.execution_run_id = NEW.execution_run_id
+            AND attempt.task_id = NEW.task_id
+            AND invocation.execution_run_id = NEW.execution_run_id
+            AND invocation.task_id = NEW.task_id
+            AND execution_run.task_id = NEW.task_id
+            AND NEW.recorded_at >= result.recorded_at
+            AND task.status NOT IN ('completed','failed')
+        ) THEN RAISE(ABORT, 'project_task_validated_proposal_snapshot_incompatible') END;
+        SELECT CASE WHEN
+            json_extract(NEW.canonical_proposal_json, '$.executionMode') <> NEW.execution_mode
+          OR json_extract(NEW.canonical_proposal_json, '$.completionMode') <> NEW.completion_mode
+          OR (CASE WHEN json_extract(NEW.canonical_proposal_json, '$.requiresHumanApproval') = 1 THEN 1 ELSE 0 END) <> NEW.requires_human_approval
+          OR json_extract(NEW.canonical_proposal_json, '$.blockedActions') <> NEW.blocked_actions_json
+        THEN RAISE(ABORT, 'project_task_validated_proposal_snapshot_incompatible') END;
+      END;
+
+      CREATE TRIGGER project_task_validated_proposal_snapshots_immutable_update
+      BEFORE UPDATE ON project_task_validated_proposal_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_validated_proposal_snapshot_immutable');
+      END;
+
+      CREATE TRIGGER project_task_validated_proposal_snapshots_immutable_delete
+      BEFORE DELETE ON project_task_validated_proposal_snapshots
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_validated_proposal_snapshot_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION) {
+    // Layer 14: Durable Resume Decision V1. Purely additive: the resume
+    // decision table, its recorded index and its three triggers. ZERO rows are
+    // manufactured for existing data; a historical proposal_valid snapshot
+    // without a resume decision keeps its exact Layer 13 semantics and is
+    // NEVER silently upgraded into a resumable state.
+    // IF NOT EXISTS keeps migration idempotent so test rewind scripts that set
+    // schema_version back to 13 do not crash when the V14 table (created
+    // during the initial store construction) already exists.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V13_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_task_resume_decisions (
+        decision_id TEXT PRIMARY KEY CHECK (
+          length(decision_id) = 36
+          AND substr(decision_id, 9, 1) = '-'
+          AND substr(decision_id, 14, 1) = '-'
+          AND substr(decision_id, 19, 1) = '-'
+          AND substr(decision_id, 24, 1) = '-'
+          AND decision_id = lower(decision_id)
+          AND replace(decision_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (length(snapshot_id) = 36),
+        decision TEXT NOT NULL CHECK (decision IN ('approved','refused')),
+        refusal_reason TEXT CHECK (
+          (decision = 'refused'
+            AND refusal_reason IN (
+              'human_approval_required',
+              'blocked_actions',
+              'invalid_proposal_structure',
+              'proposal_sha256_mismatch',
+              'planning_failed',
+              'registry_unavailable'
+            ))
+          OR (decision = 'approved' AND refusal_reason IS NULL)
+        ),
+        policy_fingerprint TEXT NOT NULL CHECK (
+          length(policy_fingerprint) = 64
+          AND policy_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        recorded_at INTEGER NOT NULL CHECK (
+          recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_resume_decisions_recorded
+      ON project_task_resume_decisions(recorded_at ASC, decision_id ASC);
+
+      CREATE TRIGGER IF NOT EXISTS project_task_resume_decisions_validate_insert
+      BEFORE INSERT ON project_task_resume_decisions
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_validated_proposal_snapshots AS snapshot
+          JOIN project_tasks AS task ON task.task_id = snapshot.task_id
+          WHERE snapshot.snapshot_id = NEW.snapshot_id
+            AND snapshot.task_id = NEW.task_id
+            AND task.status NOT IN ('completed','failed')
+            AND task.status IN ('accepted','planning','hermes')
+            AND task.terminal_at IS NULL
+        ) THEN RAISE(ABORT, 'project_task_resume_decision_incompatible') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_resume_decisions_immutable_update
+      BEFORE UPDATE ON project_task_resume_decisions
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_resume_decision_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_resume_decisions_immutable_delete
+      BEFORE DELETE ON project_task_resume_decisions
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_resume_decision_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION) {
+    // Layer 15: Durable Codex Execution Evidence V1. Purely additive: two new
+    // tables with indices and triggers. ZERO rows are manufactured for existing
+    // data. IF NOT EXISTS keeps migration idempotent so test rewind scripts
+    // that set schema_version back to 14 do not crash when the V15 tables
+    // (created during initial store construction) already exist.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V14_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_task_codex_start_evidence (
+        codex_start_id TEXT PRIMARY KEY CHECK (
+          length(codex_start_id) = 36
+          AND substr(codex_start_id, 9, 1) = '-'
+          AND substr(codex_start_id, 14, 1) = '-'
+          AND substr(codex_start_id, 19, 1) = '-'
+          AND substr(codex_start_id, 24, 1) = '-'
+          AND codex_start_id = lower(codex_start_id)
+          AND replace(codex_start_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        launch_result_id TEXT NOT NULL UNIQUE CHECK (length(launch_result_id) = 36),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (length(snapshot_id) = 36),
+        start_recorded_at INTEGER NOT NULL CHECK (
+          start_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_codex_start_evidence_recorded
+      ON project_task_codex_start_evidence(start_recorded_at ASC, codex_start_id ASC);
+
+      CREATE TABLE IF NOT EXISTS project_task_codex_result_evidence (
+        codex_result_id TEXT PRIMARY KEY CHECK (
+          length(codex_result_id) = 36
+          AND substr(codex_result_id, 9, 1) = '-'
+          AND substr(codex_result_id, 14, 1) = '-'
+          AND substr(codex_result_id, 19, 1) = '-'
+          AND substr(codex_result_id, 24, 1) = '-'
+          AND codex_result_id = lower(codex_result_id)
+          AND replace(codex_result_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        codex_start_id TEXT NOT NULL UNIQUE CHECK (length(codex_start_id) = 36),
+        execution_id TEXT NOT NULL CHECK (
+          length(execution_id) BETWEEN 1 AND 36
+        ),
+        outcome TEXT NOT NULL CHECK (
+          outcome IN ('codex_success', 'codex_failed', 'codex_interrupted')
+        ),
+        success INTEGER NOT NULL CHECK (success IN (0, 1)),
+        error TEXT CHECK (
+          (outcome = 'codex_success' AND error IS NULL)
+          OR (outcome = 'codex_failed' AND error IN (
+            'codex_execution_failed', 'timeout', 'worktree_create_failed',
+            'worktree_cleanup_failed', 'prompt_too_large',
+            'missing_repository_read', 'missing_isolated_worktree_write',
+            'invalid_generated_path'
+          ))
+          OR (outcome = 'codex_interrupted' AND error IS NULL)
+        ),
+        summary TEXT NOT NULL CHECK (
+          length(summary) BETWEEN 1 AND 500 AND summary = trim(summary)
+        ),
+        result_metadata_json TEXT NOT NULL CHECK (
+          json_valid(result_metadata_json)
+          AND json_type(result_metadata_json, '$') = 'object'
+          AND length(result_metadata_json) <= 2048
+        ),
+        result_recorded_at INTEGER NOT NULL CHECK (
+          result_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (codex_start_id)
+          REFERENCES project_task_codex_start_evidence(codex_start_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_codex_result_evidence_recorded
+      ON project_task_codex_result_evidence(result_recorded_at ASC, codex_result_id ASC);
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_start_evidence_validate_insert
+      BEFORE INSERT ON project_task_codex_start_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_execution_runs AS run
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.execution_run_id = run.execution_run_id
+          JOIN project_task_execution_launch_attempts AS attempt
+            ON attempt.invocation_id = invocation.invocation_id
+          JOIN project_task_execution_launch_results AS result
+            ON result.launch_attempt_id = attempt.launch_attempt_id
+          JOIN project_task_validated_proposal_snapshots AS snapshot
+            ON snapshot.launch_result_id = result.launch_result_id
+          JOIN project_tasks AS task ON task.task_id = run.task_id
+          WHERE run.execution_run_id = NEW.execution_run_id
+            AND invocation.invocation_id = NEW.invocation_id
+            AND attempt.launch_attempt_id = NEW.launch_attempt_id
+            AND result.launch_result_id = NEW.launch_result_id
+            AND result.outcome_class = 'proposal_valid'
+            AND snapshot.snapshot_id = NEW.snapshot_id
+            AND snapshot.task_id = NEW.task_id
+            AND task.task_id = NEW.task_id
+            AND task.status IN ('hermes', 'codex')
+            AND task.terminal_at IS NULL
+            AND run.task_id = NEW.task_id
+            AND invocation.task_id = NEW.task_id
+            AND attempt.task_id = NEW.task_id
+            AND result.task_id = NEW.task_id
+            AND NEW.start_recorded_at >= snapshot.recorded_at
+        ) THEN RAISE(ABORT, 'project_task_codex_start_evidence_incompatible') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_result_evidence_validate_insert
+      BEFORE INSERT ON project_task_codex_result_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_codex_start_evidence AS start
+          JOIN project_tasks AS task ON task.task_id = start.task_id
+          WHERE start.codex_start_id = NEW.codex_start_id
+            AND task.status NOT IN ('completed', 'failed')
+            AND NEW.result_recorded_at >= start.start_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_codex_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          json_extract(NEW.result_metadata_json, '$.executionId') <> NEW.execution_id
+        THEN RAISE(ABORT, 'project_task_codex_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          (NEW.outcome = 'codex_success' AND NEW.success <> 1)
+          OR (NEW.outcome <> 'codex_success' AND NEW.success <> 0)
+        THEN RAISE(ABORT, 'project_task_codex_result_evidence_incompatible') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_start_evidence_immutable_update
+      BEFORE UPDATE ON project_task_codex_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_codex_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_start_evidence_immutable_delete
+      BEFORE DELETE ON project_task_codex_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_codex_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_result_evidence_immutable_update
+      BEFORE UPDATE ON project_task_codex_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_codex_result_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_codex_result_evidence_immutable_delete
+      BEFORE DELETE ON project_task_codex_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_codex_result_evidence_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION) {
+    // Layer 17: Durable Verification Evidence + Commit Idempotency V1.
+    // Purely additive: four new tables (verification start/result, commit
+    // start/result) with indices and triggers. ZERO rows are manufactured
+    // for existing data. IF NOT EXISTS keeps migration idempotent so test
+    // rewind scripts that set schema_version back to 15 do not crash when
+    // the V16 tables (created during initial store construction) already
+    // exist.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V15_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_task_verification_start_evidence (
+        verification_start_id TEXT PRIMARY KEY CHECK (
+          length(verification_start_id) = 36
+          AND substr(verification_start_id, 9, 1) = '-'
+          AND substr(verification_start_id, 14, 1) = '-'
+          AND substr(verification_start_id, 19, 1) = '-'
+          AND substr(verification_start_id, 24, 1) = '-'
+          AND verification_start_id = lower(verification_start_id)
+          AND replace(verification_start_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        launch_result_id TEXT NOT NULL UNIQUE CHECK (length(launch_result_id) = 36),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (length(snapshot_id) = 36),
+        codex_start_id TEXT NOT NULL CHECK (length(codex_start_id) = 36),
+        execution_id TEXT NOT NULL CHECK (
+          length(execution_id) BETWEEN 1 AND 36
+        ),
+        start_recorded_at INTEGER NOT NULL CHECK (
+          start_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id),
+        FOREIGN KEY (codex_start_id)
+          REFERENCES project_task_codex_start_evidence(codex_start_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_verification_start_recorded
+      ON project_task_verification_start_evidence(start_recorded_at ASC, verification_start_id ASC);
+
+      CREATE TABLE IF NOT EXISTS project_task_verification_result_evidence (
+        verification_result_id TEXT PRIMARY KEY CHECK (
+          length(verification_result_id) = 36
+          AND substr(verification_result_id, 9, 1) = '-'
+          AND substr(verification_result_id, 14, 1) = '-'
+          AND substr(verification_result_id, 19, 1) = '-'
+          AND substr(verification_result_id, 24, 1) = '-'
+          AND verification_result_id = lower(verification_result_id)
+          AND replace(verification_result_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        verification_start_id TEXT NOT NULL UNIQUE CHECK (length(verification_start_id) = 36),
+        status TEXT NOT NULL CHECK (status IN ('verified', 'verification_failed')),
+        checks_passed INTEGER NOT NULL CHECK (checks_passed >= 0),
+        total_checks INTEGER NOT NULL CHECK (total_checks > 0 AND checks_passed <= total_checks),
+        technical_checks_passed INTEGER NOT NULL CHECK (technical_checks_passed >= 0),
+        technical_total_checks INTEGER NOT NULL CHECK (technical_total_checks >= 0),
+        visual_checks_passed INTEGER NOT NULL CHECK (visual_checks_passed >= 0),
+        visual_total_checks INTEGER NOT NULL CHECK (visual_total_checks >= 0),
+        failure_error TEXT CHECK (
+          (status = 'verified' AND failure_error IS NULL)
+          OR (status = 'verification_failed' AND failure_error IN (
+            'check_failed', 'check_timeout', 'visual_check_failed',
+            'visual_check_timeout', 'visual_verification_unavailable',
+            'verification_unavailable', 'invalid_generated_path'
+          ))
+        ),
+        failure_summary TEXT CHECK (
+          (status = 'verified' AND failure_summary IS NULL)
+          OR (status = 'verification_failed'
+              AND length(failure_summary) BETWEEN 1 AND 500
+              AND failure_summary = trim(failure_summary))
+        ),
+        result_recorded_at INTEGER NOT NULL CHECK (
+          result_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (verification_start_id)
+          REFERENCES project_task_verification_start_evidence(verification_start_id),
+        CHECK (checks_passed = technical_checks_passed + visual_checks_passed),
+        CHECK (total_checks = technical_total_checks + visual_total_checks),
+        CHECK (technical_checks_passed <= technical_total_checks),
+        CHECK (visual_checks_passed <= visual_total_checks)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_verification_result_recorded
+      ON project_task_verification_result_evidence(result_recorded_at ASC, verification_result_id ASC);
+
+      CREATE TABLE IF NOT EXISTS project_task_commit_start_evidence (
+        commit_start_id TEXT PRIMARY KEY CHECK (
+          length(commit_start_id) = 36
+          AND substr(commit_start_id, 9, 1) = '-'
+          AND substr(commit_start_id, 14, 1) = '-'
+          AND substr(commit_start_id, 19, 1) = '-'
+          AND substr(commit_start_id, 24, 1) = '-'
+          AND commit_start_id = lower(commit_start_id)
+          AND replace(commit_start_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        execution_run_id TEXT NOT NULL UNIQUE CHECK (length(execution_run_id) = 36),
+        invocation_id TEXT NOT NULL UNIQUE CHECK (length(invocation_id) = 36),
+        launch_attempt_id TEXT NOT NULL UNIQUE CHECK (length(launch_attempt_id) = 36),
+        launch_result_id TEXT NOT NULL UNIQUE CHECK (length(launch_result_id) = 36),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (length(snapshot_id) = 36),
+        codex_start_id TEXT NOT NULL CHECK (length(codex_start_id) = 36),
+        verification_start_id TEXT NOT NULL CHECK (length(verification_start_id) = 36),
+        execution_id TEXT NOT NULL CHECK (
+          length(execution_id) BETWEEN 1 AND 36
+        ),
+        start_recorded_at INTEGER NOT NULL CHECK (
+          start_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id),
+        FOREIGN KEY (codex_start_id)
+          REFERENCES project_task_codex_start_evidence(codex_start_id),
+        FOREIGN KEY (verification_start_id)
+          REFERENCES project_task_verification_start_evidence(verification_start_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_commit_start_recorded
+      ON project_task_commit_start_evidence(start_recorded_at ASC, commit_start_id ASC);
+
+      CREATE TABLE IF NOT EXISTS project_task_commit_result_evidence (
+        commit_result_id TEXT PRIMARY KEY CHECK (
+          length(commit_result_id) = 36
+          AND substr(commit_result_id, 9, 1) = '-'
+          AND substr(commit_result_id, 14, 1) = '-'
+          AND substr(commit_result_id, 19, 1) = '-'
+          AND substr(commit_result_id, 24, 1) = '-'
+          AND commit_result_id = lower(commit_result_id)
+          AND replace(commit_result_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        commit_start_id TEXT NOT NULL UNIQUE CHECK (length(commit_start_id) = 36),
+        status TEXT NOT NULL CHECK (status IN ('committed', 'commit_failed', 'nothing_to_commit')),
+        commit_sha TEXT CHECK (
+          (status = 'committed' AND commit_sha IS NOT NULL
+           AND length(commit_sha) BETWEEN 40 AND 64
+           AND commit_sha NOT GLOB '*[^0-9a-fA-F]*')
+          OR (status <> 'committed' AND commit_sha IS NULL)
+        ),
+        error TEXT CHECK (
+          (status = 'committed' AND error IS NULL)
+          OR (status = 'commit_failed' AND error IN (
+            'git_status_failed', 'git_stage_failed', 'git_commit_failed',
+            'git_revision_failed', 'nothing_to_commit', 'invalid_generated_path',
+            'workspace_not_verified', 'local_commit_not_approved',
+            'commit_contradictory_evidence'
+          ))
+          OR (status = 'nothing_to_commit' AND error = 'nothing_to_commit')
+        ),
+        summary TEXT CHECK (
+          (status = 'committed' AND summary = 'The verified workspace was committed locally.')
+          OR (status <> 'committed' AND length(summary) BETWEEN 1 AND 500
+              AND summary = trim(summary))
+        ),
+        result_recorded_at INTEGER NOT NULL CHECK (
+          result_recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (commit_start_id)
+          REFERENCES project_task_commit_start_evidence(commit_start_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_task_commit_result_recorded
+      ON project_task_commit_result_evidence(result_recorded_at ASC, commit_result_id ASC);
+
+      -- Verification start evidence insert validation trigger
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_start_evidence_validate_insert
+      BEFORE INSERT ON project_task_verification_start_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_codex_start_evidence AS codex_start
+          JOIN project_task_codex_result_evidence AS codex_result
+            ON codex_result.codex_start_id = codex_start.codex_start_id
+          JOIN project_task_execution_runs AS run
+            ON run.execution_run_id = codex_start.execution_run_id
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.invocation_id = codex_start.invocation_id
+          JOIN project_task_execution_launch_attempts AS attempt
+            ON attempt.launch_attempt_id = codex_start.launch_attempt_id
+          JOIN project_task_execution_launch_results AS result
+            ON result.launch_result_id = codex_start.launch_result_id
+          JOIN project_task_validated_proposal_snapshots AS snapshot
+            ON snapshot.snapshot_id = codex_start.snapshot_id
+          JOIN project_tasks AS task ON task.task_id = codex_start.task_id
+          WHERE codex_start.codex_start_id = NEW.codex_start_id
+            AND codex_start.task_id = NEW.task_id
+            AND codex_result.outcome = 'codex_success'
+            AND codex_result.execution_id = NEW.execution_id
+            AND run.execution_run_id = NEW.execution_run_id
+            AND invocation.invocation_id = NEW.invocation_id
+            AND attempt.launch_attempt_id = NEW.launch_attempt_id
+            AND result.launch_result_id = NEW.launch_result_id
+            AND result.outcome_class = 'proposal_valid'
+            AND snapshot.snapshot_id = NEW.snapshot_id
+            AND snapshot.task_id = NEW.task_id
+            AND task.task_id = NEW.task_id
+            AND task.status IN ('codex', 'verification')
+            AND task.terminal_at IS NULL
+            AND run.task_id = NEW.task_id
+            AND invocation.task_id = NEW.task_id
+            AND attempt.task_id = NEW.task_id
+            AND result.task_id = NEW.task_id
+            AND NEW.start_recorded_at >= codex_result.result_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_verification_start_evidence_incompatible') END;
+      END;
+
+      -- Verification result evidence insert validation trigger
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_result_evidence_validate_insert
+      BEFORE INSERT ON project_task_verification_result_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_verification_start_evidence AS start
+          JOIN project_tasks AS task ON task.task_id = start.task_id
+          WHERE start.verification_start_id = NEW.verification_start_id
+            AND task.status NOT IN ('completed', 'failed')
+            AND NEW.result_recorded_at >= start.start_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          NEW.checks_passed <> NEW.technical_checks_passed + NEW.visual_checks_passed
+        THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          NEW.total_checks <> NEW.technical_total_checks + NEW.visual_total_checks
+        THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          NEW.technical_checks_passed > NEW.technical_total_checks
+        THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+        SELECT CASE WHEN
+          NEW.visual_checks_passed > NEW.visual_total_checks
+        THEN RAISE(ABORT, 'project_task_verification_result_evidence_incompatible') END;
+      END;
+
+      -- Commit start evidence insert validation trigger
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_start_evidence_validate_insert
+      BEFORE INSERT ON project_task_commit_start_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_verification_start_evidence AS verify_start
+          JOIN project_task_verification_result_evidence AS verify_result
+            ON verify_result.verification_start_id = verify_start.verification_start_id
+          JOIN project_task_codex_start_evidence AS codex_start
+            ON codex_start.codex_start_id = verify_start.codex_start_id
+          JOIN project_task_execution_runs AS run
+            ON run.execution_run_id = verify_start.execution_run_id
+          JOIN project_task_execution_invocations AS invocation
+            ON invocation.invocation_id = verify_start.invocation_id
+          JOIN project_task_execution_launch_attempts AS attempt
+            ON attempt.launch_attempt_id = verify_start.launch_attempt_id
+          JOIN project_task_execution_launch_results AS result
+            ON result.launch_result_id = verify_start.launch_result_id
+          JOIN project_task_validated_proposal_snapshots AS snapshot
+            ON snapshot.snapshot_id = verify_start.snapshot_id
+          JOIN project_tasks AS task ON task.task_id = verify_start.task_id
+          WHERE verify_start.verification_start_id = NEW.verification_start_id
+            AND verify_start.task_id = NEW.task_id
+            AND verify_result.status = 'verified'
+            AND verify_start.codex_start_id = NEW.codex_start_id
+            AND verify_start.execution_id = NEW.execution_id
+            AND run.execution_run_id = NEW.execution_run_id
+            AND invocation.invocation_id = NEW.invocation_id
+            AND attempt.launch_attempt_id = NEW.launch_attempt_id
+            AND result.launch_result_id = NEW.launch_result_id
+            AND result.outcome_class = 'proposal_valid'
+            AND snapshot.snapshot_id = NEW.snapshot_id
+            AND snapshot.task_id = NEW.task_id
+            AND task.task_id = NEW.task_id
+            AND task.status IN ('codex', 'verification', 'commit')
+            AND task.terminal_at IS NULL
+            AND run.task_id = NEW.task_id
+            AND invocation.task_id = NEW.task_id
+            AND attempt.task_id = NEW.task_id
+            AND result.task_id = NEW.task_id
+            AND NEW.start_recorded_at >= verify_result.result_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_commit_start_evidence_incompatible') END;
+      END;
+
+      -- Commit result evidence insert validation trigger
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_result_evidence_validate_insert
+      BEFORE INSERT ON project_task_commit_result_evidence
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_task_commit_start_evidence AS start
+          JOIN project_tasks AS task ON task.task_id = start.task_id
+          WHERE start.commit_start_id = NEW.commit_start_id
+            AND task.status NOT IN ('completed', 'failed')
+            AND NEW.result_recorded_at >= start.start_recorded_at
+        ) THEN RAISE(ABORT, 'project_task_commit_result_evidence_incompatible') END;
+      END;
+
+      -- Immutability triggers for all four tables
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_start_evidence_immutable_update
+      BEFORE UPDATE ON project_task_verification_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_verification_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_start_evidence_immutable_delete
+      BEFORE DELETE ON project_task_verification_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_verification_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_result_evidence_immutable_update
+      BEFORE UPDATE ON project_task_verification_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_verification_result_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_verification_result_evidence_immutable_delete
+      BEFORE DELETE ON project_task_verification_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_verification_result_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_start_evidence_immutable_update
+      BEFORE UPDATE ON project_task_commit_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_commit_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_start_evidence_immutable_delete
+      BEFORE DELETE ON project_task_commit_start_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_commit_start_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_result_evidence_immutable_update
+      BEFORE UPDATE ON project_task_commit_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_commit_result_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_commit_result_evidence_immutable_delete
+      BEFORE DELETE ON project_task_commit_result_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_commit_result_evidence_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION) {
+    // Layer 18: Durable Completion Evidence V1. Purely additive: the
+    // completion_evidence table with a unique index and immutability
+    // triggers. ZERO rows are manufactured for existing data. IF NOT
+    // EXISTS keeps migration idempotent so test rewind scripts that set
+    // schema_version back to 16 do not crash when the V17 table (created
+    // during initial store construction) already exists.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V16_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_task_completion_evidence (
+        completion_evidence_id TEXT PRIMARY KEY CHECK (
+          length(completion_evidence_id) = 36
+          AND substr(completion_evidence_id, 9, 1) = '-'
+          AND substr(completion_evidence_id, 14, 1) = '-'
+          AND substr(completion_evidence_id, 19, 1) = '-'
+          AND substr(completion_evidence_id, 24, 1) = '-'
+          AND completion_evidence_id = lower(completion_evidence_id)
+          AND replace(completion_evidence_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        execution_run_id TEXT NOT NULL CHECK (length(execution_run_id) = 36),
+        invocation_id TEXT NOT NULL CHECK (length(invocation_id) = 36),
+        launch_attempt_id TEXT NOT NULL CHECK (length(launch_attempt_id) = 36),
+        launch_result_id TEXT NOT NULL CHECK (length(launch_result_id) = 36),
+        snapshot_id TEXT NOT NULL CHECK (length(snapshot_id) = 36),
+        codex_start_id TEXT,
+        verification_start_id TEXT,
+        commit_start_id TEXT,
+        receipt_json TEXT NOT NULL CHECK (
+          json_valid(receipt_json)
+          AND json_type(receipt_json, '$') = 'object'
+        ),
+        recorded_at INTEGER NOT NULL CHECK (
+          recorded_at BETWEEN 0 AND 9007199254740991
+        ),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (execution_run_id)
+          REFERENCES project_task_execution_runs(execution_run_id),
+        FOREIGN KEY (invocation_id)
+          REFERENCES project_task_execution_invocations(invocation_id),
+        FOREIGN KEY (launch_attempt_id)
+          REFERENCES project_task_execution_launch_attempts(launch_attempt_id),
+        FOREIGN KEY (launch_result_id)
+          REFERENCES project_task_execution_launch_results(launch_result_id),
+        FOREIGN KEY (snapshot_id)
+          REFERENCES project_task_validated_proposal_snapshots(snapshot_id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS
+        idx_project_task_completion_evidence_task
+        ON project_task_completion_evidence(task_id);
+
+      CREATE TRIGGER IF NOT EXISTS project_task_completion_evidence_immutable_update
+      BEFORE UPDATE ON project_task_completion_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_completion_evidence_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_task_completion_evidence_immutable_delete
+      BEFORE DELETE ON project_task_completion_evidence
+      BEGIN
+        SELECT RAISE(ABORT, 'project_task_completion_evidence_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION) {
+    // Goal Continuation Execution Gating V1: Durable Human Approval V1.
+    // Purely additive: one new table (project_goal_continuation_approvals)
+    // with its insert-validation, identity-immutability, revoke-once and
+    // delete-immutability triggers. ZERO rows are manufactured for existing
+    // data. IF NOT EXISTS keeps migration idempotent so test rewind scripts
+    // that set schema_version back to 17 do not crash when the V18 table
+    // (created during initial store construction) already exists.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V17_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_goal_continuation_approvals (
+        approval_id TEXT PRIMARY KEY CHECK (
+          length(approval_id) = 36
+          AND substr(approval_id, 9, 1) = '-'
+          AND substr(approval_id, 14, 1) = '-'
+          AND substr(approval_id, 19, 1) = '-'
+          AND substr(approval_id, 24, 1) = '-'
+          AND approval_id = lower(approval_id)
+          AND replace(approval_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        plan_id TEXT NOT NULL UNIQUE CHECK (length(plan_id) = 36),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        source_evaluation_id TEXT NOT NULL CHECK (source_evaluation_id <> ''),
+        plan_fingerprint TEXT NOT NULL CHECK (
+          length(plan_fingerprint) = 64 AND plan_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        source_evidence_fingerprint TEXT NOT NULL CHECK (
+          length(source_evidence_fingerprint) = 64
+          AND source_evidence_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        approver TEXT NOT NULL CHECK (
+          length(approver) BETWEEN 1 AND 200 AND approver = trim(approver)
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        expires_at INTEGER CHECK (expires_at IS NULL OR expires_at > created_at),
+        revoked_at INTEGER CHECK (revoked_at IS NULL OR revoked_at >= created_at),
+        FOREIGN KEY (plan_id) REFERENCES project_goal_continuation_plans(plan_id),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (source_evaluation_id) REFERENCES project_goal_evaluations(evaluation_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_goal_continuation_approvals_plan
+      ON project_goal_continuation_approvals(plan_id, approval_id);
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_approvals_validate_insert
+      BEFORE INSERT ON project_goal_continuation_approvals
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_goal_continuation_plans AS plan
+          JOIN project_goal_evaluations AS evaluation
+            ON evaluation.evaluation_id = plan.source_evaluation_id
+          WHERE plan.plan_id = NEW.plan_id
+            AND plan.status = 'planned' AND plan.cancelled_at IS NULL
+            AND plan.goal_id = NEW.goal_id
+            AND plan.source_evaluation_id = NEW.source_evaluation_id
+            AND plan.fingerprint = NEW.plan_fingerprint
+            AND plan.source_evidence_fingerprint = NEW.source_evidence_fingerprint
+            AND evaluation.goal_id = NEW.goal_id
+            AND evaluation.applied_at IS NOT NULL
+            AND evaluation.decision = 'retryable'
+        ) THEN RAISE(ABORT, 'project_goal_continuation_approval_incompatible') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_approvals_identity_immutable
+      BEFORE UPDATE OF approval_id, plan_id, goal_id, source_evaluation_id,
+                       plan_fingerprint, source_evidence_fingerprint, approver, created_at
+      ON project_goal_continuation_approvals
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_approval_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_approvals_revoke_once
+      BEFORE UPDATE OF revoked_at ON project_goal_continuation_approvals
+      WHEN NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND NEW.revoked_at >= OLD.created_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_approval_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_approvals_immutable_delete
+      BEFORE DELETE ON project_goal_continuation_approvals
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_approval_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION;
+  }
+
+  if (meta.schema_version === PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION) {
+    // Autonomous Continuation Execution Policy V1: two additive durable
+    // records — the per-goal autonomy policy and the per-step execution
+    // authorization. Purely additive: two new tables with insert-validation,
+    // identity-immutability, one-way-control and delete-immutability triggers.
+    // ZERO rows are manufactured for existing data. IF NOT EXISTS keeps
+    // migration idempotent so test rewind scripts that set schema_version back
+    // to 18 do not crash when the V19 tables (created during initial store
+    // construction) already exist.
+    migrate(PROJECT_TASK_SQLITE_SCHEMA_V18_VERSION, PROJECT_TASK_SQLITE_SCHEMA_V19_VERSION, `
+      CREATE TABLE IF NOT EXISTS project_goal_autonomy_policies (
+        policy_id TEXT PRIMARY KEY CHECK (
+          length(policy_id) = 36
+          AND substr(policy_id, 9, 1) = '-'
+          AND substr(policy_id, 14, 1) = '-'
+          AND substr(policy_id, 19, 1) = '-'
+          AND substr(policy_id, 24, 1) = '-'
+          AND policy_id = lower(policy_id)
+          AND replace(policy_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        goal_id TEXT NOT NULL UNIQUE CHECK (goal_id <> ''),
+        mode TEXT NOT NULL CHECK (mode IN (
+          'manual_only', 'approved_single_step', 'bounded_autonomous'
+        )),
+        suspended_at INTEGER CHECK (suspended_at IS NULL OR suspended_at >= 0),
+        expires_at INTEGER CHECK (expires_at IS NULL OR expires_at > 0),
+        revoked_at INTEGER CHECK (revoked_at IS NULL OR revoked_at >= 0),
+        max_cycles INTEGER CHECK (max_cycles IS NULL OR (max_cycles BETWEEN 1 AND 5)),
+        elapsed_budget_ms INTEGER CHECK (elapsed_budget_ms IS NULL OR elapsed_budget_ms > 0),
+        approver TEXT NOT NULL CHECK (
+          length(approver) BETWEEN 1 AND 200 AND approver = trim(approver)
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+        fingerprint TEXT NOT NULL CHECK (
+          length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        CHECK (
+          (mode = 'bounded_autonomous')
+          OR (max_cycles IS NULL AND elapsed_budget_ms IS NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_goal_autonomy_policies_goal
+      ON project_goal_autonomy_policies(goal_id);
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_validate_insert
+      BEFORE INSERT ON project_goal_autonomy_policies
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM project_goals WHERE goal_id = NEW.goal_id AND status = 'active'
+        ) THEN RAISE(ABORT, 'project_goal_autonomy_policy_goal_terminal') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_identity_immutable
+      BEFORE UPDATE OF policy_id, goal_id, mode, approver, created_at, fingerprint,
+                       max_cycles, elapsed_budget_ms, expires_at
+      ON project_goal_autonomy_policies
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_autonomy_policy_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_suspend_resume
+      BEFORE UPDATE OF suspended_at ON project_goal_autonomy_policies
+      WHEN NOT (
+        (OLD.suspended_at IS NULL AND NEW.suspended_at IS NOT NULL
+          AND NEW.suspended_at >= OLD.created_at)
+        OR (OLD.suspended_at IS NOT NULL AND NEW.suspended_at IS NULL)
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_autonomy_policy_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_revoke_once
+      BEFORE UPDATE OF revoked_at ON project_goal_autonomy_policies
+      WHEN NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND NEW.revoked_at >= OLD.created_at
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_autonomy_policy_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_autonomy_policies_immutable_delete
+      BEFORE DELETE ON project_goal_autonomy_policies
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_autonomy_policy_immutable');
+      END;
+
+      CREATE TABLE IF NOT EXISTS project_goal_continuation_execution_authorizations (
+        authorization_id TEXT PRIMARY KEY CHECK (
+          length(authorization_id) = 36
+          AND substr(authorization_id, 9, 1) = '-'
+          AND substr(authorization_id, 14, 1) = '-'
+          AND substr(authorization_id, 19, 1) = '-'
+          AND substr(authorization_id, 24, 1) = '-'
+          AND authorization_id = lower(authorization_id)
+          AND replace(authorization_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        ),
+        goal_id TEXT NOT NULL CHECK (goal_id <> ''),
+        task_id TEXT NOT NULL UNIQUE CHECK (length(task_id) = 36),
+        plan_id TEXT NOT NULL CHECK (length(plan_id) = 36),
+        policy_fingerprint TEXT NOT NULL CHECK (
+          length(policy_fingerprint) = 64 AND policy_fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        approver TEXT NOT NULL CHECK (
+          length(approver) BETWEEN 1 AND 200 AND approver = trim(approver)
+        ),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        expires_at INTEGER CHECK (expires_at IS NULL OR expires_at > created_at),
+        revoked_at INTEGER CHECK (revoked_at IS NULL OR revoked_at >= created_at),
+        consumed_at INTEGER CHECK (consumed_at IS NULL OR consumed_at >= created_at),
+        fingerprint TEXT NOT NULL CHECK (
+          length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'
+        ),
+        CHECK (NOT (revoked_at IS NOT NULL AND consumed_at IS NOT NULL)),
+        FOREIGN KEY (goal_id) REFERENCES project_goals(goal_id),
+        FOREIGN KEY (task_id) REFERENCES project_tasks(task_id),
+        FOREIGN KEY (plan_id) REFERENCES project_goal_continuation_plans(plan_id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS project_goal_continuation_execution_authorizations_goal
+      ON project_goal_continuation_execution_authorizations(goal_id);
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_validate_insert
+      BEFORE INSERT ON project_goal_continuation_execution_authorizations
+      BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_tasks AS task
+          JOIN project_task_lineage AS lineage ON lineage.task_id = task.task_id
+          JOIN project_goal_continuation_plans AS plan ON plan.plan_id = NEW.plan_id
+          JOIN project_goal_continuation_consumptions AS consumption ON consumption.plan_id = plan.plan_id
+          WHERE task.task_id = NEW.task_id
+            AND lineage.goal_id = NEW.goal_id
+            AND lineage.parent_task_id IS NOT NULL
+            AND task.status = 'accepted'
+            AND task.terminal_at IS NULL
+            AND plan.goal_id = NEW.goal_id
+            AND plan.status = 'planned'
+            AND consumption.created_task_id = NEW.task_id
+        ) THEN RAISE(ABORT, 'project_goal_continuation_execution_authorization_lineage_mismatch') END;
+        SELECT CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM project_goal_autonomy_policies AS policy
+          WHERE policy.goal_id = NEW.goal_id
+            AND policy.fingerprint = NEW.policy_fingerprint
+            AND policy.mode = 'approved_single_step'
+            AND policy.suspended_at IS NULL
+            AND policy.revoked_at IS NULL
+        ) THEN RAISE(ABORT, 'autonomy_authorization_policy_invalid') END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_identity_immutable
+      BEFORE UPDATE OF authorization_id, goal_id, task_id, plan_id, policy_fingerprint,
+                       approver, created_at, fingerprint
+      ON project_goal_continuation_execution_authorizations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_execution_authorization_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_revoke_once
+      BEFORE UPDATE OF revoked_at ON project_goal_continuation_execution_authorizations
+      WHEN NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND NEW.revoked_at >= OLD.created_at
+        AND OLD.consumed_at IS NULL
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_execution_authorization_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_consume_once
+      BEFORE UPDATE OF consumed_at ON project_goal_continuation_execution_authorizations
+      WHEN NOT (
+        OLD.consumed_at IS NULL AND NEW.consumed_at IS NOT NULL
+        AND NEW.consumed_at >= OLD.created_at
+        AND OLD.revoked_at IS NULL
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_execution_authorization_immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS project_goal_continuation_execution_authorizations_immutable_delete
+      BEFORE DELETE ON project_goal_continuation_execution_authorizations
+      BEGIN
+        SELECT RAISE(ABORT, 'project_goal_continuation_execution_authorization_immutable');
+      END
+    `);
+    meta.schema_version = PROJECT_TASK_SQLITE_SCHEMA_V19_VERSION;
+  }
+}
+
+function isErrorWithCode(error: unknown, code: string): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+}
+
+/** Creates a private (0600) SQLite file with the versioned schema. */
+export function initializeProjectTaskSqliteDatabaseV1(databasePath: string): void {
+  if (!isAbsolute(databasePath) || databasePath.includes('\0')) {
+    throw new Error(PROJECT_TASK_SQLITE_ERRORS.invalidPath);
+  }
+
+  let descriptor: number | undefined;
+  let database: DatabaseSync | undefined;
+  let created = false;
+
+  try {
+    try {
+      descriptor = openSync(databasePath, 'wx', 0o600);
+      created = true;
+    } catch (error) {
+      if (isErrorWithCode(error, 'EEXIST')) {
+        throw new Error(PROJECT_TASK_SQLITE_ERRORS.alreadyExists);
+      }
+
+      throw error;
+    }
+
+    closeSync(descriptor);
+    descriptor = undefined;
+
+    // openSync applies the process umask, so enforce the private mode explicitly.
+    chmodSync(databasePath, 0o600);
+
+    database = new DatabaseSync(databasePath);
+    database.exec(createProjectTaskSqliteSchemaV1Sql());
+    database.close();
+    database = undefined;
+  } catch (error) {
+    if (database?.isOpen) {
+      try {
+        database.close();
+      } catch {
+        // Preserve the original initialization error.
+      }
+    }
+
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // Preserve the original initialization error.
+      }
+    }
+
+    if (created) {
+      try {
+        unlinkSync(databasePath);
+      } catch {
+        // Preserve the original initialization error.
+      }
+    }
+
+    throw error;
+  }
+}
