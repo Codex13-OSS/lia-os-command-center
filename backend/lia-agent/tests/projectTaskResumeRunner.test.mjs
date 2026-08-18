@@ -1442,3 +1442,52 @@ test('Layer 16: live workflow unchanged (no codex-skip in live path)', async () 
   assert.ok(workflowSource.includes('executeProjectCodexHandoff'));
   assert.equal(workflowSource.includes('hasCodexSuccessEvidence'), false);
 });
+
+test("Layer 15: terminal completed task preserves valid Codex evidence across recovery", async () => {
+  await fixture(async (store) => {
+    const { run, invocation, attempt, result: snapResult } = createResumableTask(store);
+    store.transition(TASK_A, "codex");
+
+    const start = store.recordCodexStartEvidence({
+      taskId: TASK_A,
+      executionRunId: run.executionRunId,
+      invocationId: invocation.invocationId,
+      launchAttemptId: attempt.launchAttempt.launchAttemptId,
+      launchResultId: snapResult.snapshot.launchResultId,
+      snapshotId: snapResult.snapshot.snapshotId,
+    });
+
+    const evidence = mapCodexResultToEvidence({
+      success: true,
+      executionId: "exec-terminal-history",
+      outcome: "analysis_completed",
+      summary: "Done.",
+      resultText: "",
+    });
+
+    store.recordCodexResultEvidence({
+      codexStartId: start.codexStart.codexStartId,
+      executionId: "exec-terminal-history",
+      outcome: evidence.outcome,
+      success: evidence.success,
+      error: evidence.error,
+      summary: evidence.summary,
+      resultMetadataJson: evidence.resultMetadataJson,
+    });
+
+    store.complete(TASK_A, {
+      executionId: "exec-terminal-history",
+      status: "analyzed",
+      resultText: "Done.",
+      stages: ["planning", "hermes", "codex"],
+    });
+
+    const recovery = store.reconcileRestartSafeTasks();
+    assert.equal(recovery.terminalUnchanged, 1);
+    assert.equal(store.get(TASK_A).status, "completed");
+    assert.equal(
+      store.readCodexStartEvidenceByTask(TASK_A).codexStartId,
+      start.codexStart.codexStartId,
+    );
+  });
+});

@@ -4036,16 +4036,15 @@ export class ProjectTaskSqliteStore implements ProjectTaskStore, ProjectTaskReco
         // Terminal tasks (completed/failed) are already excluded by
         // terminal_at !== null.
         const startTask = rows.find((r) => r.task_id === start.taskId);
-        if (
-          startTask === undefined
-          || (
-            startTask.status !== 'hermes'
-            && startTask.status !== 'codex'
-            && startTask.status !== 'verification'
-            && startTask.status !== 'commit'
-          )
-          || startTask.terminal_at !== null
-        ) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        const activeValid = startTask !== undefined
+          && startTask.terminal_at === null
+          && (startTask.status === "hermes" || startTask.status === "codex" || startTask.status === "verification" || startTask.status === "commit");
+        const terminalValid = startTask !== undefined
+          && startTask.terminal_at !== null
+          && (startTask.status === "completed" || startTask.status === "failed");
+        if (activeValid === false && terminalValid === false) {
+          throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
+        }
         if (!launchAttemptByTask.has(start.taskId)) throw new Error(PROJECT_TASK_CODEX_EVIDENCE_ERRORS.corruptRecord);
         const startResult = launchResultByTask.get(start.taskId);
         if (
