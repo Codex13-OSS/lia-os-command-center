@@ -6,9 +6,15 @@ import { createFileProjectVerificationRegistry } from './services/projectVerific
 import { createProjectTaskStore } from './services/projectTaskStoreFactory.js';
 import { reconcileProjectTasksAtStartup } from './services/projectTaskReconciliation.js';
 import { createProjectSupervisorSchedulingRuntime } from './services/projectSupervisorSchedulingRuntime.js';
+import { ExecutiveBoardSqliteStore } from './services/executiveBoardSqliteStore.js';
 
 const config = loadConfig();
 const projectTaskStore = createProjectTaskStore(config);
+// Board evidence is durable in a separate least-privilege database. It never
+// migrates or broadens the task/Goals authority database.
+const executiveBoardStore = config.projectTaskSqlitePath === ''
+  ? undefined
+  : new ExecutiveBoardSqliteStore(`${config.projectTaskSqlitePath}.board.sqlite`);
 
 // Recover only provably pre-execution durable work before listening. Ambiguous
 // work fails closed, and a recovery failure prevents app.listen.
@@ -28,6 +34,7 @@ const dependencies = {
   ...(projectRegistrySource !== undefined ? { projectRegistrySource } : {}),
   ...(projectVerificationRegistry !== undefined ? { projectVerificationRegistry } : {}),
   projectTaskStore,
+  ...(executiveBoardStore !== undefined ? { executiveBoardStore } : {}),
 };
 
 // Supervisor Scheduling Runtime Wiring (design: supervisor-scheduling-runtime-wiring-design.md).
@@ -69,6 +76,11 @@ server.on('error', (error) => {
 });
 
 function shutdown() {
+  try {
+    executiveBoardStore?.close();
+  } catch {
+    // Best-effort close during shutdown.
+  }
   const closeStore = (projectTaskStore as { close?: () => void }).close;
   if (typeof closeStore === 'function') {
     try {

@@ -19,7 +19,14 @@ import type {
   ProjectGoalRecord,
 } from '../contracts/projectGoal.js';
 import { AUTONOMOUS_V1_CEILING } from '../contracts/autonomousAuthority.js';
-import { AUTONOMY_MODES } from '../contracts/projectGoalAutonomyPolicy.js';
+import {
+  AUTONOMY_BOUNDED_MAX_ELAPSED_BUDGET_MS,
+  AUTONOMY_MODES,
+} from '../contracts/projectGoalAutonomyPolicy.js';
+import {
+  PROJECT_GOAL_MIN_ELAPSED_BUDGET_MS,
+  type ProjectGoalEffortEstimate,
+} from '../contracts/projectGoalEffortEstimate.js';
 import type {
   ProjectTaskStage,
   SafeTaskError,
@@ -35,6 +42,7 @@ import { PROJECT_GOAL_CONTROL_ERRORS } from '../contracts/projectOperatorGoalCon
 import type {
   ContinuationActionRequest,
   CreateGoalRequest,
+  EstimateGoalEffortRequest,
   OperatorGoalAutonomyView,
   OperatorGoalContinuationView,
   OperatorGoalDetail,
@@ -62,6 +70,7 @@ import {
   buildOperatorGoalListItemSafe,
   type OperatorGoalReadModelOptions,
 } from './projectGoalControlReadModel.js';
+import { estimateProjectGoalEffort } from './projectGoalEffortEstimator.js';
 
 /**
  * Operator Goal Control Service — thin use-case layer (design:
@@ -272,6 +281,7 @@ export type GoalControlService = {
   getAutonomyView(goalId: string): GoalControlResult<OperatorGoalAutonomyView>;
   getEvidenceBundle(goalId: string): GoalControlResult<OperatorGoalEvidenceBundle>;
   createGoal(input: CreateGoalRequest): Promise<GoalControlResult<{ goal: OperatorGoalDetail; alreadyKnown: boolean }>>;
+  estimateEffort(input: EstimateGoalEffortRequest): GoalControlResult<{ estimate: ProjectGoalEffortEstimate }>;
   setAutonomy(goalId: string, input: SetAutonomyRequest): GoalControlResult<OperatorGoalAutonomyView>;
   suspend(goalId: string): GoalControlResult<OperatorGoalAutonomyView>;
   resume(goalId: string): GoalControlResult<OperatorGoalAutonomyView>;
@@ -352,7 +362,7 @@ export function createProjectGoalControlService(
       return fail(400, PROJECT_GOAL_CONTROL_ERRORS.invalidAutonomy);
     }
     if (record.maxCycles !== undefined
-      && (typeof record.maxCycles !== 'number' || !Number.isInteger(record.maxCycles) || record.maxCycles < 1 || record.maxCycles > 5)) {
+      && (typeof record.maxCycles !== 'number' || !Number.isInteger(record.maxCycles) || record.maxCycles < 1)) {
       return fail(400, PROJECT_GOAL_CONTROL_ERRORS.invalidAutonomy);
     }
     if (record.elapsedBudgetMs !== undefined
@@ -368,8 +378,13 @@ export function createProjectGoalControlService(
       value: {
         mode: record.mode as SetAutonomyRequest['mode'],
         approver,
-        ...(record.maxCycles !== undefined ? { maxCycles: record.maxCycles as number } : {}),
-        ...(record.elapsedBudgetMs !== undefined ? { elapsedBudgetMs: record.elapsedBudgetMs as number } : {}),
+        ...(record.maxCycles !== undefined ? { maxCycles: Math.min(5, record.maxCycles as number) } : {}),
+        ...(record.elapsedBudgetMs !== undefined ? {
+          elapsedBudgetMs: Math.min(
+            AUTONOMY_BOUNDED_MAX_ELAPSED_BUDGET_MS,
+            Math.max(PROJECT_GOAL_MIN_ELAPSED_BUDGET_MS, record.elapsedBudgetMs as number),
+          ),
+        } : {}),
         ...(record.expiresAt !== undefined ? { expiresAt: record.expiresAt as number } : {}),
       },
     };
@@ -537,6 +552,29 @@ export function createProjectGoalControlService(
     }
   };
 
+  const estimateEffort = (input: EstimateGoalEffortRequest): GoalControlResult<{ estimate: ProjectGoalEffortEstimate }> => {
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      return fail(400, PROJECT_GOAL_CONTROL_ERRORS.invalidGoal);
+    }
+    if (typeof input.objective !== 'string') return fail(400, PROJECT_GOAL_CONTROL_ERRORS.invalidGoal);
+    const objective = input.objective.trim();
+    if (objective.length < 1 || objective.length > 8_000) return fail(400, PROJECT_GOAL_CONTROL_ERRORS.invalidGoal);
+    const priority = input.priority ?? 'normal';
+    if (!PRIORITIES.has(priority)) return fail(400, PROJECT_GOAL_CONTROL_ERRORS.invalidGoal);
+    if (input.projectId !== undefined && (
+      typeof input.projectId !== 'string'
+      || input.projectId.length < 1
+      || input.projectId.length > 120
+      || !SAFE_PROJECT_ID.test(input.projectId)
+      || input.projectId.includes('..')
+    )) return fail(400, PROJECT_GOAL_CONTROL_ERRORS.invalidGoal);
+    const estimate = estimateProjectGoalEffort({
+      objective,
+      priority: priority as EstimateGoalEffortRequest['priority'],
+    });
+    return { ok: true, status: 200, payload: { estimate } };
+  };
+
   const createGoal = async (input: CreateGoalRequest): Promise<GoalControlResult<{ goal: OperatorGoalDetail; alreadyKnown: boolean }>> => {
     const goalId = validateGoalId(input.goalId);
     if (typeof goalId !== 'string') return goalId;
@@ -574,6 +612,9 @@ export function createProjectGoalControlService(
       const validated = validateAutonomy(input.autonomy);
       if (!validated.ok) return validated;
       autonomy = validated.value;
+    }
+    if (autonomy?.maxCycles !== undefined) {
+      autonomy = { ...autonomy, maxCycles: Math.min(autonomy.maxCycles, maxAttempts) };
     }
 
     // The root intent goes through the EXISTING validator (design §D): failure
@@ -620,6 +661,34 @@ export function createProjectGoalControlService(
       return { ok: true, status: 202, payload: { goal: detail, alreadyKnown: false } };
     } catch (error) {
       const code = toSafeCode(error);
+      if (code === PROJECT_GOAL_ERRORS.goalExists) {
+        // The browser may lose the first 202 response. An exact replay of the
+        // same client-minted goalId and normalized intake is success; a reuse
+        // with different meaning remains a fail-closed 409.
+        const existing = store.readGoal(goalId);
+        const rootAttempt = store.listGoalAttempts(goalId)
+          .find((attempt) => attempt.lineage?.attemptNumber === 0);
+        const policy = store.readGoalAutonomyPolicy(goalId);
+        const sameAutonomy = autonomy === undefined
+          ? policy === undefined
+          : policy !== undefined
+            && policy.mode === autonomy.mode
+            && policy.approver === autonomy.approver
+            && policy.maxCycles === autonomy.maxCycles
+            && policy.elapsedBudgetMs === autonomy.elapsedBudgetMs
+            && policy.expiresAt === autonomy.expiresAt;
+        if (
+          existing?.projectId === projectId
+          && existing.objective === objective
+          && existing.maxAttempts === maxAttempts
+          && existing.continuationDepthLimit === continuationDepthLimit
+          && rootAttempt?.fingerprint === intakeFingerprint(normalizedIntent)
+          && sameAutonomy
+        ) {
+          const detail = freshDetail(goalId) ?? buildOperatorGoalDetailSafe(store, goalId, options);
+          return { ok: true, status: 200, payload: { goal: detail, alreadyKnown: true } };
+        }
+      }
       if (code === PROJECT_GOAL_ERRORS.invalidLineage || code === PROJECT_GOAL_ERRORS.invalidGoal) {
         return fail(400, PROJECT_GOAL_CONTROL_ERRORS.invalidGoal);
       }
@@ -924,6 +993,7 @@ export function createProjectGoalControlService(
     getContinuationView,
     getAutonomyView,
     getEvidenceBundle,
+    estimateEffort,
     createGoal,
     setAutonomy,
     suspend,

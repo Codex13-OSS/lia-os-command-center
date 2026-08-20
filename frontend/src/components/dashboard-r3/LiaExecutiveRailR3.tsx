@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ExecutivePriorityPresentationR3 } from '../../domain/executivePriorityR3';
-import { executiveStatsR3, quickActionsR3 } from '../../data/dashboardShellR3Data';
-import { dashboardWeatherR3 } from '../../lib/dashboardTemporalR3';
+import { quickActionsR3 } from '../../data/dashboardShellR3Data';
+
 import { DashboardIconR3 } from './DashboardIconR3';
 
 type LiaExecutiveRailR3Props = {
@@ -13,7 +13,6 @@ type LiaExecutiveRailR3Props = {
 };
 
 export function LiaExecutiveRailR3({ onAgenda, onDocuments, priorityView, decisionsPending, criticalRisks }: LiaExecutiveRailR3Props) {
-  const [showOperation, setShowOperation] = useState(false);
   const [showMoreActions, setShowMoreActions] = useState(false);
   const [showAllActivity, setShowAllActivity] = useState(false);
   const actionHandlers: Record<string, (() => void) | undefined> = { meeting: onAgenda, document: onDocuments };
@@ -33,11 +32,11 @@ export function LiaExecutiveRailR3({ onAgenda, onDocuments, priorityView, decisi
 
   return (
     <aside className="lia-dash-r3-rail-shell" aria-label="Resumen de atención ejecutiva">
-      <section className="lia-dash-r3-weather" aria-label={`Clima simulado en ${dashboardWeatherR3.location}`}>
-        <span className="lia-dash-r3-weather-symbol" aria-hidden="true">☁</span>
+      <section className="lia-dash-r3-weather" aria-label="Clima no conectado">
+        <span className="lia-dash-r3-weather-symbol" aria-hidden="true">○</span>
         <div>
-          <strong>{dashboardWeatherR3.temperature}°C <i>·</i> {dashboardWeatherR3.condition}</strong>
-          <small>{dashboardWeatherR3.location} · Datos simulados</small>
+          <strong>Clima no conectado</strong>
+          <small>Sin fuente meteorológica configurada</small>
         </div>
       </section>
       <section className="lia-dash-r3-rail-summary">
@@ -48,14 +47,7 @@ export function LiaExecutiveRailR3({ onAgenda, onDocuments, priorityView, decisi
           <div><dt>Decisiones pendientes</dt><dd>{decisionsPending}</dd></div>
           <div><dt>Traslado en riesgo</dt><dd>{priorityView.priorityTransfers.length}</dd></div>
         </dl>
-        <button className="lia-dash-r3-local-toggle" type="button" aria-expanded={showOperation} aria-controls="lia-dash-r3-operation-details" onClick={() => setShowOperation((current) => !current)}>
-          {showOperation ? 'Ocultar detalles' : 'Detalles de operación'}
-        </button>
-        <div id="lia-dash-r3-operation-details" className={`lia-r3-reveal${showOperation ? ' lia-r3-reveal-open' : ''}`} aria-hidden={!showOperation}>
-          <div className="lia-r3-reveal-inner lia-dash-r3-stats">
-            {executiveStatsR3.map((stat) => <div key={stat.label}><span>{stat.label}</span><strong>{stat.value}</strong><small>{stat.detail}</small></div>)}
-          </div>
-        </div>
+
       </section>
 
       <section className="lia-dash-r3-rail-actions">

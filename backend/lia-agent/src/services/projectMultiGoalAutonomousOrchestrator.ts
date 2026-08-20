@@ -279,6 +279,7 @@ export async function reconcileMultiGoalOnce(
   let isolatedFailures = derivationFailures.size;
   let selectedCount = 0;
   let launchedCount = 0;
+  let synchronousProgressCount = 0;
 
   // Surface every non-advanceable goal with its safe blocking reason, and
   // every goal whose stage derivation failed (corrupt goal isolation).
@@ -353,7 +354,10 @@ export async function reconcileMultiGoalOnce(
         // runLoopOnce synchronously await an external execution.
       });
       const advanced = result.action !== 'none' && result.action !== 'held';
-      if (advanced) selectedCount += 1;
+      if (advanced) {
+        selectedCount += 1;
+        synchronousProgressCount += 1;
+      }
       results.push({
         goalId,
         stageBefore: result.stageBefore,
@@ -381,6 +385,14 @@ export async function reconcileMultiGoalOnce(
 
   const truncated = order.length > inspectedIds.length;
   const ceilingSkipped = skipped.some((entry) => entry.reason === 'concurrency_ceiling_reached');
+  const boundedAdvanceableAfterPass = synchronousProgressCount > 0 && activeGoals.some((goal) => {
+    try {
+      const details = deriveLoopStageDetails(store, goal.goalId, options);
+      return details.mode === 'bounded_autonomous' && isAdvanceableStage(details);
+    } catch {
+      return false;
+    }
+  });
   const evidence: MultiGoalOrchestrationEvidence = {
     activeGoalCount: activeGoals.length,
     inspectedGoalCount: inspectedIds.length,
@@ -389,7 +401,7 @@ export async function reconcileMultiGoalOnce(
     externalExecutionCeiling: MAX_CONCURRENT_EXTERNAL_EXECUTIONS,
     inFlight,
     isolatedFailureCount: isolatedFailures,
-    moreWorkRemains: truncated || ceilingSkipped,
+    moreWorkRemains: truncated || ceilingSkipped || boundedAdvanceableAfterPass,
   };
 
   return { order, results, skipped, evidence };

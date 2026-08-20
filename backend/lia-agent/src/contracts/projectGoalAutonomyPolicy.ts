@@ -20,6 +20,9 @@ export const AUTONOMY_POLICY_DEFAULT_MODE: AutonomyMode = 'manual_only';
 /** Optional bounded-loop elapsed budget horizon when enabled (MQ3). Never unbounded. */
 export const AUTONOMY_BOUNDED_DEFAULT_ELAPSED_BUDGET_MS = 24 * 60 * 60 * 1000;
 
+/** Hard V1 ceiling. A bounded grant can choose less, never more. */
+export const AUTONOMY_BOUNDED_MAX_ELAPSED_BUDGET_MS = 24 * 60 * 60 * 1000;
+
 /** Redundant read-only cycle convenience bound, clamped <= goal.maxAttempts. */
 export const AUTONOMY_POLICY_MAX_CYCLES_LIMIT = 5;
 

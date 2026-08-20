@@ -8,9 +8,17 @@ const translateLiaAgentPath = (path: string): string => {
     return '/api/hermes/query';
   }
 
+  if (path === '/api/lia-agent/hermes/status') {
+    return '/api/hermes/status';
+  }
+
   if (
     path === '/api/lia-agent/projects/tasks'
     || path.startsWith('/api/lia-agent/projects/tasks/')
+    || path === '/api/lia-agent/projects/goals'
+    || path.startsWith('/api/lia-agent/projects/goals/')
+    || path === '/api/lia-agent/projects/office'
+    || /^\/api\/lia-agent\/projects\/[^/]+\/board-decisions(?:\/[^/]+)?(?:\?.*)?$/.test(path)
   ) {
     return path.replace(/^\/api\/lia-agent/, '/api');
   }

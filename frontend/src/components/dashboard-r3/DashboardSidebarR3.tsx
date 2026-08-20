@@ -3,12 +3,17 @@ import { DashboardIconR3 } from './DashboardIconR3';
 import { createPortal } from 'react-dom';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { ExecutiveSectionR3 } from '../executive-r3/ExecutiveShellR3';
+import { LiaCoreR3 } from '../lia-core-r3/LiaCoreR3';
+import { useLiaCoreState } from '../lia-core-r3/useLiaCoreState';
 
 type DashboardSidebarR3Props = {
   activeSection: ExecutiveSectionR3;
   onDashboard: () => void;
   onAgenda: () => void;
   onProjects: () => void;
+  onAgents: () => void;
+  onServers: () => void;
+  onSettings: () => void;
   onTracking: () => void;
   onDocuments: () => void;
   onAlerts: () => void;
@@ -23,10 +28,14 @@ type DashboardSidebarR3Props = {
 
 export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
   const isCompact = props.presentation === 'compact';
+  const { core } = useLiaCoreState();
   const actions: Record<string, (() => void) | undefined> = {
     dashboard: props.onDashboard,
     agenda: props.onAgenda,
     projects: props.onProjects,
+    agents: props.onAgents,
+    servers: props.onServers,
+    settings: props.onSettings,
     tracking: props.onTracking,
     documents: props.onDocuments,
     alerts: props.onAlerts,
@@ -54,25 +63,22 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
             className={`lia-dash-r3-nav-item${item.id === props.activeSection ? ' lia-dash-r3-nav-item-active' : ''}`}
             onClick={actions[item.id]}
             aria-current={item.id === props.activeSection ? 'page' : undefined}
-            aria-disabled={('disabled' in item && item.disabled) || undefined}
+            aria-disabled={Boolean(('disabled' in item && item.disabled) || undefined) || undefined}
             aria-label={item.label}
             data-tooltip={item.label}
           >
             <DashboardIconR3 name={item.icon} />
             <span className="lia-dash-r3-nav-label">{item.label}</span>
-            {'badge' in item && <b>{item.badge}</b>}
+            {'badge' in item && typeof item.badge === 'number' && <b>{item.badge}</b>}
           </button>
         ))}
       </nav>
 
-      <div className="lia-dash-r3-operator-tile" data-tooltip="Operador LÍA — En línea">
-        <div className="lia-dash-r3-operator-core" tabIndex={isCompact ? 0 : -1} aria-label="Operador LÍA — En línea">
-          <DashboardIconR3 name="operador" />
-          <i className="lia-dash-r3-operator-status" aria-hidden="true" />
-        </div>
+      <div className="lia-dash-r3-operator-tile" data-tooltip={core.ariaLabel}>
+        <LiaCoreR3 model={core} variant="compact" />
         <div className="lia-dash-r3-operator-copy">
-          <strong>Operador LÍA</strong>
-          <span><i />En línea</span>
+          <strong>Núcleo LÍA</strong>
+          <span><i className={`is-${core.state}`} />{core.label}</span>
         </div>
         <button type="button" className="lia-dash-r3-logout" onClick={props.onLogout} aria-label="Cerrar sesión">
           <DashboardIconR3 name="cerrar-sesion" />
@@ -95,7 +101,7 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
       {createPortal(
         <nav className="lia-dash-r3-mobile-nav" aria-label="Navegación móvil">
           {dashboardNavigationR3
-            .filter((item) => ['dashboard', 'agenda', 'projects', 'tracking', 'alerts'].includes(item.id))
+            .filter((item) => ['dashboard', 'agenda', 'projects', 'agents', 'servers'].includes(item.id))
             .map((item) => (
               <button
                 key={`mobile-${item.id}`}
@@ -105,9 +111,9 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
                 aria-current={item.id === props.activeSection ? 'page' : undefined}
                 aria-label={item.label}
               >
-                <DashboardIconR3 name={item.id === 'tracking' ? 'seguimiento' : item.icon} />
-                <span>{item.id === 'tracking' ? 'Seguimiento' : item.label}</span>
-                {'badge' in item && <b>{item.badge}</b>}
+                <DashboardIconR3 name={item.icon} />
+                <span>{item.label}</span>
+                {'badge' in item && typeof item.badge === 'number' && <b>{item.badge}</b>}
               </button>
             ))}
         </nav>,

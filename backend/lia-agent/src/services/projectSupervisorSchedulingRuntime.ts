@@ -45,10 +45,9 @@ import {
  * - RESTART: pending wakeups and the latch are intentionally ephemeral.
  *   Recovery evidence is the durable rows plus the startup pass — a
  *   surviving in-memory callback is never assumed.
- * - ANTI-LIVELOCK: an automatic follow-up pass is requested ONLY when the
- *   previous pass was truncated (more advanceable goals than one pass may
- *   inspect). A ceiling-skipped pass alone NEVER chains, so zero-progress
- *   passes cannot recurse.
+ * - ANTI-LIVELOCK: an automatic follow-up is requested only after truncation
+ *   or proven synchronous progress on a bounded-autonomous Goal with another
+ *   safe boundary ready. Held/ceiling-only passes never recurse.
  *
  * The supervisor never approves plans, never creates execution
  * authorization, never widens capabilities, and never calls the runner
@@ -208,9 +207,9 @@ export function createProjectSupervisorSchedulingRuntime(
       lastPass = await runPass(source);
       lastFailureReason = undefined;
       failedClosed = false; // a completed pass clears the latch
-      // Anti-livelock: auto-follow-up ONLY on truncation, NEVER on a
-      // ceiling-skipped pass alone.
-      if (lastPass.truncated) pendingWakeup = true;
+      // Continue only after proven durable progress with another advanceable
+      // boundary, or truncation. Held/zero-progress passes never recurse.
+      if (lastPass.truncated || (lastPass.moreWorkRemains && lastPass.selectedGoalCount > 0)) pendingWakeup = true;
     } catch (error) {
       failedClosed = true; // wiring failure fails closed
       lastFailureReason = toSafeReason(error);
@@ -243,7 +242,7 @@ export function createProjectSupervisorSchedulingRuntime(
       lastPass = summary;
       lastFailureReason = undefined;
       failedClosed = false; // operator success clears the fail-closed latch
-      if (summary.truncated) pendingWakeup = true;
+      if (summary.truncated || (summary.moreWorkRemains && summary.selectedGoalCount > 0)) pendingWakeup = true;
       return { ok: true, pass: summary };
     } catch (error) {
       failedClosed = true;

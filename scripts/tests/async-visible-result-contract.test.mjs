@@ -125,46 +125,28 @@ test('frontend maps controlled Hermes failures and retains a generic unknown fal
   assert.match(client, /FAILURE_MESSAGES\[code\] \?\? 'La ejecución no pudo completarse\.'/);
 });
 
-test('frontend creates new persisted tasks, recovers reloads, retries idempotently and avoids synchronous workflow', async () => {
-  const [client, component] = await Promise.all([readFile(clientPath, 'utf8'), readFile(componentPath, 'utf8')]);
-  assert.ok(client.indexOf('storage.setItem(LIA_PROJECT_TASK_STORAGE_KEY') < client.indexOf('export async function submitProjectTask'));
-  assert.doesNotMatch(client, /const existing = loadPersistedProjectTask\(storage\)/);
-  assert.match(client, /taskId: createProjectTaskId\(\)/);
-  assert.match(client, /typeof globalThis\.crypto\?\.randomUUID === 'function'/);
-  assert.match(client, /globalThis\.crypto\.getRandomValues\(new Uint8Array\(16\)\)/);
-  assert.match(client, /bytes\[6\].*0x40/);
-  assert.match(client, /bytes\[8\].*0x80/);
-  assert.match(client, /export function clearPersistedProjectTask\(taskId: string/);
-  assert.match(client, /persisted\?\.taskId === taskId/);
-  assert.match(client, /body\.status as LiaProjectTaskStage/);
-  assert.match(component, /useEffect\(\(\) => \{[\s\S]*?const saved = loadPersistedProjectTask\(\)/);
-  assert.match(component, /result\.kind === 'unknown'\) \{ clearPersistedProjectTask\(task\.taskId\)/);
-  assert.match(component, /if \(submitted === 'ambiguous'\) \{[\s\S]*?await submitProjectTask\(task\)/);
-  assert.match(component, /No fue posible preparar o enviar la tarea\./);
-  assert.doesNotMatch(component, /No fue posible iniciar la recuperación de la tarea\./);
-  assert.match(component, /LÍA · Hermes · Codex conectados/);
-  assert.match(component, /LÍA está recuperando el último estado confirmado de la tarea\./);
-  assert.match(component, /eyebrow: 'LÍA ESTÁ LISTA'/);
-  assert.match(component, /label: 'Preparando'/);
-  assert.match(component, /label: 'Hermes'/);
-  assert.match(component, /label: 'Ejecutando'/);
-  assert.match(component, /label: 'Verificando'/);
-  assert.match(component, /label: 'Guardando'/);
-  assert.match(component, /stage === 'accepted' \|\| stage === 'planning'/);
-  assert.match(component, /aria-current=\{step\.state === 'active' \? 'step' : undefined\}/);
-  assert.match(component, /Análisis completado/);
-  assert.match(component, /receipt\.resultText/);
-  assert.match(component, /No requerida/);
-  assert.match(component, /receipt\.verification\.checksPassed/);
-  assert.match(component, /receipt\.commit/);
-  assert.match(component, /El servicio pudo haberse reiniciado/);
-  assert.match(component, /setReceipt\(result\.receipt\)/);
-  assert.match(component, /result\.kind === 'temporary'[\s\S]*?await wait\(TEMPORARY_RETRY_MS\)/);
-  assert.doesNotMatch(component, /shouldPauseAfterTemporaryFailure/);
-  assert.doesNotMatch(component, /MAX_POLL_DURATION_MS/);
-  assert.doesNotMatch(component, /El seguimiento se pausó/);
+test('frontend creates client-minted idempotent Goals and avoids the legacy synchronous workflow', async () => {
+  const [goalClient, component] = await Promise.all([
+    readFile(new URL('../../frontend/src/integrations/liaProjectGoalClient.ts', import.meta.url), 'utf8'),
+    readFile(componentPath, 'utf8'),
+  ]);
+  assert.match(goalClient, /function createGoalId\(\)/);
+  assert.match(goalClient, /typeof globalThis\.crypto\?\.randomUUID === 'function'/);
+  assert.match(goalClient, /globalThis\.crypto\.getRandomValues\(new Uint8Array\(16\)\)/);
+  assert.match(goalClient, /bytes\[6\].*0x40/);
+  assert.match(goalClient, /bytes\[8\].*0x80/);
+  assert.match(goalClient, /goalId: createGoalId\(\)/);
+  assert.match(goalClient, /body: JSON\.stringify\(goal\.request\)/);
+  assert.match(goalClient, /return first\.kind === 'ambiguous' \? submitOnce\(goal\) : first/);
+  assert.match(component, /estimateLiaProjectGoalEffort\(/);
+  assert.match(component, /const goal = prepareLiaProjectGoal\(/);
+  assert.match(component, /const result = await submitLiaProjectGoal\(goal\)/);
+  assert.match(component, /result\.kind === 'accepted'/);
+  assert.match(component, /window\.dispatchEvent\(new Event\(LIA_GOAL_CREATED_EVENT\)\)/);
+  assert.match(component, /No pude confirmar si el objetivo fue registrado/);
+  assert.match(component, /setInstruction\(objective\)/);
   assert.doesNotMatch(component, /requestLiaProjectTaskWorkflow/);
-  assert.doesNotMatch(client, /tasks\/workflow/);
+  assert.doesNotMatch(goalClient, /tasks\/workflow/);
 });
 
 test('async terminal receipt preserves only bounded analyzed result text', async () => {

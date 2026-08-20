@@ -122,6 +122,14 @@ export function createProjectGoalControlRouter(dependencies: ProjectGoalControlD
     sendResult(response, result);
   }).all(methodNotAllowed(['GET', 'POST']));
 
+  // Stable read-only computation: POST carries intake text but writes no state.
+  // It must precede `:goalId` so "effort-estimate" is never parsed as an id.
+  router.route('/api/projects/goals/effort-estimate').post((request, response) => {
+    if (!unsupported(response)) return;
+    const result = service.estimateEffort(bodyOf(request) as Parameters<typeof service.estimateEffort>[0]);
+    sendResult(response, result);
+  }).all(methodNotAllowed(['POST']));
+
   // §B: goal detail.
   router.route('/api/projects/goals/:goalId').get((request, response) => {
     if (!unsupported(response)) return;

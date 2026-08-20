@@ -59,8 +59,27 @@ export function LiaConversationPanelR3({ controller }: Props) {
           placeholder="Escribe a LÍA..."
           value={controller.message}
         />
+        <button
+          type="button"
+          className={`lia-conversation-r3-mic is-${controller.voice.state}`}
+          aria-label={!controller.voice.recognitionSupported ? 'Voz no disponible en este navegador' : controller.voice.state === 'listening' || controller.voice.state === 'starting' ? 'Detener reconocimiento de voz' : 'Iniciar reconocimiento de voz'}
+          title={controller.voice.recognitionSupported ? 'Usar reconocimiento de voz' : 'Voz no disponible en este navegador'}
+          disabled={controller.pending || !controller.voice.recognitionSupported}
+          onClick={controller.voice.state === 'listening' || controller.voice.state === 'starting' ? controller.voice.stop : controller.voice.start}
+        >
+          <span aria-hidden="true">{controller.voice.state === 'listening' || controller.voice.state === 'starting' ? '■' : '●'}</span>
+        </button>
         <button type="submit" aria-label="Enviar mensaje a LÍA" disabled={controller.pending || !controller.message.trim()}>↑</button>
       </form>
+      <div className="lia-conversation-r3-voice-status" role="status" aria-live="polite">
+        {controller.voice.state === 'starting' && 'Solicitando acceso al micrófono…'}
+        {controller.voice.state === 'listening' && (controller.voice.interimTranscript || 'Escuchando…')}
+        {controller.voice.state === 'transcript_ready' && 'Transcripción lista para revisar y enviar.'}
+        {controller.voice.state === 'error' && controller.voice.error}
+        {!controller.voice.recognitionSupported && 'Voz no disponible en este navegador.'}
+        {controller.voice.state === 'speaking' && <button type="button" onClick={controller.voice.cancelSpeech}>Detener voz</button>}
+      </div>
+      <small className="lia-conversation-r3-voice-privacy">El reconocimiento de voz depende de las capacidades del navegador. LÍA no almacena audio y nuestro backend no recibe audio en V1.</small>
     </aside>
   );
 }

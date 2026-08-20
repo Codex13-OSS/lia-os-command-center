@@ -18,11 +18,27 @@ import { requestLiaHermesResponse } from './integrations/liaHermesChatClient';
 import { DashboardShellR3 } from './components/dashboard-r3/DashboardShellR3';
 import { AgendaShellR3 } from './components/agenda-r3/AgendaShellR3';
 import { ProjectsShellR3 } from './components/projects-r3/ProjectsShellR3';
+import { OfficeShellR3 } from './components/office-r3/OfficeShellR3';
+import { ServersShellR3 } from './components/servers-r3/ServersShellR3';
+import { SettingsShellR3 } from './components/settings-r3/SettingsShellR3';
+import { LiaOnboardingR1 } from './components/onboarding-r1/LiaOnboardingR1';
+import { createDefaultLiaUserProfile, type LiaUserProfile } from './domain/liaUserProfile';
+import {
+  explainLiaPersonalAuthError,
+  loginLiaPersonalAccount,
+  logoutLiaPersonalAccount,
+  readLiaPersonalSession,
+  registerLiaPersonalAccount,
+  saveLiaPersonalProfile,
+} from './integrations/liaPersonalAccountClient';
 import { DashboardIconR3 } from './components/dashboard-r3/DashboardIconR3';
 import type { LiaConversationController } from './components/lia-r3/liaConversationController';
+import { LiaCoreStateProvider } from './components/lia-core-r3/useLiaCoreState';
+import { LiaBrowserVoiceAdapter } from './integrations/liaBrowserVoice';
 import './styles/agendaExecutiveR3.css';
+import './styles/liaPremiumDepthR3.css';
 
-type View = 'dashboard' | 'agenda' | 'projects' | 'tracking' | 'documents' | 'alerts';
+type View = 'dashboard' | 'agenda' | 'projects' | 'agents' | 'servers' | 'tracking' | 'documents' | 'alerts' | 'settings';
 
 const DOCUMENT_GENERATOR_URL = 'http://38.242.222.25:3023';
 const agendaR3Enabled = true;
@@ -30,9 +46,14 @@ const liaConversationR3Enabled = true;
 
 export default function App() {
   const [logged, setLogged] = useState(false);
+  const [accountChecking, setAccountChecking] = useState(true);
+  const [registrationOpen, setRegistrationOpen] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginPending, setLoginPending] = useState(false);
+  const [profile, setProfile] = useState<LiaUserProfile>(() => createDefaultLiaUserProfile());
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [view, setView] = useState<View>('dashboard');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [liaState, setLÍAState] = useState('En línea');
@@ -51,19 +72,67 @@ export default function App() {
     },
   ]);
   const [hideTabletLÍAFloat, setHideTabletLÍAFloat] = useState(false);
-  const [mobileOrbListening, setMobileOrbListening] = useState(false);
   const [mobileLÍAOpen, setMobileLÍAOpen] = useState(false);
   const [activeLiaAction, setActiveLiaAction] = useState<string | null>(null);
   const [liaQueryPending, setLiaQueryPending] = useState(false);
   const [liaPanelOpen, setLiaPanelOpen] = useState(false);
   const liaQueryPendingRef = useRef(false);
   const mobileInputRef = useRef<HTMLInputElement | null>(null);
-  const orbTimeoutRef = useRef<number | null>(null);
+  const voiceOriginRef = useRef(false);
+  const voiceAdapterRef = useRef<LiaBrowserVoiceAdapter | null>(null);
+  if (!voiceAdapterRef.current) voiceAdapterRef.current = new LiaBrowserVoiceAdapter();
+  const voiceAdapter = voiceAdapterRef.current;
+  const [voiceSnapshot, setVoiceSnapshot] = useState(voiceAdapter.getSnapshot);
+
+  useEffect(() => {
+    let active = true;
+
+    void readLiaPersonalSession()
+      .then((session) => {
+        if (!active || !session.authenticated) return;
+        setProfile(session.profile);
+        setLogged(true);
+        setOnboardingOpen(!session.profile.onboardingCompleted);
+      })
+      .catch(() => {
+        if (active) setLoginError('No fue posible comprobar la sesión.');
+      })
+      .finally(() => {
+        if (active) setAccountChecking(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    voiceAdapter.configure({
+      language: profile.voice.language || profile.locale.language,
+      voiceURI: profile.voice.voiceURI,
+    });
+  }, [profile.locale.language, profile.voice.language, profile.voice.voiceURI, voiceAdapter]);
+
+  useEffect(() => {
+    voiceAdapter.setTranscriptListener((transcript) => {
+      voiceOriginRef.current = true;
+      setMessage(transcript);
+      setLiaPanelOpen(true);
+    });
+    const unsubscribe = voiceAdapter.subscribe(() => setVoiceSnapshot(voiceAdapter.getSnapshot()));
+    return () => {
+      unsubscribe();
+      voiceAdapter.cleanup();
+    };
+  }, [voiceAdapter]);
 
   const viewContext: Record<View, string> = {
     dashboard: 'Centro ejecutivo',
     agenda: 'Agenda ejecutiva',
     projects: 'Proyectos',
+    agents: 'Oficina de agentes',
+    servers: 'Administración de servidores',
+    settings: 'Configuración personal',
     tracking: 'Seguimiento operativo',
     documents: 'Documentos',
     alerts: 'Alertas',
@@ -257,6 +326,8 @@ export default function App() {
     if (!clean || liaQueryPendingRef.current) return;
 
     const pendingText = 'Consultando el núcleo de LÍA...';
+    const originatedByVoice = voiceOriginRef.current;
+    voiceOriginRef.current = false;
 
     liaQueryPendingRef.current = true;
     setLiaQueryPending(true);
@@ -302,6 +373,7 @@ export default function App() {
         addActivity(
           `LÍA respondió: ${clean.length > 44 ? `${clean.slice(0, 44)}…` : clean}`,
         );
+        if (originatedByVoice) voiceAdapter.speak(result.response);
       } else {
         pushLÍALog('Hermes · consulta no completada');
       }
@@ -324,14 +396,22 @@ export default function App() {
       void sendLÍA();
     },
     openPanel: () => setLiaPanelOpen(true),
-    closePanel: () => setLiaPanelOpen(false),
+    closePanel: () => {
+      voiceAdapter.cancel();
+      voiceAdapter.cancelSpeech();
+      setLiaPanelOpen(false);
+    },
+    voice: {
+      ...voiceSnapshot,
+      start: () => { voiceAdapter.start(); },
+      stop: () => { voiceAdapter.stop(); },
+      cancelSpeech: () => { voiceAdapter.cancelSpeech(); },
+    },
   };
 
   const closeMobileLÍA = () => {
     setMobileLÍAOpen(false);
-    setMobileOrbListening(false);
-    setLÍAState('En línea');
-    if (orbTimeoutRef.current) window.clearTimeout(orbTimeoutRef.current);
+    voiceAdapter.cancel();
   };
 
   const activateMobileOrb = () => {
@@ -340,10 +420,7 @@ export default function App() {
       return;
     }
 
-    if (orbTimeoutRef.current) window.clearTimeout(orbTimeoutRef.current);
     setMobileLÍAOpen(true);
-    setMobileOrbListening(true);
-    setLÍAState('Escuchando...');
     setLÍAMessages((prev) => {
       const prompt = { role: 'assistant' as const, text: 'Indica prioridad, documento o alerta.' };
       const last = prev[prev.length - 1];
@@ -356,15 +433,7 @@ export default function App() {
     });
     pushLÍALog('Interacción móvil activada.');
     window.setTimeout(() => mobileInputRef.current?.focus(), 120);
-    orbTimeoutRef.current = window.setTimeout(() => {
-      setMobileOrbListening(false);
-      setLÍAState('En línea');
-    }, 2400);
   };
-
-  useEffect(() => () => {
-    if (orbTimeoutRef.current) window.clearTimeout(orbTimeoutRef.current);
-  }, []);
 
   useEffect(() => {
     const tabletWidthQuery = window.matchMedia('(min-width: 768px) and (max-width: 1366px)');
@@ -375,7 +444,7 @@ export default function App() {
       setHideTabletLÍAFloat(shouldHide);
       if (shouldHide) {
         setMobileLÍAOpen(false);
-        setMobileOrbListening(false);
+        voiceAdapter.cancel();
       }
     };
 
@@ -387,7 +456,103 @@ export default function App() {
       tabletWidthQuery.removeEventListener('change', syncTabletLÍAFloat);
       coarseTabletQuery.removeEventListener('change', syncTabletLÍAFloat);
     };
-  }, []);
+  }, [voiceAdapter]);
+
+  const handleLogin = async () => {
+    if (loginPending) return;
+
+    setLoginPending(true);
+    setLoginError(null);
+
+    try {
+      const account = await loginLiaPersonalAccount({
+        email: loginEmail,
+        password: loginPassword,
+      });
+
+      setProfile(account.profile);
+      setLogged(true);
+      setRegistrationOpen(false);
+      setOnboardingOpen(!account.profile.onboardingCompleted);
+      setView('dashboard');
+    } catch (error) {
+      setLoginError(explainLiaPersonalAuthError(error));
+    } finally {
+      setLoginPending(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logoutLiaPersonalAccount();
+    } finally {
+      setLogged(false);
+      setRegistrationOpen(false);
+      setOnboardingOpen(false);
+      setProfile(createDefaultLiaUserProfile());
+      setLoginPassword('');
+      setView('dashboard');
+    }
+  };
+
+  if (accountChecking) {
+    return (
+      <main className="lia-setup-r1 lia-account-loading-r2">
+        <div className="lia-setup-r1-ambient" aria-hidden="true"><i /><i /><i /></div>
+        <div className="lia-setup-r1-welcome">
+          <div className="lia-setup-r1-orb" aria-hidden="true"><i /><b>LÍA</b></div>
+          <span>ENTORNO PERSONAL</span>
+          <h1>Preparando tu espacio</h1>
+          <p>Estamos comprobando tu sesión de forma segura.</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (registrationOpen && !logged) {
+    return (
+      <LiaOnboardingR1
+        mode="registration"
+        initialProfile={createDefaultLiaUserProfile()}
+        onCancel={() => {
+          setRegistrationOpen(false);
+          setLoginError(null);
+        }}
+        onComplete={async (nextProfile, credentials) => {
+          if (!credentials) throw new Error('Faltan los datos de registro.');
+
+          try {
+            const account = await registerLiaPersonalAccount({
+              email: credentials.email,
+              password: credentials.password,
+              displayName: nextProfile.identity.displayName,
+              profile: nextProfile,
+            });
+
+            setProfile(account.profile);
+            setLogged(true);
+            setRegistrationOpen(false);
+            setOnboardingOpen(false);
+            setView('dashboard');
+          } catch (error) {
+            /* LIA_REGISTRATION_COMMIT_RECOVERY_V2 */
+            const recovered = await readLiaPersonalSession().catch(() => null);
+
+            if (recovered?.authenticated) {
+              setProfile(recovered.profile);
+              setLogged(true);
+              setRegistrationOpen(false);
+              setOnboardingOpen(!recovered.profile.onboardingCompleted);
+              setView('dashboard');
+              return;
+            }
+
+            throw new Error(explainLiaPersonalAuthError(error));
+          }
+        }}
+      />
+    );
+  }
 
   if (!logged) {
     return (
@@ -395,16 +560,33 @@ export default function App() {
         email={loginEmail}
         password={loginPassword}
         error={loginError}
+        pending={loginPending}
         onEmailChange={setLoginEmail}
         onPasswordChange={setLoginPassword}
-        onSubmit={() => {
-          if (loginEmail !== 'ejecutivo@lia.local' || loginPassword !== 'lia2026') {
-            setLoginError('Credenciales de acceso: ejecutivo@lia.local / lia2026');
-            return;
-          }
-
+        onSubmit={() => void handleLogin()}
+        onCreateAccount={() => {
           setLoginError(null);
-          setLogged(true);
+          setRegistrationOpen(true);
+        }}
+      />
+    );
+  }
+
+  if (onboardingOpen && logged) {
+    return (
+      <LiaOnboardingR1
+        mode="settings"
+        initialProfile={profile}
+        onCancel={() => setOnboardingOpen(false)}
+        onComplete={async (nextProfile) => {
+          try {
+            const account = await saveLiaPersonalProfile(nextProfile);
+            setProfile(account.profile);
+            setOnboardingOpen(false);
+            setView('dashboard');
+          } catch (error) {
+            throw new Error(explainLiaPersonalAuthError(error));
+          }
         }}
       />
     );
@@ -412,52 +594,76 @@ export default function App() {
 
   if ((() => view === 'dashboard')()) {
     return (
+      <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}>
       <DashboardShellR3
         onDashboard={() => setView('dashboard')}
         onAgenda={() => setView('agenda')}
         onProjects={() => setView('projects')}
+        onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')}
         onTracking={() => setView('tracking')}
         onDocuments={openDocumentGenerator}
         onAlerts={() => setView('alerts')}
-        onLogout={() => setLogged(false)}
+        onLogout={handleLogout}
         conversationController={liaConversationR3Enabled ? liaConversationController : undefined}
       />
+      </LiaCoreStateProvider>
     );
   }
 
   if (view === 'agenda' && agendaR3Enabled) {
-    return <AgendaShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={() => setLogged(false)} />;
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><AgendaShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
   }
 
   if (view === 'projects') {
-    return <ProjectsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={() => setLogged(false)} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} />;
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><ProjectsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
+  }
+
+  if (view === 'agents') {
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><OfficeShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
+  }
+
+  if (view === 'servers') {
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><ServersShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
+  }
+
+  if (view === 'settings') {
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><SettingsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} profile={profile} onReconfigure={() => setOnboardingOpen(true)} /></LiaCoreStateProvider>;
   }
 
   const nav = [
     ['dashboard', 'Inicio'],
     ['agenda', 'Agenda'],
     ['projects', 'Proyectos'],
+    ['agents', 'Oficina'],
+    ['servers', 'Servidores'],
     ['tracking', 'Seguimiento'],
     ['documents', 'Generador de documentos'],
     ['alerts', 'Alertas'],
+    ['settings', 'Configuración'],
   ] as const;
 
   const mobileTabLabels: Record<View, string> = {
     dashboard: 'Inicio',
     agenda: 'Agenda',
     projects: 'Proyectos',
+    agents: 'Oficina',
+    servers: 'Servidores',
     tracking: 'Seguimiento',
     documents: 'Documentos',
     alerts: 'Alertas',
+    settings: 'Configuración',
   };
 
-  const mobileTabIcons: Record<View, 'inicio' | 'agenda' | 'procesos' | 'seguimiento' | 'documentos' | 'alertas'> = {
+  const mobileTabIcons: Record<View, 'inicio' | 'agenda' | 'procesos' | 'agentes' | 'servidores' | 'seguimiento' | 'documentos' | 'alertas' | 'configuracion'> = {
     dashboard: 'inicio',
     agenda: 'agenda',
     projects: 'procesos',
+    agents: 'agentes',
+    servers: 'servidores',
     tracking: 'seguimiento',
     documents: 'documentos',
     alerts: 'alertas',
+    settings: 'configuracion',
   };
 
   const handleMobileNavLink = (id: View) => {
@@ -587,7 +793,7 @@ export default function App() {
             <h2>{view === 'dashboard' ? 'Centro de mando ejecutivo' : nav.find(([id]) => id === view)?.[1]}</h2>
           </div>
           <ExecutiveEnvironmentCard variant="compact" />
-          <button className="secondary" onClick={() => setLogged(false)}>Cerrar sesión</button>
+          <button className="secondary" onClick={() => void handleLogout()}>Cerrar sesión</button>
         </header>
 
         {view === 'dashboard' && (
@@ -709,15 +915,15 @@ export default function App() {
           <div className="lia-voice-title-v411">
             <p className="eyebrow">ASISTENTE EJECUTIVO</p>
             <h3>LÍA en línea</h3>
-            <span>Lista para escuchar y asistir.</span>
+            <span>{voiceSnapshot.recognitionSupported ? 'Micrófono disponible bajo tu control.' : 'Chat de texto disponible.'}</span>
           </div>
         </div>
 
         <section className={`lia-listen-state-v411 ${liaState.toLowerCase().replace(/\s+/g, '-')}`}>
           <span />
           <div>
-            <strong>Modo escucha preparado</strong>
-            <small>Activación por voz en próxima fase.</small>
+            <strong>{voiceSnapshot.state === 'listening' ? 'Escuchando' : voiceSnapshot.state === 'starting' ? 'Solicitando permiso' : voiceSnapshot.recognitionSupported ? 'Voz disponible' : 'Voz no compatible'}</strong>
+            <small>{voiceSnapshot.error ?? 'El reconocimiento de voz depende de las capacidades del navegador.'}</small>
           </div>
         </section>
 
@@ -730,6 +936,7 @@ export default function App() {
               onKeyDown={(e) => e.key === 'Enter' && void sendLÍA()}
               placeholder={liaQueryPending ? "LÍA está procesando..." : "Habla con LÍA..."}
             />
+            <button type="button" className={`lia-browser-voice-button is-${voiceSnapshot.state}`} aria-label={voiceSnapshot.state === 'listening' || voiceSnapshot.state === 'starting' ? 'Detener reconocimiento de voz' : 'Iniciar reconocimiento de voz'} disabled={liaQueryPending || !voiceSnapshot.recognitionSupported} onClick={voiceSnapshot.state === 'listening' || voiceSnapshot.state === 'starting' ? () => voiceAdapter.stop() : () => voiceAdapter.start()}>{voiceSnapshot.state === 'listening' || voiceSnapshot.state === 'starting' ? '■' : '●'}</button>
             <button aria-label="Enviar instrucción a LÍA" disabled={liaQueryPending} onClick={() => void sendLÍA()}>↗</button>
           </div>
           <small>Escribe o prepara una instrucción.</small>
@@ -804,7 +1011,7 @@ export default function App() {
     {!hideTabletLÍAFloat && (
       <button
         type="button"
-        className={`mobile-lia-orb mobile-lia-floating-control ${mobileOrbListening ? 'listening' : ''}`}
+        className="mobile-lia-orb mobile-lia-floating-control"
         aria-label={mobileLÍAOpen ? 'Cerrar panel móvil de LÍA' : 'Abrir panel móvil de LÍA'}
         aria-expanded={mobileLÍAOpen}
         onClick={activateMobileOrb}
@@ -847,8 +1054,10 @@ export default function App() {
             onKeyDown={(e) => e.key === 'Enter' && void sendLÍA()}
             placeholder={liaQueryPending ? "LÍA está procesando..." : "Habla con LÍA..."}
           />
+          <button type="button" className={`lia-browser-voice-button is-${voiceSnapshot.state}`} aria-label={voiceSnapshot.state === 'listening' || voiceSnapshot.state === 'starting' ? 'Detener reconocimiento de voz' : 'Iniciar reconocimiento de voz'} disabled={liaQueryPending || !voiceSnapshot.recognitionSupported} onClick={voiceSnapshot.state === 'listening' || voiceSnapshot.state === 'starting' ? () => voiceAdapter.stop() : () => voiceAdapter.start()}>{voiceSnapshot.state === 'listening' || voiceSnapshot.state === 'starting' ? '■' : '●'}</button>
           <button disabled={liaQueryPending} onClick={() => void sendLÍA()}>↑</button>
         </div>
+        <small className="lia-browser-voice-copy">{voiceSnapshot.error ?? (voiceSnapshot.recognitionSupported ? 'El reconocimiento de voz depende de las capacidades del navegador.' : 'Reconocimiento de voz no disponible; usa el campo de texto.')}</small>
       </section>
     )}
     </>

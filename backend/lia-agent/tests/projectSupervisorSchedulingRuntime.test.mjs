@@ -784,12 +784,15 @@ test('17: terminalization wakeup fires after a decoupled launch completes', asyn
     assert.equal(outcome.pass.externalExecutionSlotsUsed, 1);
     assert.equal(queue.queued(), 0, 'no auto follow-up for a single non-truncated pass');
 
-    // The decoupled launch completes -> terminalization wakeup -> one pass.
+    // The decoupled launch completes -> terminalization wakeup. Because this
+    // Goal is bounded_autonomous, proven synchronous progress may chain the
+    // next safe boundaries without manufacturing another human approval.
     await Promise.all(launches.map((launch) => launch()));
     assert.equal(queue.queued(), 1, 'terminalization requested exactly one follow-up pass');
     await queue.drainAll();
-    assert.equal(supervisor.hud().lastPass.source, 'terminalization');
-    assert.equal(supervisor.hud().lastPass.selectedGoalCount, 1, 'the terminal task advanced one boundary');
+    assert.equal(supervisor.hud().lastPass.source, 'followup');
+    assert.equal(supervisor.hud().lastPass.selectedGoalCount, 1, 'bounded continuation advanced through safe boundaries');
+    assert.equal(store.listGoalAttempts(g.goalId).length, 3, 'the next bounded continuation was materialized');
     store.close();
   } finally {
     await rm(directory, { recursive: true, force: true });

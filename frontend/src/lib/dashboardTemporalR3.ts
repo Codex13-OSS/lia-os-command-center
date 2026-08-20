@@ -1,12 +1,6 @@
 const dayLabelsR3 = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'] as const;
 const monthLabelsR3 = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'] as const;
 
-export const dashboardWeatherR3 = {
-  temperature: 24,
-  condition: 'Parcialmente nublado',
-  location: 'Ciudad de México',
-  source: 'simulation',
-} as const;
 
 export function formatExecutiveDateR3(date: Date): string {
   return `${dayLabelsR3[date.getDay()]} ${String(date.getDate()).padStart(2, '0')} ${monthLabelsR3[date.getMonth()]} ${date.getFullYear()}`;

@@ -7,6 +7,7 @@ import type { ProjectGoalContinuationPlanReasonCode } from './projectGoalContinu
 import type { ProjectGoalStatus } from './projectGoal.js';
 import type { ProjectGoalEvaluationDecision, ProjectGoalEvaluationReasonCode } from './projectGoalEvaluation.js';
 import type { LoopBudget, LoopStage } from '../services/projectBoundedAutonomousLoopRuntime.js';
+import type { ProjectGoalEffortEstimateInput } from './projectGoalEffortEstimate.js';
 
 /**
  * Operator Goal Control Surface — bounded, non-secret operator-visible shapes
@@ -292,6 +293,10 @@ export type CreateGoalRequest = {
     elapsedBudgetMs?: number;
     expiresAt?: number;
   };
+};
+
+export type EstimateGoalEffortRequest = ProjectGoalEffortEstimateInput & {
+  projectId?: string;
 };
 
 export type SetAutonomyRequest = {

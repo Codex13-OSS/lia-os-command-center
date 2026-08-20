@@ -447,7 +447,7 @@ test('05: create goal => 202, active, root attempt accepted and never executed, 
   }
 });
 
-test('06: duplicate create => 409 project_goal_already_exists, no second row', async () => {
+test('06: exact duplicate create is idempotent; changed meaning conflicts; no second row', async () => {
   const { directory, databasePath } = await tempDatabase('lia-gcs-dupcreate-');
   try {
     const store = new ProjectTaskSqliteStore({ databasePath, now: () => 1000, maxActive: 64, maxRecords: 256 });
@@ -455,8 +455,13 @@ test('06: duplicate create => 409 project_goal_already_exists, no second row', a
       const first = await post(baseUrl, '/api/projects/goals', createBody());
       assert.equal(first.status, 202);
       const second = await post(baseUrl, '/api/projects/goals', createBody());
-      assert.equal(second.status, 409);
-      const body = await second.json();
+      assert.equal(second.status, 200);
+      let body = await second.json();
+      assert.equal(body.ok, true);
+      assert.equal(body.alreadyKnown, true);
+      const conflict = await post(baseUrl, '/api/projects/goals', createBody({ objective: 'Different objective.' }));
+      assert.equal(conflict.status, 409);
+      body = await conflict.json();
       assert.equal(body.ok, false);
       assert.equal(body.error, 'project_goal_already_exists');
       assert.equal(store.listGoals().length, 1);
@@ -825,7 +830,9 @@ test('15: idempotency across the surface — suspend, approve, authorize, duplic
       // duplicate create goal
       await post(baseUrl, '/api/projects/goals', createBody({ goalId: goalId(9) }));
       response = await post(baseUrl, '/api/projects/goals', createBody({ goalId: goalId(9) }));
-      assert.equal(response.status, 409);
+      assert.equal(response.status, 200);
+      body = await response.json();
+      assert.equal(body.alreadyKnown, true, 'exact duplicate goal intake is idempotent');
     });
     store.close();
   } finally {

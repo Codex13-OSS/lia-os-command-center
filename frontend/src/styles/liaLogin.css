@@ -500,3 +500,621 @@
   .lia-login-r1-biometric,
   .lia-login-r1-password-toggle { transition: none; }
 }
+
+/* LIA_IPAD_FULLSCREEN_SAFE_V10
+   Safari/iPad/Stage Manager: evita el frame negro al cambiar de viewport.
+   El login vive en documento estable, no en un fixed 100dvh frágil. */
+
+.lia-login-r1-screen {
+  position: absolute !important;
+  inset: 0 auto auto 0 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+
+  height: auto !important;
+  min-height: 100vh !important;
+  min-height: 100svh !important;
+  max-height: none !important;
+
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(20px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left)) !important;
+
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  isolation: isolate;
+}
+
+.lia-login-r1-stack {
+  width: min(100%, 426px) !important;
+  max-width: 426px !important;
+  margin: auto !important;
+}
+
+.lia-login-r1-panel {
+  width: 100% !important;
+  max-width: 426px !important;
+}
+
+@media (min-width: 721px) {
+  .lia-login-r1-screen {
+    display: grid !important;
+    place-items: center !important;
+  }
+}
+
+/* END LIA_IPAD_FULLSCREEN_SAFE_V10 */
+
+/* LIA_IPAD_FULLSCREEN_STABLE_V11
+   Safari/iPad: el viewport se deriva de inset:0.
+   Sin vh/dvh/svh para dimensionar el login.
+   Sin scroll residual al expandir Stage Manager -> fullscreen. */
+
+.lia-login-r1-screen {
+  position: fixed !important;
+  inset: 0 !important;
+
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+
+  display: grid !important;
+  place-items: center !important;
+
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(20px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left)) !important;
+
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  background: #020911 !important;
+
+  isolation: isolate !important;
+  transform: none !important;
+}
+
+.lia-login-r1-stack {
+  position: relative !important;
+  width: min(426px, 100%) !important;
+  max-width: 426px !important;
+  margin: 0 auto !important;
+  transform: none !important;
+}
+
+.lia-login-r1-panel {
+  width: 100% !important;
+  max-width: 426px !important;
+}
+
+/* Safari táctil: evita desaparición de capas al redimensionar el viewport. */
+@media (pointer: coarse) {
+  .lia-login-r1-motion {
+    contain: paint !important;
+  }
+
+  .lia-login-r1-stack {
+    animation: none !important;
+  }
+
+  .lia-login-r1-map-layer,
+  .lia-login-r1-map-layer::before,
+  .lia-login-r1-aurora-layer,
+  .lia-login-r1-sheen-layer {
+    will-change: auto !important;
+  }
+}
+
+/* Sólo pantallas realmente bajas necesitan scroll. */
+@media (max-height: 760px) {
+  .lia-login-r1-screen {
+    display: block !important;
+    overflow-y: auto !important;
+    overscroll-behavior-y: contain !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .lia-login-r1-stack {
+    min-height: 100% !important;
+  }
+}
+
+/* END LIA_IPAD_FULLSCREEN_STABLE_V11 */
+
+/* LIA_IPAD_VISUAL_VIEWPORT_V12
+   VisualViewport es la autoridad durante resize/fullscreen de Safari.
+   En dispositivos coarse se evita el compositor multicapa de Safari. */
+
+.lia-login-r1-screen {
+  position: absolute !important;
+  inset: auto !important;
+  top: 0 !important;
+  left: 0 !important;
+
+  width: var(--lia-login-vw, 100vw) !important;
+  height: var(--lia-login-vh, 100vh) !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: none;
+
+  background-color: #020911 !important;
+}
+
+@media (pointer: coarse) {
+  .lia-login-r1-screen {
+    background:
+      linear-gradient(rgba(1,8,17,.12),rgba(1,8,17,.20)),
+      url('../assets/lia-login-reference.png') center / cover no-repeat,
+      #020911 !important;
+  }
+
+  /* Safari iPad: elimina las capas GPU que desaparecen durante resize. */
+  .lia-login-r1-motion {
+    display: none !important;
+    contain: none !important;
+  }
+
+  .lia-login-r1-panel {
+    background: rgba(5,17,29,.92) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .lia-login-r1-stack,
+  .lia-login-r1-panel {
+    transform: none !important;
+    will-change: auto !important;
+  }
+}
+
+/* END LIA_IPAD_VISUAL_VIEWPORT_V12 */
+
+/* LIA_IPAD_COMPOSITOR_SAFE_V13
+   Safari/iPad fullscreen:
+   reduce capas GPU fullscreen para evitar frame negro del compositor.
+   Mantiene identidad visual mediante composición estática. */
+
+@media (pointer: coarse) {
+
+  .lia-login-r1-screen {
+    position: fixed !important;
+    inset: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: hidden !important;
+    isolation: auto !important;
+
+    background:
+      radial-gradient(circle at 50% 44%, rgba(20, 101, 160, .16), transparent 37%),
+      radial-gradient(circle at 14% 32%, rgba(35, 126, 185, .08), transparent 34%),
+      radial-gradient(circle at 86% 38%, rgba(28, 115, 177, .08), transparent 34%),
+      #020911 !important;
+  }
+
+  .lia-login-r1-motion {
+    position: absolute !important;
+    inset: 0 !important;
+    overflow: hidden !important;
+    contain: none !important;
+    transform: none !important;
+    filter: none !important;
+    opacity: 1 !important;
+    will-change: auto !important;
+  }
+
+  .lia-login-r1-map-layer {
+    position: absolute !important;
+    inset: 0 !important;
+    transform: none !important;
+    animation: none !important;
+    will-change: auto !important;
+  }
+
+  .lia-login-r1-map-layer::before {
+    position: absolute !important;
+    inset: 0 !important;
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+    will-change: auto !important;
+    background:
+      linear-gradient(rgba(2,9,17,.28),rgba(2,9,17,.28)),
+      url('../assets/lia-login-reference.png') center / cover no-repeat !important;
+    opacity: .88 !important;
+  }
+
+  .lia-login-r1-aurora-layer {
+    inset: 0 !important;
+    transform: none !important;
+    animation: none !important;
+    will-change: auto !important;
+    mix-blend-mode: normal !important;
+    opacity: .48 !important;
+  }
+
+  .lia-login-r1-sheen-layer,
+  .lia-login-r1-node-layer {
+    display: none !important;
+    animation: none !important;
+  }
+
+  .lia-login-r1-stack,
+  .lia-login-r1-seal,
+  .lia-login-r1-status-dot {
+    animation: none !important;
+    transform: none !important;
+    will-change: auto !important;
+  }
+
+  .lia-login-r1-panel {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    background:
+      linear-gradient(145deg, rgba(6,21,35,.97), rgba(3,13,24,.96)) !important;
+    box-shadow:
+      0 24px 64px rgba(0,4,12,.48),
+      inset 0 1px rgba(202,235,255,.09) !important;
+  }
+}
+
+/* END LIA_IPAD_COMPOSITOR_SAFE_V13 */
+
+/* LIA_LOGIN_CROSS_BROWSER_V13
+   Autoridad final del login.
+   Chrome / Safari / Edge / Firefox / iPad / desktop.
+   Sin dependencia de vh/dvh/svh para el contenedor raíz.
+   Sin compositor fullscreen frágil. */
+
+html,
+body,
+#root {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body {
+  overflow: hidden !important;
+  background: #020911 !important;
+}
+
+/* VIEWPORT REAL */
+.lia-login-r1-screen {
+  position: fixed !important;
+  inset: 0 !important;
+
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+
+  display: grid !important;
+  place-items: center !important;
+
+  padding:
+    max(20px, env(safe-area-inset-top, 0px))
+    max(20px, env(safe-area-inset-right, 0px))
+    max(20px, env(safe-area-inset-bottom, 0px))
+    max(20px, env(safe-area-inset-left, 0px)) !important;
+
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+
+  color: #e9f5ff !important;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(25,115,181,.14), transparent 38%),
+    #020911 !important;
+
+  isolation: isolate !important;
+}
+
+/* FONDO: ocupa siempre exactamente el viewport padre */
+.lia-login-r1-motion {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 0 !important;
+
+  width: 100% !important;
+  height: 100% !important;
+
+  overflow: hidden !important;
+  contain: none !important;
+  transform: none !important;
+  will-change: auto !important;
+}
+
+/* MAPA ESTÁTICO Y ROBUSTO */
+.lia-login-r1-map-layer {
+  position: absolute !important;
+  inset: 0 !important;
+
+  width: 100% !important;
+  height: 100% !important;
+
+  transform: none !important;
+  animation: none !important;
+  will-change: auto !important;
+}
+
+.lia-login-r1-map-layer::before {
+  position: absolute !important;
+  inset: 0 !important;
+
+  width: 100% !important;
+  height: 100% !important;
+
+  background:
+    linear-gradient(rgba(2,9,17,.24), rgba(2,9,17,.34)),
+    url('../assets/lia-login-reference.png') center center / cover no-repeat !important;
+
+  opacity: .94 !important;
+  transform: none !important;
+  transition: none !important;
+  animation: none !important;
+  will-change: auto !important;
+}
+
+/* PROFUNDIDAD SIN COMPOSITOR FRÁGIL */
+.lia-login-r1-aurora-layer {
+  position: absolute !important;
+  inset: 0 !important;
+
+  background:
+    radial-gradient(circle at 18% 34%, rgba(18,132,203,.15), transparent 38%),
+    radial-gradient(circle at 82% 35%, rgba(32,137,201,.12), transparent 38%),
+    radial-gradient(circle at 50% 64%, rgba(26,93,151,.08), transparent 42%) !important;
+
+  mix-blend-mode: normal !important;
+  opacity: .72 !important;
+  transform: none !important;
+  animation: none !important;
+  will-change: auto !important;
+}
+
+.lia-login-r1-sheen-layer {
+  display: none !important;
+}
+
+.lia-login-r1-node-layer {
+  position: absolute !important;
+  inset: 0 !important;
+}
+
+/* CONTENIDO */
+.lia-login-r1-stack {
+  position: relative !important;
+  z-index: 2 !important;
+
+  box-sizing: border-box !important;
+  width: min(100%, 426px) !important;
+  max-width: 426px !important;
+
+  margin: auto !important;
+  transform: none !important;
+  will-change: auto !important;
+}
+
+.lia-login-r1-panel {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: 426px !important;
+
+  background:
+    linear-gradient(145deg, rgba(5,19,32,.94), rgba(3,13,24,.92)) !important;
+
+  border: 1px solid rgba(111,155,181,.30) !important;
+
+  box-shadow:
+    0 28px 72px rgba(0,5,12,.48),
+    inset 0 1px rgba(181,224,247,.08) !important;
+
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Ninguna animación puede desplazar físicamente el layout raíz. */
+.lia-login-r1-screen,
+.lia-login-r1-motion,
+.lia-login-r1-map-layer,
+.lia-login-r1-stack {
+  animation: none !important;
+}
+
+/* Pantallas bajas: scroll real sin cortar formulario. */
+@media (max-height: 760px) {
+  .lia-login-r1-screen {
+    place-items: start center !important;
+  }
+
+  .lia-login-r1-stack {
+    margin: 0 auto !important;
+  }
+}
+
+/* Pantallas estrechas */
+@media (max-width: 520px) {
+  .lia-login-r1-screen {
+    padding-left: max(14px, env(safe-area-inset-left, 0px)) !important;
+    padding-right: max(14px, env(safe-area-inset-right, 0px)) !important;
+  }
+
+  .lia-login-r1-panel {
+    max-width: 100% !important;
+  }
+}
+
+/* END LIA_LOGIN_CROSS_BROWSER_V13 */
+
+/* LIA_LOGIN_FINAL_CROSS_BROWSER_V15
+   Autoridad final:
+   fullscreen estable + fondo vivo sin transforms fullscreen pesados. */
+
+html,
+body,
+#root {
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+}
+
+.lia-login-r1-screen {
+  position: fixed !important;
+  inset: 0 !important;
+  width: var(--lia-login-vw, 100%) !important;
+  height: var(--lia-login-vh, 100%) !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  background: #020911 !important;
+}
+
+/* Recuperamos el fondo también en dispositivos táctiles. */
+.lia-login-r1-motion {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  contain: none !important;
+  overflow: hidden !important;
+  transform: none !important;
+  will-change: auto !important;
+}
+
+.lia-login-r1-map-layer {
+  display: block !important;
+  position: absolute !important;
+  inset: -2% !important;
+  transform: none !important;
+  animation: none !important;
+  will-change: auto !important;
+}
+
+.lia-login-r1-map-layer::before {
+  position: absolute !important;
+  inset: 0 !important;
+  background:
+    linear-gradient(rgba(2,9,17,.20), rgba(2,9,17,.32)),
+    url('../assets/lia-login-reference.png') center / cover no-repeat !important;
+  opacity: .96 !important;
+  transform: none !important;
+  transition: none !important;
+  animation: none !important;
+  will-change: auto !important;
+}
+
+/* Movimiento ambiental seguro: sin mover la capa fullscreen. */
+.lia-login-r1-aurora-layer {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  transform: none !important;
+  will-change: auto !important;
+  mix-blend-mode: normal !important;
+  background:
+    radial-gradient(circle at 18% 34%, rgba(24,136,206,.16), transparent 38%),
+    radial-gradient(circle at 82% 32%, rgba(35,147,211,.13), transparent 39%),
+    radial-gradient(circle at 52% 68%, rgba(31,108,170,.10), transparent 38%) !important;
+  animation: lia-login-v15-ambient-breathe 8s ease-in-out infinite alternate !important;
+}
+
+.lia-login-r1-node-layer {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+}
+
+.lia-login-r1-node-layer span {
+  display: block !important;
+  animation: lia-login-r1-node-pulse var(--node-duration) ease-in-out var(--node-delay) infinite !important;
+}
+
+/* Evitamos únicamente el efecto fullscreen más costoso. */
+.lia-login-r1-sheen-layer {
+  display: none !important;
+}
+
+.lia-login-r1-stack {
+  position: relative !important;
+  z-index: 2 !important;
+  width: min(100%, 426px) !important;
+  max-width: 426px !important;
+  transform: none !important;
+}
+
+.lia-login-r1-panel {
+  width: 100% !important;
+  max-width: 426px !important;
+  background:
+    linear-gradient(145deg, rgba(5,19,32,.93), rgba(3,13,24,.91)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+@keyframes lia-login-v15-ambient-breathe {
+  0%   { opacity: .48; }
+  50%  { opacity: .76; }
+  100% { opacity: .58; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lia-login-r1-aurora-layer,
+  .lia-login-r1-node-layer span {
+    animation: none !important;
+  }
+}
+
+/* END LIA_LOGIN_FINAL_CROSS_BROWSER_V15 */
+
+
+/* LIA_CREATE_ACCOUNT_ACTION_V2 */
+.lia-login-r1-create-account {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 10px;
+  border: 1px solid rgba(126,196,255,.24);
+  border-radius: 15px;
+  background: rgba(10,35,64,.36);
+  color: rgba(230,244,255,.94);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(18px);
+  transition: transform .2s ease, border-color .2s ease, background .2s ease;
+}
+
+.lia-login-r1-create-account:hover {
+  transform: translateY(-1px);
+  border-color: rgba(104,197,255,.54);
+  background: rgba(17,58,98,.5);
+}
+
+.lia-login-r1-create-account:disabled,
+.lia-login-r1-submit:disabled {
+  cursor: wait;
+  opacity: .62;
+  transform: none;
+}

@@ -1,16 +1,43 @@
-import { useState, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { DashboardHeaderR3 } from '../dashboard-r3/DashboardHeaderR3';
 import { DashboardSidebarR3 } from '../dashboard-r3/DashboardSidebarR3';
 import { LiaConversationPanelR3 } from '../lia-r3/LiaConversationPanelR3';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 
-export type ExecutiveSectionR3 = 'dashboard' | 'agenda' | 'projects' | 'processes' | 'documents' | 'alerts' | 'agents' | 'settings';
-type Props = { activeSection: ExecutiveSectionR3; onDashboard:()=>void; onAgenda:()=>void; onProjects:()=>void; onTracking:()=>void; onDocuments:()=>void; onAlerts:()=>void; onLogout:()=>void; mainAriaLabel:string; mainClassName?:string; rail:ReactNode; children:ReactNode; now?:Date; conversationController?:LiaConversationController };
+export type ExecutiveSectionR3 = 'dashboard' | 'agenda' | 'projects' | 'processes' | 'documents' | 'alerts' | 'agents' | 'servers' | 'settings';
+type Props = { activeSection: ExecutiveSectionR3; onDashboard:()=>void; onAgenda:()=>void; onProjects:()=>void; onAgents:()=>void; onServers:()=>void; onSettings:()=>void; onTracking:()=>void; onDocuments:()=>void; onAlerts:()=>void; onLogout:()=>void; mainAriaLabel:string; mainClassName?:string; rail:ReactNode; children:ReactNode; now?:Date; conversationController?:LiaConversationController };
 const COMPACT=72, SNAP=206, EXPANDED=230, QUERY='(max-width: 720px)';
 const subscribe=(fn:()=>void)=>{const q=window.matchMedia(QUERY);q.addEventListener('change',fn);return()=>q.removeEventListener('change',fn)};
 const snapshot=()=>window.matchMedia(QUERY).matches;
 export function ExecutiveShellR3(props:Props){
  const [width,setWidth]=useState(EXPANDED),[resizing,setResizing]=useState(false); const mobile=useSyncExternalStore(subscribe,snapshot,()=>false);
+ const scrollRef=useRef<HTMLDivElement>(null);
+ useLayoutEffect(()=>{
+  const reset=()=>{
+   const el=scrollRef.current;
+   if(el){ el.scrollTop=0; el.scrollLeft=0; }
+   window.scrollTo(0,0);
+   document.documentElement.scrollTop=0;
+   document.body.scrollTop=0;
+  };
+  reset();
+  const raf=requestAnimationFrame(reset);
+  return()=>cancelAnimationFrame(raf);
+ },[props.activeSection]);
+ /* LIA_SECTION_SCROLL_HARD_RESET */
+ useLayoutEffect(()=>{
+  const reset=()=>{
+   const el=scrollRef.current;
+   if(el){ el.scrollTop=0; el.scrollLeft=0; }
+   document.documentElement.scrollTop=0;
+   document.body.scrollTop=0;
+   document.scrollingElement?.scrollTo({top:0,left:0,behavior:'auto'});
+   window.scrollTo({top:0,left:0,behavior:'auto'});
+  };
+  reset();
+  const a=requestAnimationFrame(()=>requestAnimationFrame(reset));
+  return()=>cancelAnimationFrame(a);
+ },[props.activeSection]);
  const presentation=mobile?'compact':width<=88?'compact':width<180?'intermediate':'expanded'; const effective=mobile?COMPACT:width;
  const toggle=()=>{if(!mobile)setWidth(v=>v<=88?EXPANDED:COMPACT)};
  const down=(e:ReactPointerEvent<HTMLDivElement>)=>{if(e.pointerType==='touch')return;e.preventDefault();e.currentTarget.setPointerCapture?.(e.pointerId);setResizing(true)};
@@ -20,6 +47,10 @@ export function ExecutiveShellR3(props:Props){
   <div className="lia-dash-r3-ambient" aria-hidden="true"><i className="lia-dash-r3-ambient-map"/><i className="lia-dash-r3-ambient-top"/><i className="lia-dash-r3-ambient-rail"/><i className="lia-dash-r3-ambient-grain"/></div>
   <DashboardSidebarR3 {...props} activeSection={props.activeSection} presentation={presentation} isResizing={resizing} onToggle={toggle} onResizeStart={down} onResize={move} onResizeEnd={up}/>
   <DashboardHeaderR3 now={props.now??new Date()} conversationController={props.conversationController} onLogout={props.onLogout}/>
-  {props.conversationController && <LiaConversationPanelR3 controller={props.conversationController}/>}<section className="lia-dash-r3-main" aria-label={props.mainAriaLabel}>{props.children}</section>{props.rail}
+  {props.conversationController && <LiaConversationPanelR3 controller={props.conversationController}/>}
+  <div key={props.activeSection} ref={scrollRef} className="lia-dash-r3-scroll">
+   <section className="lia-dash-r3-main" aria-label={props.mainAriaLabel}>{props.children}</section>
+   {props.rail}
+  </div>
  </main>
 }

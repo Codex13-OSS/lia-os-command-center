@@ -63,10 +63,10 @@ export function AgendaTimelineR3({ events, conflicts, hidden, workdayState, next
       ? { title: 'Jornada aún no inicia', detail: firstToday ? `Primera cita: ${firstToday.event.title} · ${time(firstToday.occurrenceStartTime)}` : next ? `Próxima cita: ${next.event.title} · ${dateTime(next.occurrenceStartTime)}` : 'Sin citas próximas' }
       : undefined;
 
-  return <section className="lia-agenda-r3-timeline" aria-label="Jornada ejecutiva de 07:00 a 20:00">
+  return <section className={`lia-agenda-r3-timeline${positioned.length ? '' : ' is-empty'}`} aria-label="Jornada ejecutiva de 07:00 a 20:00">
     <div className="lia-agenda-r3-hours" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <span key={index}>{String(index + 7).padStart(2, '0')}:00</span>)}</div>
     <div className="lia-agenda-r3-canvas">
-      {workdayState === 'active' && nowOffset !== undefined && <i className="lia-agenda-r3-now" style={{ top: `${nowOffset}%` }}>Ahora</i>}
+      {positioned.length > 0 && workdayState === 'active' && nowOffset !== undefined && <i className="lia-agenda-r3-now" style={{ top: `${nowOffset}%` }}>Ahora</i>}
       {contextual && <div className="lia-agenda-r3-day-state"><strong>{contextual.title}</strong><span>{contextual.detail}</span></div>}
       {positioned.map(({ occurrence, start, end, lane, laneCount }) => {
         const gap = 0.75;

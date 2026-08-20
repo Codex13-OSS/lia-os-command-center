@@ -59,12 +59,10 @@
   transition: padding 300ms cubic-bezier(.22, .8, .25, 1), background 220ms ease;
 }
 .lia-dash-r3-sidebar-shell::before {
-  content: ""; position: absolute; z-index: -1; top: 9%; left: 0; width: 42%; height: 260px; pointer-events: none;
-  border-radius: 0 80% 80% 0; background: linear-gradient(90deg, rgba(74, 153, 214, .10), transparent); opacity: .8;
+  content: none;
 }
 .lia-dash-r3-sidebar-shell::after {
-  content: ""; position: absolute; top: 18px; left: 12px; width: 42%; height: 24px; pointer-events: none;
-  border-radius: 50%; background: linear-gradient(120deg, rgba(223, 242, 255, .13), transparent 72%); filter: blur(5px);
+  content: none;
 }
 .lia-dash-r3-brand { position: relative; min-height: 76px; padding: 0 4px 22px 12px; }
 .lia-dash-r3-brand::after { content: ""; position: absolute; bottom: 0; left: 12px; width: 24px; height: 1px; background: linear-gradient(90deg, rgba(105, 180, 234, .55), transparent); }
@@ -117,9 +115,8 @@
 }
 .lia-dash-r3-sidebar-toggle:hover { color: #f0f8ff; background: rgba(13, 43, 67, .94); transform: translateX(1px); }
 .lia-dash-r3-sidebar-toggle svg { width: 16px; }
-.lia-dash-r3-resize-handle { position: absolute; z-index: 6; top: 0; right: -5px; width: 10px; height: 100%; cursor: ew-resize; touch-action: none; }
-.lia-dash-r3-resize-handle::after { content: ""; position: absolute; top: 38%; left: 4px; width: 1px; height: 68px; border-radius: 2px; background: rgba(88, 173, 235, .15); opacity: 0; transition: opacity 180ms ease; }
-.lia-dash-r3-sidebar-shell:hover .lia-dash-r3-resize-handle::after, .lia-dash-r3-resize-handle-active::after { opacity: 1; }
+.lia-dash-r3-resize-handle { position: absolute; z-index: 6; top: 70px; right: -5px; bottom: 70px; width: 10px; height: auto; cursor: ew-resize; touch-action: none; }
+.lia-dash-r3-resize-handle::after { content: none; display: none; }
 .lia-dash-r3-sidebar-shell.is-resizing, .lia-dash-r3-shell-resizing { user-select: none; }
 
 .lia-dash-r3-header-shell {
@@ -242,6 +239,14 @@
 
 /* Main content and instrument glass. */
 .lia-dash-r3-main { position: relative; z-index: 2; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; padding: 14px 18px 16px; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
+.lia-dash-autonomy-r3 {
+  flex: 0 0 auto; min-width: 0; margin-top: 11px; padding: 10px 13px; display: grid; grid-template-columns: minmax(180px,.75fr) minmax(360px,1.55fr) minmax(190px,.7fr); align-items: center; gap: 13px;
+  border: solid transparent; border-width: 1px; border-top-color: rgba(197,228,248,.22); border-left-color: rgba(90,157,202,.14); border-radius: 15px;
+  background: radial-gradient(circle at 0 0,rgba(57,150,210,.12),transparent 27%),var(--r3-instrument); box-shadow: 0 15px 32px rgba(0,4,11,.28),inset 0 1px rgba(255,255,255,.055); backdrop-filter: blur(12px) saturate(126%);
+}
+.lia-dash-autonomy-r3 header { min-width: 0; }.lia-dash-autonomy-r3 header > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.lia-dash-autonomy-r3 header span { display: flex; align-items: center; gap: 6px; color: #75bce9; font-size: 8.5px; font-weight: 800; letter-spacing: .11em; }.lia-dash-autonomy-r3 header span i { width: 6px; height: 6px; border-radius: 50%; background: #55d797; box-shadow: 0 0 10px rgba(85,215,151,.5); }.lia-dash-autonomy-r3 header strong { color: #dfeef7; font-size: 10px; }.lia-dash-autonomy-r3 header > small { display: block; margin-top: 4px; color: #6f899c; font-size: 8.5px; }
+.lia-dash-autonomy-r3-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }.lia-dash-autonomy-r3-metrics article { min-width: 0; padding: 2px 12px; border-left: 1px solid rgba(112,163,198,.1); }.lia-dash-autonomy-r3-metrics span { display: block; overflow: hidden; color: #839daf; font-size: 8.5px; white-space: nowrap; text-overflow: ellipsis; }.lia-dash-autonomy-r3-metrics strong { display: block; margin-top: 3px; color: #edf7fd; font-size: 17px; line-height: 1; font-variant-numeric: tabular-nums; }.lia-dash-autonomy-r3-metrics strong em { color: #7590a4; font-size: 10px; font-style: normal; }.lia-dash-autonomy-r3-metrics article.is-attention strong { color: #efc06f; }
+.lia-dash-autonomy-r3 footer { min-width: 0; display: grid; justify-items: end; gap: 4px; color: #7892a5; font-size: 8.5px; }
 .lia-dash-r3-metric-frames { flex: 0 0 105px; min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
 .lia-dash-r3-metric-card {
   position: relative; min-width: 0; overflow: hidden; padding: 13px 12px; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center;
@@ -406,6 +411,7 @@
 }
 @media (max-width: 900px) {
   .lia-dash-r3-header-shell { padding-inline: 14px; }.lia-dash-r3-search { width: 44px; padding: 0; justify-content: center; }.lia-dash-r3-search span { display: none; }.lia-dash-r3-temporal-context { min-width: 150px; padding-inline: 9px; }
+  .lia-dash-autonomy-r3 { grid-template-columns: minmax(150px,.6fr) minmax(340px,1.4fr); }.lia-dash-autonomy-r3 footer { display: none; }
   .lia-dash-r3-metric-frames { flex-basis: 220px; grid-template-columns: repeat(2, minmax(0,1fr)); }
   .lia-dash-r3-map-frame { min-height: 480px; }.lia-mobility-r3-meeting { width: min(340px, 48%); }.lia-mobility-r3-telemetry { width: 58%; }
   .lia-mobility-r3-endpoint-summary {
@@ -422,6 +428,7 @@
 }
 @media (max-width: 720px) {
   .lia-dash-r3-shell { --lia-dash-r3-sidebar-width: 72px; }.lia-dash-r3-sidebar-toggle { display: none; }.lia-dash-r3-focus { display: none; }.lia-dash-r3-temporal-context { min-width: 132px; }.lia-dash-r3-temporal-context span { font-size: 8.5px; }.lia-dash-r3-header-controls { gap: 4px; }.lia-dash-r3-header-controls button:nth-child(2) { display: none; }
+  .lia-dash-autonomy-r3 { padding: 10px; grid-template-columns: 1fr; gap: 8px; }.lia-dash-autonomy-r3 header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.lia-dash-autonomy-r3 header > div { flex: 1; }.lia-dash-autonomy-r3 header > small { margin: 0; }.lia-dash-autonomy-r3-metrics article { padding-inline: 8px; }.lia-dash-autonomy-r3-metrics article:first-child { border-left: 0; }
   .lia-dash-r3-main { padding: 10px; }.lia-dash-r3-metric-frames { flex-basis: auto; grid-template-columns: 1fr; }.lia-dash-r3-metric-card { min-height: 98px; background: rgba(8, 24, 40, .70); backdrop-filter: blur(7px); }
   .lia-dash-r3-main { padding-bottom: max(10px, env(safe-area-inset-bottom, 0px)); }
   .lia-mobility-r3-simulation { max-width: calc(100% - 78px); }
@@ -708,7 +715,7 @@
   .lia-dash-r3-mobile-nav {
     pointer-events: auto;
     display: grid !important;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 6px;
     margin: 0 max(8px, env(safe-area-inset-right, 0px))
       max(8px, env(safe-area-inset-bottom, 0px))
@@ -992,3 +999,866 @@
     padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important;
   }
 }
+
+/* Point 8 — evidence-only executive command center. */
+.lia-command-r3-shell { grid-template-columns:var(--lia-dash-r3-sidebar-width) minmax(0,1fr) 318px; }
+.lia-command-r3-shell .lia-dash-r3-main { gap:14px; padding:18px 20px 20px; }
+.lia-command-r3-hero { position:relative; min-height:112px; padding:22px 24px; display:flex; align-items:center; justify-content:space-between; gap:22px; overflow:hidden; border:1px solid rgba(133,190,228,.17); border-radius:20px; background:radial-gradient(circle at 12% 10%,rgba(60,160,225,.13),transparent 36%),linear-gradient(135deg,rgba(11,34,55,.82),rgba(5,19,33,.74)); box-shadow:0 24px 54px rgba(0,4,11,.32),inset 0 1px rgba(226,244,255,.07); }
+.lia-command-r3-hero::before { content:""; position:absolute; inset:0 auto 0 0; width:3px; background:#52aee9; }.lia-command-r3-hero.is-attention::before { background:#e4ae58; }.lia-command-r3-hero.is-critical::before,.lia-command-r3-hero.is-unavailable::before { background:#dd7069; }
+.lia-command-r3-hero>div:first-child span,.lia-command-r3-card>header>span,.lia-command-r3-rail header>span { color:#78bce9; font-size:9px; font-weight:800; letter-spacing:.14em; }.lia-command-r3-hero h1 { margin:7px 0 3px; color:#f1f8fc; font-size:clamp(23px,2.4vw,34px); line-height:1; letter-spacing:-.035em; }.lia-command-r3-hero p { margin:7px 0 0; color:#9fb4c4; font-size:12px; }
+.lia-command-r3-system { min-width:260px; padding:12px 15px; display:flex; align-items:center; gap:12px; border-radius:14px; background:rgba(4,17,29,.52); box-shadow:inset 0 1px rgba(209,237,254,.06); }.lia-command-r3-system>i { width:10px; height:10px; flex:0 0 auto; border-radius:50%; background:#55d397; box-shadow:0 0 0 6px rgba(85,211,151,.08),0 0 16px rgba(85,211,151,.4); }.is-critical .lia-command-r3-system>i,.is-unavailable .lia-command-r3-system>i { background:#de706a; box-shadow:0 0 0 6px rgba(222,112,106,.08); }.is-attention .lia-command-r3-system>i { background:#e2ad59; }.lia-command-r3-system small,.lia-command-r3-system strong,.lia-command-r3-system span { display:block; }.lia-command-r3-system small { color:#6f8ca1; font-size:8px; letter-spacing:.13em; }.lia-command-r3-system strong { margin-top:3px; color:#e5f2fa; font-size:12px; }.lia-command-r3-system span { margin-top:3px; color:#7f98aa; font-size:9px; }
+.lia-command-r3-grid { min-width:0; display:grid; grid-template-columns:minmax(0,1.22fr) minmax(270px,.78fr); gap:13px; }.lia-command-r3-card { position:relative; min-width:0; padding:17px 18px; overflow:hidden; border:1px solid rgba(126,178,214,.15); border-radius:18px; background:linear-gradient(145deg,rgba(10,29,47,.72),rgba(6,20,34,.62)); box-shadow:0 18px 40px rgba(0,4,11,.27),inset 0 1px rgba(220,241,255,.055); }.lia-command-r3-card>header { min-height:34px; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }.lia-command-r3-card header button { min-height:38px; margin:-7px -7px 0 0; padding:0 10px; color:#79bce8; border:0; border-radius:10px; background:transparent; font-size:10.5px; cursor:pointer; }
+.lia-command-r3-goal { min-height:274px; }.lia-command-r3-goal-state { display:flex; align-items:center; gap:10px; }.lia-command-r3-goal-state b,.lia-command-r3-board-meta b { padding:5px 8px; color:#b8e1f8; border-radius:999px; background:rgba(33,112,164,.3); font-size:9px; text-transform:uppercase; }.lia-command-r3-goal-state b.is-waiting_human,.lia-command-r3-goal-state b.is-suspended { color:#f2d18f; background:rgba(121,80,24,.34); }.lia-command-r3-goal-state b.is-failed,.lia-command-r3-goal-state b.is-fail_closed { color:#f3b7b3; background:rgba(117,42,40,.34); }.lia-command-r3-goal-state small { color:#7891a4; font-size:9.5px; }.lia-command-r3-goal h2,.lia-command-r3-board h2 { margin:14px 0; color:#ecf5fa; font-size:clamp(16px,1.5vw,21px); line-height:1.25; }
+.lia-command-r3-goal dl,.lia-command-r3-board dl { margin:0; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; }.lia-command-r3-goal dl div,.lia-command-r3-board dl div { min-width:0; padding:9px; border-radius:10px; background:rgba(5,18,30,.43); }.lia-command-r3-goal dt,.lia-command-r3-board dt { color:#728da1; font-size:8.5px; }.lia-command-r3-goal dd,.lia-command-r3-board dd { margin:4px 0 0; overflow:hidden; color:#dbe9f2; font-size:10.5px; text-overflow:ellipsis; white-space:nowrap; }.lia-command-r3-goal footer { margin-top:10px; padding:9px 10px; display:grid; grid-template-columns:auto 1fr; gap:3px 9px; border-left:2px solid #4ba8e3; background:rgba(8,24,39,.45); }.lia-command-r3-goal footer span { color:#69afe0; font-size:8px; font-weight:800; }.lia-command-r3-goal footer strong { color:#c8dbe7; font-size:9px; }.lia-command-r3-goal footer small { grid-column:1/-1; overflow:hidden; color:#8199aa; font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.lia-command-r3-autonomy { min-height:180px; }.lia-command-r3-autonomy header small { color:#7893a5; font-size:9px; }.lia-command-r3-autonomy-metrics { margin-top:10px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }.lia-command-r3-autonomy-metrics div { padding:10px; border-radius:11px; background:rgba(7,23,37,.48); }.lia-command-r3-autonomy-metrics span { display:block; color:#7893a6; font-size:9px; }.lia-command-r3-autonomy-metrics strong { display:block; margin-top:3px; color:#eff8fd; font-size:20px; }.lia-command-r3-autonomy-metrics em { color:#70899b; font-size:11px; font-style:normal; }.lia-command-r3-autonomy-metrics .is-attention strong { color:#edbe70; }.lia-command-r3-slots { min-height:12px; margin-top:11px; display:flex; gap:5px; }.lia-command-r3-slots i { height:4px; flex:1; border-radius:999px; background:rgba(105,143,169,.18); }.lia-command-r3-slots i.is-used { background:#50ade8; box-shadow:0 0 8px rgba(80,173,232,.28); }.lia-command-r3-slots span { color:#708a9d; font-size:9px; }
+.lia-command-r3-office { min-height:224px; }.lia-command-r3-office-summary { padding:7px 0 11px; display:grid; grid-template-columns:auto 1fr auto; align-items:baseline; gap:8px; }.lia-command-r3-office-summary>strong { color:#edf7fc; font-size:29px; }.lia-command-r3-office-summary>span { color:#9db1c0; font-size:10px; }.lia-command-r3-office-summary>small { color:#6f8b9e; font-size:9px; }.lia-command-r3-agent-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }.lia-command-r3-agent-list>div { min-width:0; padding:9px; display:grid; grid-template-columns:8px minmax(0,1fr) auto; align-items:center; gap:8px; border-radius:11px; background:rgba(5,18,30,.48); }.lia-command-r3-agent-list>div>i { width:7px; height:7px; border-radius:50%; background:#57b5ea; }.lia-command-r3-agent-list>div>i.is-waiting_human { background:#e3ac56; }.lia-command-r3-agent-list span strong,.lia-command-r3-agent-list span small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.lia-command-r3-agent-list span strong { color:#dceaf2; font-size:10px; }.lia-command-r3-agent-list span small { color:#718c9f; font-size:8px; }.lia-command-r3-agent-list b { color:#8eb6cf; font-size:8px; }
+.lia-command-r3-board { min-height:260px; }.lia-command-r3-board-meta { display:flex; align-items:center; gap:8px; }.lia-command-r3-board-meta time { margin-left:auto; color:#718b9e; font-size:9px; }.lia-command-r3-board>p:not(.lia-command-r3-empty) { margin:-6px 0 12px; color:#859cad; font-size:10px; line-height:1.45; }.lia-command-r3-board dl { grid-template-columns:1.1fr .65fr .65fr .9fr; }.lia-command-r3-empty { margin:16px 0 0; padding:18px; color:#8199aa; border:1px dashed rgba(116,160,190,.16); border-radius:12px; background:rgba(5,17,28,.26); font-size:10.5px; line-height:1.45; }
+.lia-command-r3-access { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }.lia-command-r3-access button { min-height:68px; padding:10px 12px; display:grid; grid-template-columns:auto 1fr; align-content:center; gap:2px 9px; color:#dbeaf3; border:1px solid rgba(119,170,204,.13); border-radius:14px; background:rgba(8,25,41,.57); text-align:left; cursor:pointer; }.lia-command-r3-access button>span { grid-row:1/3; color:#4c96c5; font-size:9px; }.lia-command-r3-access strong { font-size:11px; }.lia-command-r3-access small { color:#718a9c; font-size:8.5px; }
+.lia-command-r3-rail { position:relative; z-index:3; grid-column:3; grid-row:1/-1; min-width:0; padding:16px 14px; display:flex; flex-direction:column; gap:12px; overflow-y:auto; border-left:1px solid rgba(102,154,192,.11); background:linear-gradient(155deg,rgba(8,23,39,.64),rgba(5,16,29,.57)); box-shadow:-20px 0 48px rgba(0,4,11,.28); backdrop-filter:blur(14px); }.lia-command-r3-rail>section { padding:15px; border:1px solid rgba(126,177,211,.14); border-radius:16px; background:linear-gradient(145deg,rgba(10,29,48,.62),rgba(7,21,36,.54)); }.lia-command-r3-rail header { display:flex; align-items:center; justify-content:space-between; gap:8px; }.lia-command-r3-rail header b { min-width:24px; height:24px; display:grid; place-items:center; color:#dcebf4; border-radius:8px; background:rgba(26,75,108,.48); font-size:11px; }.lia-command-r3-rail header small { color:#6f899c; font-size:7.5px; }.lia-command-r3-rail section>p { margin:13px 0 0; color:#8199aa; font-size:10px; line-height:1.5; }.lia-command-r3-rail section>p.is-clear { color:#86b9a2; }
+.lia-command-r3-attention-list { margin-top:10px; display:grid; gap:7px; }.lia-command-r3-attention-list article { padding:9px; display:grid; grid-template-columns:7px minmax(0,1fr); gap:8px; border-radius:10px; background:rgba(83,58,21,.2); }.lia-command-r3-attention-list article>i { width:7px; height:7px; margin-top:3px; border-radius:50%; background:#e1aa55; }.lia-command-r3-attention-list article.is-critical { background:rgba(93,35,34,.2); }.lia-command-r3-attention-list article.is-critical>i { background:#df716b; }.lia-command-r3-attention-list strong,.lia-command-r3-attention-list small { display:block; }.lia-command-r3-attention-list strong { color:#dce8ef; font-size:9.5px; line-height:1.35; }.lia-command-r3-attention-list small { margin-top:3px; color:#8ca0af; font-size:8.5px; }
+.lia-command-r3-recent { flex:1; min-height:280px; }.lia-command-r3-recent article { padding:10px 0; display:grid; grid-template-columns:8px minmax(0,1fr); gap:9px; border-bottom:1px solid rgba(103,149,180,.08); }.lia-command-r3-recent article>i { width:7px; height:7px; margin-top:3px; border-radius:50%; background:#4ea9e4; }.lia-command-r3-recent article>i.is-waiting_human,.lia-command-r3-recent article>i.is-suspended { background:#e3ad58; }.lia-command-r3-recent article>i.is-failed,.lia-command-r3-recent article>i.is-fail_closed { background:#df716b; }.lia-command-r3-recent strong,.lia-command-r3-recent small,.lia-command-r3-recent time { display:block; }.lia-command-r3-recent strong { overflow:hidden; color:#d8e7f0; font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }.lia-command-r3-recent small { margin-top:3px; color:#778fa1; font-size:8.5px; }.lia-command-r3-recent time { margin-top:4px; color:#5f7a8e; font-size:8px; }.lia-command-r3-rail>nav { display:grid; grid-template-columns:repeat(2,1fr); gap:7px; }.lia-command-r3-rail>nav button { min-height:44px; color:#9fc2d8; border:1px solid rgba(114,165,199,.12); border-radius:10px; background:rgba(12,37,57,.56); font-size:9.5px; cursor:pointer; }
+.lia-command-r3-card header button:focus-visible,.lia-command-r3-access button:focus-visible,.lia-command-r3-rail button:focus-visible { outline:2px solid #67b9ed; outline-offset:2px; }
+@media (hover:hover) { .lia-command-r3-card header button:hover,.lia-command-r3-access button:hover,.lia-command-r3-rail button:hover { color:#eef9ff; background:rgba(33,91,130,.38); } }
+@media (max-width:1320px) { .lia-command-r3-shell { grid-template-columns:var(--lia-dash-r3-sidebar-width) minmax(0,1fr) 286px; }.lia-command-r3-shell .lia-dash-r3-main { padding-inline:14px; }.lia-command-r3-goal dl,.lia-command-r3-board dl { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (min-width:721px) and (max-width:1120px) { .lia-command-r3-shell { height:auto; min-height:100vh; min-height:100dvh; grid-template-columns:var(--lia-dash-r3-sidebar-width) minmax(0,1fr); grid-template-rows:70px auto auto; overflow-x:hidden; overflow-y:auto; }.lia-command-r3-shell .lia-dash-r3-main { min-height:0; overflow:visible; }.lia-command-r3-grid { grid-template-columns:minmax(0,1.15fr) minmax(245px,.85fr); }.lia-command-r3-agent-list { grid-template-columns:1fr; }.lia-command-r3-rail { grid-column:2; grid-row:3; padding:14px 16px 20px; display:grid; grid-template-columns:1fr 1.2fr .7fr; overflow:visible; border-top:1px solid rgba(102,154,192,.11); border-left:0; }.lia-command-r3-recent { min-height:230px; }.lia-command-r3-rail>nav { align-content:start; } }
+@media (max-width:860px) and (min-width:721px) { .lia-command-r3-grid { grid-template-columns:1fr; }.lia-command-r3-goal,.lia-command-r3-board { min-height:0; }.lia-command-r3-rail { grid-template-columns:1fr 1fr; }.lia-command-r3-rail>nav { grid-column:1/-1; grid-template-columns:repeat(4,1fr); }.lia-command-r3-access { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:720px) { .lia-command-r3-shell .lia-dash-r3-main { gap:11px; }.lia-command-r3-hero { min-height:0; padding:18px; display:grid; }.lia-command-r3-system { min-width:0; width:100%; }.lia-command-r3-grid { grid-template-columns:1fr; }.lia-command-r3-card { padding:15px; }.lia-command-r3-goal,.lia-command-r3-board,.lia-command-r3-office,.lia-command-r3-autonomy { min-height:0; }.lia-command-r3-goal dl,.lia-command-r3-board dl { grid-template-columns:repeat(2,minmax(0,1fr)); }.lia-command-r3-agent-list { grid-template-columns:1fr; }.lia-command-r3-office-summary { grid-template-columns:auto 1fr; }.lia-command-r3-office-summary small { grid-column:1/-1; }.lia-command-r3-access { grid-template-columns:1fr 1fr; }.lia-command-r3-rail { grid-column:1!important; grid-row:auto!important; width:auto!important; margin:0 12px 18px!important; padding:0!important; display:grid; grid-template-columns:1fr; overflow:visible; border:0; background:transparent; box-shadow:none; backdrop-filter:none; }.lia-command-r3-recent { min-height:0; } }
+@media (pointer:coarse) { .lia-command-r3-card header button,.lia-command-r3-access button,.lia-command-r3-rail button { min-height:44px; } }
+@media (prefers-reduced-motion:reduce) { .lia-command-r3-shell *,.lia-command-r3-shell *::before,.lia-command-r3-shell *::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+.lia-command-r3-attention-list article button { min-height:44px; margin-top:7px; padding:8px 11px; border:1px solid rgba(220,168,82,.3); border-radius:10px; color:#e8c98e; background:rgba(91,61,20,.24); font:inherit; font-size:9px; font-weight:750; cursor:pointer; touch-action:manipulation; }
+
+/* Point 11 — one evidence-driven visual core, shared by command center and shell. */
+.lia-core-r3 { --lia-core-accent:#62bdf5; --lia-core-soft:rgba(65,166,231,.22); position:relative; min-width:0; display:flex; align-items:center; gap:18px; }
+.lia-core-r3-stage { position:relative; width:148px; height:148px; flex:0 0 148px; display:grid; place-items:center; filter:drop-shadow(0 18px 30px rgba(0,7,16,.42)); }
+.lia-core-r3-stage::before { content:""; position:absolute; inset:17%; border:1px solid color-mix(in srgb,var(--lia-core-accent) 28%,transparent); border-radius:50%; background:radial-gradient(circle at 38% 31%,rgba(232,248,255,.18),transparent 17%),radial-gradient(circle,var(--lia-core-soft),rgba(4,18,31,.12) 61%,transparent 64%); box-shadow:inset 0 0 30px rgba(72,177,239,.13),0 0 34px var(--lia-core-soft); }
+.lia-core-r3-halo,.lia-core-r3-orbit,.lia-core-r3-signal { position:absolute; display:block; border-radius:50%; pointer-events:none; }
+.lia-core-r3-halo-outer { inset:2%; border:1px solid color-mix(in srgb,var(--lia-core-accent) 20%,transparent); box-shadow:0 0 24px color-mix(in srgb,var(--lia-core-accent) 12%,transparent); }
+.lia-core-r3-halo-inner { inset:15%; border:1px solid color-mix(in srgb,var(--lia-core-accent) 32%,transparent); }
+.lia-core-r3-orbit { inset:8% 0; border:1px solid color-mix(in srgb,var(--lia-core-accent) 30%,transparent); transform:rotate(24deg) scaleY(.46); }
+.lia-core-r3-orbit-b { inset:0 8%; opacity:.58; transform:rotate(-57deg) scaleX(.48); }
+.lia-core-r3-signal { top:50%; left:50%; width:5px; height:5px; margin:-2.5px; background:#eaf8ff; box-shadow:0 0 12px var(--lia-core-accent); transform:translateX(62px); }
+.lia-core-r3-orb { position:relative; width:66px; height:66px; border:1px solid color-mix(in srgb,var(--lia-core-accent) 58%,transparent); border-radius:50%; background:radial-gradient(circle at 36% 30%,rgba(247,252,255,.86),rgba(141,217,255,.42) 13%,var(--lia-core-soft) 39%,rgba(5,25,42,.84) 76%); box-shadow:inset -9px -12px 24px rgba(0,8,19,.68),inset 8px 8px 20px rgba(185,232,255,.16),0 0 22px var(--lia-core-soft); }
+.lia-core-r3-inner-glow { position:absolute; inset:26%; border-radius:50%; background:rgba(224,246,255,.68); box-shadow:0 0 19px var(--lia-core-accent); }
+.lia-core-r3-copy { min-width:0; display:grid; gap:4px; }
+.lia-core-r3-copy strong { color:#f0f9ff; font-size:22px; line-height:1; letter-spacing:.08em; }
+.lia-core-r3-copy span { color:color-mix(in srgb,var(--lia-core-accent) 72%,#d9ecf7); font-size:11px; font-weight:740; }
+.lia-core-r3-copy small { max-width:220px; overflow:hidden; color:#8fa7b8; font-size:9.5px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+.lia-core-r3.is-offline { --lia-core-accent:#718493; --lia-core-soft:rgba(81,101,116,.12); opacity:.72; }
+.lia-core-r3.is-waiting_human { --lia-core-accent:#e4b35f; --lia-core-soft:rgba(198,137,45,.17); }
+.lia-core-r3.is-completed { --lia-core-accent:#71d4a3; --lia-core-soft:rgba(73,192,133,.20); }
+.lia-core-r3.is-failed { --lia-core-accent:#d97973; --lia-core-soft:rgba(185,78,73,.16); }
+.lia-core-r3.is-correcting { --lia-core-accent:#78b9f4; --lia-core-soft:rgba(80,131,221,.20); }
+.lia-core-r3.is-listening { --lia-core-accent:#6fd2ef; --lia-core-soft:rgba(74,181,218,.22); }
+.lia-core-r3.is-speaking { --lia-core-accent:#8ac6ff; --lia-core-soft:rgba(85,143,226,.22); }
+.lia-core-r3.is-idle .lia-core-r3-orb { animation:lia-core-r3-breath 5.6s ease-in-out infinite; }
+.lia-core-r3.is-planning .lia-core-r3-halo-inner { animation:lia-core-r3-cognitive 3.2s ease-in-out infinite; }
+.lia-core-r3.is-delegating .lia-core-r3-orbit-a { animation:lia-core-r3-orbit 3.8s linear infinite; }
+.lia-core-r3.is-delegating .lia-core-r3-orbit-b { animation:lia-core-r3-counter-orbit 5.2s linear infinite; }
+.lia-core-r3.is-executing .lia-core-r3-inner-glow,.lia-core-r3.is-responding .lia-core-r3-inner-glow { animation:lia-core-r3-energy 2.3s ease-in-out infinite; }
+.lia-core-r3.is-listening .lia-core-r3-halo-inner { animation:lia-core-r3-listen 1.8s ease-in-out infinite; }
+.lia-core-r3.is-speaking .lia-core-r3-orbit-a,.lia-core-r3.is-speaking .lia-core-r3-orbit-b { animation:lia-core-r3-speak 1.5s ease-in-out infinite alternate; }
+.lia-core-r3.is-verifying .lia-core-r3-halo-outer { animation:lia-core-r3-verify 2.8s steps(2,end) infinite; }
+.lia-core-r3.is-correcting .lia-core-r3-halo-inner,.lia-core-r3.is-correcting .lia-core-r3-orb { animation:lia-core-r3-correction 2.6s ease-in-out infinite; }
+.lia-core-r3.is-completed .lia-core-r3-halo-outer { animation:lia-core-r3-confirm 1.1s ease-out both; }
+.lia-core-r3.is-waiting_human .lia-core-r3-signal { transform:translateX(50px); box-shadow:0 0 0 5px rgba(228,179,95,.10); }
+.lia-core-r3.is-failed .lia-core-r3-orbit,.lia-core-r3.is-offline .lia-core-r3-orbit { animation:none; opacity:.25; }
+.lia-core-r3.is-compact { width:38px; flex:0 0 38px; gap:0; }
+.lia-core-r3.is-compact .lia-core-r3-stage { width:38px; height:38px; flex-basis:38px; }
+.lia-core-r3.is-compact .lia-core-r3-orb { width:19px; height:19px; }
+.lia-core-r3.is-compact .lia-core-r3-signal { width:3px; height:3px; transform:translateX(15px); }
+.lia-core-r3.is-compact .lia-core-r3-copy { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.lia-command-r3-hero { min-height:174px; justify-content:flex-start; }
+.lia-command-r3-hero-copy { min-width:220px; flex:1; }
+.lia-command-r3-hero-copy>span { color:#78bce9; font-size:9px; font-weight:800; letter-spacing:.14em; }
+.lia-command-r3-system { margin-left:auto; }
+.lia-dash-r3-operator-tile>.lia-core-r3 { flex:0 0 38px; }
+.lia-dash-r3-operator-copy span i.is-offline,.lia-dash-r3-operator-copy span i.is-failed { background:#d97973; }
+.lia-dash-r3-operator-copy span i.is-waiting_human { background:#e4b35f; }
+@keyframes lia-core-r3-breath { 50% { opacity:.88; transform:scale(.96); } }
+@keyframes lia-core-r3-cognitive { 50% { opacity:.48; transform:scale(.91); } }
+@keyframes lia-core-r3-orbit { to { transform:rotate(384deg) scaleY(.46); } }
+@keyframes lia-core-r3-counter-orbit { to { transform:rotate(-417deg) scaleX(.48); } }
+@keyframes lia-core-r3-energy { 50% { opacity:.68; transform:scale(.82); } }
+@keyframes lia-core-r3-verify { 50% { opacity:.42; } }
+@keyframes lia-core-r3-correction { 50% { opacity:.58; transform:scale(.94); } }
+@keyframes lia-core-r3-confirm { 45% { opacity:1; transform:scale(1.08); } }
+@keyframes lia-core-r3-listen { 50% { opacity:.52; transform:scale(.92); box-shadow:0 0 18px var(--lia-core-soft); } }
+@keyframes lia-core-r3-speak { to { opacity:.46; transform:rotate(35deg) scaleY(.58); } }
+@media (max-width:900px) and (min-width:721px) { .lia-command-r3-hero { display:grid; grid-template-columns:148px minmax(0,1fr); }.lia-command-r3-system { grid-column:1/-1; width:100%; margin:0; } }
+@media (max-width:720px) { .lia-command-r3-hero { justify-items:center; text-align:center; }.lia-command-r3-hero-copy { min-width:0; }.lia-command-r3-system { text-align:left; }.lia-core-r3.is-hero { display:grid; justify-items:center; }.lia-core-r3.is-hero .lia-core-r3-stage { width:136px; height:136px; flex-basis:136px; }.lia-core-r3-copy small { max-width:min(260px,75vw); } }
+@media (max-width:390px) { .lia-core-r3.is-hero .lia-core-r3-stage { width:124px; height:124px; flex-basis:124px; }.lia-command-r3-hero { padding-inline:13px; } }
+@media (prefers-reduced-motion:reduce) { .lia-core-r3 *,.lia-core-r3 *::before,.lia-core-r3 *::after { animation:none!important; transition:none!important; }.lia-core-r3.is-planning .lia-core-r3-halo-inner { border-style:dashed; }.lia-core-r3.is-delegating .lia-core-r3-orbit-b { border-style:dashed; }.lia-core-r3.is-verifying .lia-core-r3-halo-outer { border-width:2px; }.lia-core-r3.is-correcting .lia-core-r3-halo-inner { box-shadow:0 0 0 4px color-mix(in srgb,var(--lia-core-accent) 10%,transparent); }.lia-core-r3.is-listening .lia-core-r3-halo-inner { border-width:2px; }.lia-core-r3.is-speaking .lia-core-r3-orbit-a { border-style:dashed; } }
+
+/* Visual recovery — iPad-first command composition and bounded shared Core. */
+.lia-command-r3-hero {
+  min-height: 188px;
+  display: grid;
+  grid-template-columns: 176px minmax(250px, 1fr) minmax(210px, 250px);
+  align-items: center;
+  gap: 20px;
+  padding: 18px 22px;
+}
+.lia-command-r3-hero > .lia-core-r3 { justify-self: center; }
+.lia-command-r3-hero-copy { min-width: 0; }
+.lia-command-r3-hero-copy h1 { max-width: 520px; line-height: 1.08; }
+.lia-command-r3-hero-copy p { max-width: 520px; line-height: 1.45; }
+.lia-command-r3-system { min-width: 0; width: 100%; margin-left: 0; }
+.lia-core-r3-stage::after { content:""; position:absolute; inset:29%; border-radius:50%; background:linear-gradient(135deg,rgba(255,255,255,.16),transparent 42%); filter:blur(2px); pointer-events:none; }
+.lia-dash-r3-operator-tile { min-height: 64px; max-height: 72px; }
+.lia-dash-r3-operator-tile::before,.lia-dash-r3-operator-tile::after { content:none; }
+
+@media (min-width: 721px) and (max-width: 1440px) {
+  .lia-command-r3-shell {
+    height: auto;
+    min-height: 100dvh;
+    grid-template-columns: min(var(--lia-dash-r3-sidebar-width), 230px) minmax(0, 1fr);
+    grid-template-rows: 70px auto auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .lia-command-r3-shell .lia-dash-r3-sidebar-shell { position: sticky; top: 0; height: 100dvh; }
+  .lia-command-r3-shell .lia-dash-r3-header-shell { grid-column: 2; }
+  .lia-command-r3-shell .lia-dash-r3-main { grid-column: 2; min-height: 0; overflow: visible; }
+  .lia-command-r3-rail {
+    grid-column: 2;
+    grid-row: 3;
+    padding: 0 14px 18px;
+    display: grid;
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.25fr) minmax(180px, .55fr);
+    align-items: start;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  .lia-command-r3-recent { min-height: 0; }
+  .lia-command-r3-rail > nav { align-content: start; }
+}
+@media (min-width: 721px) and (max-width: 1024px) {
+  .lia-command-r3-hero { grid-template-columns: 150px minmax(0, 1fr); }
+  .lia-command-r3-hero .lia-core-r3-stage { width: 132px; height: 132px; flex-basis: 132px; }
+  .lia-command-r3-system { grid-column: 1/-1; }
+  .lia-command-r3-grid { grid-template-columns: 1fr; }
+  .lia-command-r3-card { min-height: 0; }
+  .lia-command-r3-rail { grid-template-columns: 1fr 1fr; }
+  .lia-command-r3-rail > nav { grid-column: 1/-1; grid-template-columns: repeat(4, 1fr); }
+}
+@media (max-width: 720px) { .lia-command-r3-hero { grid-template-columns: 1fr; } }
+
+/* Interface recovery V3 — volumetric Core, one page scroll and honest context rail. */
+.lia-dash-r3-sidebar-shell::before,
+.lia-dash-r3-sidebar-shell::after { content: none; }
+.lia-dash-r3-operator-tile { min-height: 60px; max-height: 64px; }
+.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-operator-tile { width: 52px; min-height: 56px; max-height: 56px; padding: 7px; }
+.lia-dash-r3-sidebar-shell.is-compact .lia-dash-r3-operator-tile .lia-dash-r3-logout { display: none; }
+
+.lia-core-r3-stage { width: 176px; height: 176px; flex-basis: 176px; transform-style: preserve-3d; }
+.lia-core-r3-stage::before { inset: 19%; border-color: rgba(104,204,255,.28); background: radial-gradient(circle at 36% 27%,rgba(238,249,255,.24),transparent 18%),radial-gradient(circle at 53% 57%,rgba(61,86,255,.22),rgba(9,28,55,.16) 58%,transparent 70%); box-shadow: inset 12px 14px 31px rgba(143,222,255,.13),inset -18px -20px 34px rgba(12,5,52,.58),0 0 32px var(--lia-core-soft); }
+.lia-core-r3-halo-outer { inset: 1%; background: radial-gradient(circle,transparent 58%,rgba(75,109,255,.06) 72%,transparent 74%); }
+.lia-core-r3-halo-inner { inset: 13%; box-shadow: inset 0 0 21px rgba(90,199,255,.1),0 0 24px rgba(75,96,255,.08); }
+.lia-core-r3-orbit { border-color: rgba(103,204,255,.36); box-shadow: 0 0 9px rgba(67,172,255,.12); }
+.lia-core-r3-orbit-b { border-color: rgba(126,92,255,.34); }
+.lia-core-r3-orbit-c { inset: 19% 3%; opacity: .38; border-color: rgba(186,97,255,.42); transform: rotate(74deg) scaleY(.34); }
+.lia-core-r3-orb { width: 88px; height: 88px; overflow: hidden; border-color: rgba(157,224,255,.62); background: radial-gradient(circle at 33% 24%,rgba(255,255,255,.94) 0 5%,rgba(132,222,255,.58) 11%,transparent 24%),radial-gradient(circle at 48% 45%,#64dfff 0 7%,#3179f5 20%,#3025a0 47%,#0a1638 73%); box-shadow: inset 14px 13px 26px rgba(188,237,255,.18),inset -17px -20px 30px rgba(3,3,29,.72),0 0 13px rgba(105,219,255,.48),0 0 34px rgba(62,92,255,.30); transform: translateZ(18px); }
+.lia-core-r3-shell { position:absolute; inset:4%; border:1px solid rgba(208,244,255,.26); border-radius:50%; background:linear-gradient(135deg,rgba(230,249,255,.14),transparent 39%,rgba(73,45,208,.13) 76%); box-shadow:inset 6px 7px 12px rgba(255,255,255,.08),inset -8px -9px 15px rgba(4,5,35,.35); }
+.lia-core-r3-membrane { position:absolute; inset:18%; border:1px solid rgba(130,215,255,.24); border-radius:50%; background:radial-gradient(circle at 38% 32%,rgba(107,232,255,.35),rgba(53,72,223,.3) 42%,rgba(35,15,111,.5) 73%); box-shadow:inset -7px -8px 12px rgba(4,4,37,.45),0 0 12px rgba(78,183,255,.28); }
+.lia-core-r3-inner-glow { inset:35%; background:radial-gradient(circle at 38% 32%,#f0fdff,#78e9ff 20%,#6070ff 55%,#5028ba); box-shadow:0 0 13px #70dfff,0 0 25px rgba(72,75,255,.75); }
+.lia-core-r3-specular { position:absolute; top:14%; left:20%; width:30%; height:18%; border-radius:50%; background:linear-gradient(115deg,rgba(255,255,255,.72),rgba(172,232,255,.08)); filter:blur(1px); transform:rotate(-22deg); }
+.lia-core-r3-ambient-line { position:absolute; width:22px; height:1px; background:linear-gradient(90deg,transparent,var(--lia-core-accent)); opacity:.32; }.lia-core-r3-ambient-line.is-a { left:2%; top:35%; transform:rotate(-18deg); }.lia-core-r3-ambient-line.is-b { right:3%; bottom:31%; transform:rotate(21deg); }
+.lia-core-r3-particle { position:absolute; width:3px; height:3px; border-radius:50%; background:#bceeff; box-shadow:0 0 7px var(--lia-core-accent); opacity:.65; }.lia-core-r3-particle.is-a { top:17%; right:24%; }.lia-core-r3-particle.is-b { left:16%; bottom:24%; }
+.lia-core-r3.is-compact .lia-core-r3-stage { width:44px; height:44px; flex-basis:44px; }.lia-core-r3.is-compact { width:44px; flex-basis:44px; }.lia-core-r3.is-compact .lia-core-r3-orb { width:24px; height:24px; }.lia-core-r3.is-compact .lia-core-r3-ambient-line,.lia-core-r3.is-compact .lia-core-r3-particle,.lia-core-r3.is-compact .lia-core-r3-orbit-c { display:none; }
+.lia-core-r3.is-executing .lia-core-r3-membrane { animation:lia-core-r3-stable-energy 4.2s ease-in-out infinite; }.lia-core-r3.is-verifying .lia-core-r3-orbit-c { animation:lia-core-r3-precision 7s linear infinite; }.lia-core-r3.is-correcting .lia-core-r3-membrane { animation:lia-core-r3-secondary 2.6s ease-in-out infinite; }.lia-core-r3.is-waiting_human .lia-core-r3-halo-outer { box-shadow:0 0 31px rgba(228,179,95,.26); }
+@keyframes lia-core-r3-stable-energy { 50% { filter:brightness(1.12); transform:scale(.97); } }
+@keyframes lia-core-r3-precision { to { transform:rotate(434deg) scaleY(.34); } }
+@keyframes lia-core-r3-secondary { 50% { opacity:.66; transform:scale(.88); } }
+
+.lia-command-r3-shell { height:auto; min-height:100dvh; grid-template-columns:min(var(--lia-dash-r3-sidebar-width),230px) minmax(0,1fr) 280px; grid-template-rows:70px auto; overflow-x:hidden; overflow-y:auto; }
+.lia-command-r3-shell .lia-dash-r3-sidebar-shell { position:sticky; top:0; height:100dvh; }
+.lia-command-r3-shell .lia-dash-r3-main { min-height:0; overflow:visible; }
+.lia-command-r3-rail { grid-column:3;grid-row:1/-1;display:flex;padding:16px 14px;overflow:visible;align-self:start; }
+.lia-command-r3-core-cluster { display:grid; justify-items:center; gap:4px; }
+.lia-command-r3-core-cluster > .lia-core-r3 { justify-self:center; }
+.lia-command-r3-hero { grid-template-columns:190px minmax(250px,1fr) minmax(210px,250px); }
+
+.lia-voice-surface-r3 { min-width:0; padding:12px; display:grid; grid-template-columns:44px minmax(0,1fr); align-items:center; gap:9px; border:1px solid rgba(102,190,235,.18); border-radius:15px; background:radial-gradient(circle at 0 0,rgba(62,174,226,.12),transparent 42%),rgba(8,27,44,.72); box-shadow:inset 0 1px rgba(224,244,255,.06),0 12px 28px rgba(0,5,12,.24); }
+.lia-voice-surface-r3-mic,.lia-projects-r3-voice { width:44px; height:44px; display:grid; place-items:center; color:#bcecff; border:1px solid rgba(96,201,247,.3); border-radius:50%; background:radial-gradient(circle,rgba(65,177,230,.35),rgba(14,53,81,.72)); box-shadow:0 0 17px rgba(55,167,226,.15),inset 0 1px rgba(255,255,255,.11); cursor:pointer; }
+.lia-voice-surface-r3-mic:disabled,.lia-projects-r3-voice:disabled { color:#607888; border-color:rgba(111,143,160,.16); background:rgba(28,43,54,.54); box-shadow:none; cursor:not-allowed; }
+.lia-voice-surface-r3-mic.is-listening,.lia-voice-surface-r3-mic.is-starting,.lia-projects-r3-voice.is-listening { color:#dffcff; box-shadow:0 0 0 5px rgba(71,211,239,.1),0 0 22px rgba(71,211,239,.36); }
+.lia-voice-surface-r3 > div span,.lia-voice-surface-r3 > div strong,.lia-voice-surface-r3 > div small { display:block; }.lia-voice-surface-r3 > div span { color:#71bce7;font-size:8px;font-weight:800;letter-spacing:.14em; }.lia-voice-surface-r3 > div strong { margin-top:3px;color:#dbeef7;font-size:10px;line-height:1.3; }.lia-voice-surface-r3 > div small { margin-top:3px;color:#718b9c;font-size:8px; }
+.lia-voice-surface-r3 dl { grid-column:1/-1;margin:4px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:5px; }.lia-voice-surface-r3 dl div { padding:6px;border-radius:8px;background:rgba(5,19,31,.46); }.lia-voice-surface-r3 dt { color:#6f899b;font-size:7.5px; }.lia-voice-surface-r3 dd { margin:2px 0 0;color:#afc9d8;font-size:8px; }.lia-voice-surface-r3.is-compact { width:154px;padding:5px 8px;grid-template-columns:36px 1fr;border:0;background:transparent;box-shadow:none; }.lia-voice-surface-r3.is-compact .lia-voice-surface-r3-mic { width:36px;height:36px; }
+.lia-projects-r3-voice { flex:0 0 44px; }
+
+.lia-command-r3-telemetry dl { margin:10px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:5px; }.lia-command-r3-telemetry dl div { min-width:0;padding:7px;border-radius:8px;background:rgba(5,19,31,.46); }.lia-command-r3-telemetry dt { color:#718b9d;font-size:7.5px; }.lia-command-r3-telemetry dd { margin:3px 0 0;color:#dcebf4;font-size:10px; }.lia-command-r3-telemetry time { display:block;margin-top:8px;color:#637e91;font-size:7.5px; }
+.lia-command-r3-mini-map { position:relative;height:70px;margin:9px 0;border-radius:10px;overflow:hidden;background:linear-gradient(rgba(68,122,153,.1) 1px,transparent 1px),linear-gradient(90deg,rgba(68,122,153,.1) 1px,transparent 1px),radial-gradient(circle at 60% 35%,rgba(39,130,173,.19),#071a2a);background-size:18px 18px,18px 18px,auto;box-shadow:inset 0 0 24px rgba(0,5,12,.38); }.lia-command-r3-mini-map::after { content:"VISUAL · NO CARTOGRÁFICO";position:absolute;right:6px;bottom:5px;color:#526f82;font-size:6px;letter-spacing:.08em; }.lia-command-r3-mini-map i { position:absolute;width:10px;height:10px;border:2px solid #d5f4ff;border-radius:50% 50% 50% 0;background:#38aee8;box-shadow:0 0 12px #3bb4ed;opacity:0;transform:translate(-50%,-65%) rotate(-45deg); }.lia-command-r3-mini-map i.is-visible { opacity:1; }.lia-command-r3-location > strong,.lia-command-r3-location > small,.lia-command-r3-location > em,.lia-command-r3-weather > strong { display:block; }.lia-command-r3-location > strong,.lia-command-r3-weather > strong { color:#dcecf5;font-size:10px; }.lia-command-r3-location > small { margin-top:3px;color:#788fa0;font-size:8px;line-height:1.35; }.lia-command-r3-location > em { margin-top:3px;color:#587386;font-size:7px;font-style:normal; }.lia-command-r3-location > button { min-height:44px;margin-top:8px;padding:0 10px;color:#a9d8f1;border:1px solid rgba(95,179,224,.2);border-radius:9px;background:rgba(17,61,88,.42);font-size:8.5px; }.lia-command-r3-weather > p { margin:5px 0 0!important; }
+
+@media (max-width:999px) and (min-width:721px) {
+  .lia-command-r3-shell { grid-template-columns:min(var(--lia-dash-r3-sidebar-width),230px) minmax(0,1fr);grid-template-rows:70px auto auto; }
+  .lia-command-r3-rail { grid-column:2;grid-row:3;padding:0 14px 18px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible;border:0;background:transparent;box-shadow:none;backdrop-filter:none; }
+  .lia-command-r3-rail > nav { grid-column:1/-1;grid-template-columns:repeat(4,1fr); }
+  .lia-command-r3-hero { grid-template-columns:170px minmax(0,1fr); }.lia-command-r3-system { grid-column:1/-1; }
+}
+@media (max-width:720px) { .lia-command-r3-core-cluster { width:100%; }.lia-command-r3-hero { grid-template-columns:1fr; }.lia-core-r3-stage { width:142px;height:142px;flex-basis:142px; }.lia-core-r3-orb { width:76px;height:76px; } }
+@media (prefers-reduced-motion:reduce) { .lia-core-r3 *,.lia-core-r3 *::before,.lia-core-r3 *::after { animation:none!important;transition:none!important; } }
+
+/* iPad forensic V4: source-of-truth shell sizing, compact sidebar Core and full-depth hero orb. */
+.lia-dash-r3-shell {
+  height: auto;
+  min-height: 100dvh;
+  grid-template-rows: 70px auto;
+  overflow-x: clip;
+  overflow-y: visible;
+  align-items: start;
+}
+.lia-dash-r3-main { height: auto; min-height: 0; align-self: start; overflow: visible; }
+.lia-dash-r3-rail-shell,.lia-command-r3-rail { height: auto; min-height: 0; align-self: start; }
+.lia-dash-r3-sidebar-shell { position: sticky; top: 0; height: 100dvh; }
+
+/* The resize affordance was the remaining vertical stripe: its full-sidebar handle
+   painted a 68px vertical ::after rule. Keep the hit target, remove its paint. */
+.lia-dash-r3-resize-handle { height: auto; top: 70px; bottom: 70px; }
+.lia-dash-r3-resize-handle::after { content: none; display: none; }
+.lia-dash-r3-operator-tile { min-height: 68px; max-height: 68px; overflow: hidden; }
+.lia-core-r3.is-compact { width: 50px; height: 50px; flex: 0 0 50px; overflow: hidden; }
+.lia-core-r3.is-compact .lia-core-r3-stage { width: 50px; height: 50px; flex: 0 0 50px; overflow: hidden; filter: none; }
+.lia-core-r3.is-compact .lia-core-r3-stage::before,
+.lia-core-r3.is-compact .lia-core-r3-stage::after,
+.lia-core-r3.is-compact .lia-core-r3-halo,
+.lia-core-r3.is-compact .lia-core-r3-orbit,
+.lia-core-r3.is-compact .lia-core-r3-signal,
+.lia-core-r3.is-compact .lia-core-r3-ambient-line,
+.lia-core-r3.is-compact .lia-core-r3-particle,
+.lia-core-r3.is-compact .lia-core-r3-base-shadow { display: none; content: none; }
+.lia-core-r3.is-compact .lia-core-r3-orb { width: 46px; height: 46px; }
+
+.lia-command-r3-hero {
+  height: auto;
+  min-height: 320px;
+  max-height: none;
+  grid-template-columns: minmax(210px,1fr) 220px minmax(230px,.86fr);
+  align-items: center;
+  gap: 18px;
+  padding: 20px 24px;
+  overflow: visible;
+}
+.lia-command-r3-core-cluster { width: 220px; height: 240px; display: grid; place-items: center; overflow: visible; }
+.lia-core-r3.is-hero { display: grid; justify-items: center; gap: 4px; }
+.lia-core-r3.is-hero .lia-core-r3-stage { width: 210px; height: 210px; flex: 0 0 210px; overflow: visible; transform-style: preserve-3d; }
+.lia-core-r3.is-hero .lia-core-r3-copy { justify-items: center; text-align: center; }
+.lia-core-r3.is-hero .lia-core-r3-copy strong { font-size: 18px; }
+.lia-core-r3-stage::before { inset: 17%; }
+.lia-core-r3-halo-outer { inset: 2%; background: radial-gradient(circle,transparent 55%,rgba(77,219,255,.08) 65%,rgba(86,62,255,.08) 74%,transparent 76%); }
+.lia-core-r3-halo-inner { inset: 13%; }
+.lia-core-r3-orbit-a { inset: 11% -1%; transform: rotate(18deg) scaleY(.42); border-color: rgba(86,220,255,.62); }
+.lia-core-r3-orbit-b { inset: -1% 13%; transform: rotate(-52deg) scaleX(.44); border-color: rgba(96,108,255,.58); }
+.lia-core-r3-orbit-c { inset: 17% -3%; opacity: .78; transform: rotate(72deg) scaleY(.33); border-color: rgba(219,91,255,.55); }
+.lia-core-r3-orb { width: 116px; height: 116px; overflow: visible; background: radial-gradient(circle at 31% 23%,#fff 0 3%,rgba(193,246,255,.94) 5%,transparent 16%),radial-gradient(circle at 45% 42%,#73efff 0 8%,#278cf6 24%,#4630cf 49%,#130d56 72%,#050921 100%); box-shadow: inset 20px 18px 30px rgba(210,248,255,.21),inset -24px -27px 38px rgba(3,2,31,.84),0 0 18px rgba(87,224,255,.62),0 0 48px rgba(71,65,255,.43),0 0 82px rgba(192,60,255,.16); }
+.lia-core-r3-shell { inset:-2%; border-color:rgba(220,249,255,.42); background:linear-gradient(138deg,rgba(255,255,255,.25),transparent 34%,rgba(89,57,226,.15) 67%,rgba(216,77,255,.1)); box-shadow:inset 10px 10px 19px rgba(255,255,255,.13),inset -12px -15px 24px rgba(3,2,40,.49); }
+.lia-core-r3-membrane { inset:14%; background:radial-gradient(circle at 36% 29%,rgba(147,248,255,.64),rgba(41,129,245,.58) 34%,rgba(72,35,193,.68) 68%,rgba(21,7,71,.76)); }
+.lia-core-r3-inner-glow { inset:31%; }
+.lia-core-r3-nucleus { position:absolute; inset:40%; border-radius:50%; background:#f4ffff; box-shadow:0 0 8px #fff,0 0 21px #67eaff,0 0 38px #615cff; }
+.lia-core-r3-rim { position:absolute; inset:5%; border-radius:50%; box-shadow:inset 4px 2px 8px rgba(224,250,255,.34),inset -5px -6px 12px rgba(200,59,255,.2); }
+.lia-core-r3-specular { top:11%; left:18%; width:34%; height:21%; background:linear-gradient(115deg,rgba(255,255,255,.9),rgba(175,238,255,.1)); }
+.lia-core-r3-base-shadow { position:absolute; z-index:-1; left:24%; right:24%; bottom:3%; height:13%; border-radius:50%; background:rgba(31,58,167,.4); filter:blur(12px); transform:rotateX(68deg); }
+.lia-core-r3-particle.is-c { left:11%; top:48%; }.lia-core-r3-particle.is-d { right:14%; bottom:17%; background:#dc8cff; }
+.lia-core-r3-stage,.lia-core-r3-orb { animation:lia-core-v4-breathe 6s ease-in-out infinite; }
+.lia-core-r3-inner-glow,.lia-core-r3-nucleus { animation:lia-core-v4-pulse 2.8s ease-in-out infinite; }
+.lia-core-r3-orbit-a { animation:lia-core-v4-orbit-a 8s linear infinite; }
+.lia-core-r3-orbit-b { animation:lia-core-v4-orbit-b 11s linear infinite; }
+.lia-core-r3-orbit-c { animation:lia-core-v4-orbit-c 14s linear infinite; }
+.lia-core-r3-particle { animation:lia-core-v4-particle 4.8s ease-in-out infinite; }
+.lia-core-r3-particle.is-b,.lia-core-r3-particle.is-d { animation-delay:-2.2s; }
+.lia-core-r3:is(.is-executing,.is-responding,.is-speaking) { --lia-core-speed:.72; }
+.lia-core-r3:is(.is-offline,.is-idle) { --lia-core-speed:1.25; opacity:1; }
+.lia-core-r3:is(.is-executing,.is-responding,.is-speaking) :is(.lia-core-r3-stage,.lia-core-r3-orbit,.lia-core-r3-particle) { animation-duration:4.2s; }
+.lia-core-r3:is(.is-planning,.is-delegating,.is-verifying,.is-correcting) :is(.lia-core-r3-stage,.lia-core-r3-orbit,.lia-core-r3-particle) { animation-duration:6.4s; }
+.lia-core-r3:is(.is-offline,.is-idle,.is-waiting_human,.is-completed,.is-failed) :is(.lia-core-r3-stage,.lia-core-r3-orbit,.lia-core-r3-particle) { animation-duration:9.5s; }
+.lia-core-r3.is-failed .lia-core-r3-orbit,.lia-core-r3.is-offline .lia-core-r3-orbit { animation-play-state:running; opacity:.5; }
+@keyframes lia-core-v4-breathe { 50% { filter:brightness(1.09); transform:scale(.985); } }
+@keyframes lia-core-v4-pulse { 50% { opacity:.72; transform:scale(.86); } }
+@keyframes lia-core-v4-orbit-a { to { transform:rotate(378deg) scaleY(.42); } }
+@keyframes lia-core-v4-orbit-b { to { transform:rotate(-412deg) scaleX(.44); } }
+@keyframes lia-core-v4-orbit-c { to { transform:rotate(432deg) scaleY(.33); } }
+@keyframes lia-core-v4-particle { 50% { opacity:.3; transform:translate3d(3px,-5px,0) scale(.75); } }
+
+.lia-command-r3-hero-actions { min-width:0; display:grid; gap:10px; }
+.lia-command-r3-hero-actions .lia-voice-surface-r3 { padding:9px; }
+.lia-voice-surface-r3-write { grid-column:1/-1; min-height:40px; color:#bde9ff; border:1px solid rgba(99,194,239,.24); border-radius:10px; background:rgba(20,73,105,.42); font-size:10px; cursor:pointer; }
+.lia-command-r3-map-link { min-height:40px; margin-top:8px; padding:0 10px; display:inline-flex; align-items:center; color:#a9def7; border:1px solid rgba(95,179,224,.22); border-radius:9px; background:rgba(17,61,88,.42); font-size:9px; text-decoration:none; }
+
+@media (min-width:1240px) {
+  .lia-command-r3-shell { grid-template-columns:min(var(--lia-dash-r3-sidebar-width),230px) minmax(0,1fr) 280px; }
+  .lia-command-r3-rail { grid-column:3; grid-row:1/-1; }
+}
+@media (min-width:1000px) and (max-width:1239px) {
+  .lia-dash-r3-shell,.lia-command-r3-shell { grid-template-columns:var(--lia-dash-r3-sidebar-width) minmax(0,1fr); grid-template-rows:70px auto auto; }
+  .lia-dash-r3-header-shell,.lia-dash-r3-main { grid-column:2; }
+  .lia-dash-r3-search { width:48px; padding:0; justify-content:center; }
+  .lia-dash-r3-search input { display:none; }
+  .lia-dash-r3-focus { min-width:0; }
+  .lia-command-r3-rail,.lia-dash-r3-rail-shell { grid-column:2; grid-row:3; width:auto; padding:0 16px 18px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; overflow:visible; border:0; background:transparent; box-shadow:none; }
+  .lia-command-r3-rail > nav { grid-column:1/-1; grid-template-columns:repeat(4,1fr); }
+  .lia-command-r3-hero { min-height:340px; grid-template-columns:minmax(220px,1fr) 210px; }
+  .lia-command-r3-hero-actions { grid-column:1/-1; grid-template-columns:1fr 1fr; }
+}
+@media (min-width:720px) and (max-width:999px) {
+  .lia-command-r3-hero { min-height:0; grid-template-columns:1fr 190px; }
+  .lia-command-r3-hero-actions { grid-column:1/-1; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .lia-core-r3-stage,.lia-core-r3-orb,.lia-core-r3-inner-glow,.lia-core-r3-nucleus,.lia-core-r3-orbit,.lia-core-r3-particle { animation:none!important; transform:none; }
+  .lia-core-r3-orbit-a { transform:rotate(18deg) scaleY(.42); }.lia-core-r3-orbit-b { transform:rotate(-52deg) scaleX(.44); }.lia-core-r3-orbit-c { transform:rotate(72deg) scaleY(.33); }
+}
+
+
+/* LIA_R3_STRUCTURAL_V6
+   Un único viewport + un único scroll compartido para las vistas R3. */
+
+body:has(.lia-dash-r3-shell),
+body:has(.lia-dash-r3-shell) #root {
+  height: 100dvh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.lia-dash-r3-shell,
+.lia-command-r3-shell,
+.lia-agenda-r3-shell,
+.lia-projects-r3-shell,
+.lia-office-r3-shell {
+  width: 100% !important;
+  height: 100dvh !important;
+  min-height: 0 !important;
+  max-height: 100dvh !important;
+  grid-template-rows: 70px minmax(0,1fr) !important;
+  align-items: stretch !important;
+  overflow: hidden !important;
+}
+
+.lia-dash-r3-sidebar-shell {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+}
+
+.lia-dash-r3-scroll {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 280px;
+  align-content: start;
+  align-items: start;
+}
+
+.lia-dash-r3-scroll > .lia-dash-r3-main {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  width: 100%;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  align-self: start !important;
+  overflow: visible !important;
+}
+
+.lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+.lia-dash-r3-scroll > .lia-command-r3-rail {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  align-self: start !important;
+  overflow: visible !important;
+}
+
+/* Office no tiene rail. */
+.lia-office-r3-shell .lia-dash-r3-scroll {
+  grid-template-columns: minmax(0,1fr);
+}
+
+/* CORE HERO: completamente autocontenido. */
+.lia-command-r3-core-cluster {
+  width: 220px !important;
+  height: 220px !important;
+  min-width: 220px !important;
+  min-height: 220px !important;
+  display: grid !important;
+  place-items: center !important;
+  place-self: center !important;
+  overflow: visible !important;
+}
+
+.lia-core-r3.is-hero {
+  position: relative !important;
+  width: 210px !important;
+  height: 210px !important;
+  display: grid !important;
+  place-items: center !important;
+  overflow: visible !important;
+}
+
+.lia-core-r3.is-hero .lia-core-r3-stage {
+  position: relative !important;
+  inset: auto !important;
+  width: 200px !important;
+  height: 200px !important;
+  flex: none !important;
+  display: grid !important;
+  place-items: center !important;
+  overflow: visible !important;
+}
+
+.lia-core-r3.is-hero .lia-core-r3-orb {
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 112px !important;
+  height: 112px !important;
+  margin: 0 !important;
+  transform: translate(-50%,-50%) !important;
+  animation: none !important;
+  overflow: hidden !important;
+}
+
+/* El movimiento vive en la escena/anillos, no desplaza físicamente la esfera. */
+.lia-core-r3.is-hero .lia-core-r3-stage {
+  animation: lia-core-v4-breathe 7s ease-in-out infinite !important;
+}
+
+.lia-core-r3.is-hero .lia-core-r3-copy {
+  display: none !important;
+}
+
+/* CORE sidebar: esfera completa, nunca recortada. */
+.lia-core-r3.is-compact,
+.lia-core-r3.is-compact .lia-core-r3-stage {
+  position: relative !important;
+  width: 46px !important;
+  height: 46px !important;
+  min-width: 46px !important;
+  min-height: 46px !important;
+  flex: 0 0 46px !important;
+  display: grid !important;
+  place-items: center !important;
+  overflow: visible !important;
+  animation: none !important;
+  transform: none !important;
+}
+
+.lia-core-r3.is-compact .lia-core-r3-orb {
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: 34px !important;
+  height: 34px !important;
+  transform: translate(-50%,-50%) !important;
+  animation: none !important;
+}
+
+/* Stage Manager: rail baja dentro DEL MISMO scroll. */
+@media (min-width:1000px) and (max-width:1239px) {
+  .lia-dash-r3-scroll {
+    grid-template-columns: minmax(0,1fr) !important;
+  }
+
+  .lia-dash-r3-scroll > .lia-dash-r3-main {
+    grid-column:1 !important;
+    grid-row:1 !important;
+  }
+
+  .lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+  .lia-dash-r3-scroll > .lia-command-r3-rail {
+    grid-column:1 !important;
+    grid-row:2 !important;
+  }
+}
+
+@media (max-width:999px) {
+  .lia-dash-r3-scroll {
+    grid-column:1 / -1;
+    grid-template-columns:minmax(0,1fr) !important;
+  }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .lia-core-r3.is-hero .lia-core-r3-stage {
+    animation:none !important;
+  }
+}
+
+/* END LIA_R3_STRUCTURAL_V6 */
+
+/* LIA_R3_RAIL_CONTAINMENT_V7
+   El rail vuelve a ser flujo normal. Nunca invade el contenido principal. */
+
+.lia-dash-r3-scroll {
+  position: relative !important;
+  align-items: start !important;
+  align-content: start !important;
+}
+
+.lia-dash-r3-scroll > .lia-dash-r3-main {
+  position: relative !important;
+  z-index: 1 !important;
+  min-width: 0 !important;
+}
+
+/* Mata posicionamiento heredado de V3/V4. */
+.lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+.lia-dash-r3-scroll > .lia-command-r3-rail {
+  position: relative !important;
+  inset: auto !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  float: none !important;
+  transform: none !important;
+
+  min-width: 0 !important;
+  max-width: 100% !important;
+  height: auto !important;
+  max-height: none !important;
+
+  z-index: 0 !important;
+  overflow: hidden !important;
+}
+
+/* iPad normal: rail vertical independiente. */
+@media (min-width: 1600px) {
+  .lia-dash-r3-scroll {
+    grid-template-columns: minmax(0,1fr) 300px !important;
+  }
+
+  .lia-dash-r3-scroll > .lia-dash-r3-main {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+  }
+
+  .lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+  .lia-dash-r3-scroll > .lia-command-r3-rail {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    width: 100% !important;
+    padding: 14px 14px 18px 0 !important;
+
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+}
+
+/* iPad / Stage Manager: rail DESPUÉS del contenido; nunca lateral. */
+@media (min-width: 1000px) and (max-width: 1599px) {
+  .lia-dash-r3-scroll {
+    grid-template-columns: minmax(0,1fr) !important;
+  }
+
+  .lia-dash-r3-scroll > .lia-dash-r3-main {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+  }
+
+  .lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+  .lia-dash-r3-scroll > .lia-command-r3-rail {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    padding: 0 16px 18px !important;
+
+    display: grid !important;
+    grid-template-columns: repeat(2,minmax(0,1fr)) !important;
+    gap: 10px !important;
+  }
+}
+
+/* Ancho compacto. */
+@media (max-width: 999px) {
+  .lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+  .lia-dash-r3-scroll > .lia-command-r3-rail {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    padding: 0 12px 16px !important;
+
+    display: grid !important;
+    grid-template-columns: minmax(0,1fr) !important;
+    gap: 9px !important;
+  }
+}
+
+/* Ningún instrumento del rail puede desbordar su celda. */
+.lia-dash-r3-scroll > .lia-dash-r3-rail-shell > *,
+.lia-dash-r3-scroll > .lia-command-r3-rail > * {
+  position: relative !important;
+  inset: auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  transform: none !important;
+}
+
+/* Ubicación y clima: composición vertical contenida. */
+.lia-command-r3-location {
+  width: 100% !important;
+  min-width: 0 !important;
+  display: block !important;
+}
+
+.lia-command-r3-weather {
+  position: relative !important;
+  inset: auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  margin: 10px 0 0 !important;
+}
+
+.lia-command-r3-location > header,
+.lia-command-r3-weather > header {
+  width: 100%;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lia-command-r3-location > header > *,
+.lia-command-r3-weather > header > * {
+  min-width: 0;
+}
+
+/* No permitir que la telemetría vuelva a crecer fuera del rail. */
+.lia-command-r3-telemetry {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+/* END LIA_R3_RAIL_CONTAINMENT_V7 */
+
+/* LIA_R3_FLOW_ISOLATION_V8
+   iPad/Stage Manager: MAIN y RAIL dejan de compartir grid.
+   Flujo físico: MAIN -> RAIL. Imposible superponer ambos. */
+
+@media (min-width: 721px) and (max-width: 1599px) {
+
+  .lia-dash-r3-scroll {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    align-content: normal !important;
+    grid-template-columns: none !important;
+    grid-template-rows: none !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .lia-dash-r3-scroll > .lia-dash-r3-main {
+    order: 1 !important;
+    position: relative !important;
+    inset: auto !important;
+    grid-area: auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    flex: 0 0 auto !important;
+    overflow: visible !important;
+    transform: none !important;
+    z-index: 1 !important;
+  }
+
+  /* También cubre un rail que React entregue como Fragment. */
+  .lia-dash-r3-scroll > :not(.lia-dash-r3-main) {
+    order: 2 !important;
+    position: relative !important;
+    inset: auto !important;
+    grid-area: auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    flex: 0 0 auto !important;
+    transform: none !important;
+    z-index: 0 !important;
+  }
+
+  .lia-dash-r3-scroll > .lia-command-r3-rail,
+  .lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+  .lia-dash-r3-scroll > .lia-agenda-r3-rail,
+  .lia-dash-r3-scroll > .lia-projects-r3-rail {
+    position: relative !important;
+    inset: auto !important;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    grid-auto-flow: row !important;
+    grid-auto-rows: auto !important;
+    gap: 10px !important;
+    width: 100% !important;
+    padding: 12px 16px 18px !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    transform: none !important;
+  }
+
+  .lia-dash-r3-scroll > .lia-command-r3-rail > *,
+  .lia-dash-r3-scroll > .lia-dash-r3-rail-shell > *,
+  .lia-dash-r3-scroll > .lia-agenda-r3-rail > *,
+  .lia-dash-r3-scroll > .lia-projects-r3-rail > * {
+    position: relative !important;
+    inset: auto !important;
+    grid-area: auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: auto !important;
+    transform: none !important;
+    z-index: auto !important;
+  }
+
+  .lia-command-r3-location,
+  .lia-command-r3-weather {
+    position: relative !important;
+    inset: auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    transform: none !important;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1199px) {
+  .lia-dash-r3-scroll > .lia-command-r3-rail,
+  .lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+  .lia-dash-r3-scroll > .lia-agenda-r3-rail,
+  .lia-dash-r3-scroll > .lia-projects-r3-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* END LIA_R3_FLOW_ISOLATION_V8 */
+
+/* LIA_R3_SAFE_GUTTERS_V10
+   Aire permanente entre contenido y bordes físicos del viewport. */
+
+.lia-dash-r3-scroll {
+  box-sizing: border-box !important;
+  padding-bottom: max(18px, env(safe-area-inset-bottom)) !important;
+}
+
+.lia-dash-r3-scroll > .lia-dash-r3-main {
+  box-sizing: border-box !important;
+  padding-left: max(18px, env(safe-area-inset-left)) !important;
+  padding-right: max(18px, env(safe-area-inset-right)) !important;
+  padding-bottom: 22px !important;
+}
+
+@media (min-width:721px) and (max-width:1599px) {
+  .lia-dash-r3-scroll > .lia-dash-r3-rail-shell,
+  .lia-dash-r3-scroll > .lia-command-r3-rail {
+    box-sizing: border-box !important;
+    margin-left: 18px !important;
+    margin-right: 18px !important;
+    width: calc(100% - 36px) !important;
+  }
+
+  .lia-projects-r3-shell .lia-dash-r3-scroll > .lia-dash-r3-main,
+  .lia-agenda-r3-shell .lia-dash-r3-scroll > .lia-dash-r3-main,
+  .lia-office-r3-shell .lia-dash-r3-scroll > .lia-dash-r3-main,
+  .lia-command-r3-shell .lia-dash-r3-scroll > .lia-dash-r3-main {
+    margin-top: 4px !important;
+  }
+}
+
+/* END LIA_R3_SAFE_GUTTERS_V10 */
+
+
+/* ==========================================================
+   LIA_SIDEBAR_TRACK_AUTHORITY_V18
+   El track debe respetar el ancho real del estado React.
+   Evita comprimir 206/230px dentro de un track de 176px.
+   ========================================================== */
+
+@media (min-width:721px) and (max-width:1239px) {
+
+  .lia-dash-r3-shell,
+  .lia-command-r3-shell,
+  .lia-agenda-r3-shell,
+  .lia-projects-r3-shell,
+  .lia-office-r3-shell {
+    grid-template-columns:
+      var(--lia-dash-r3-sidebar-width)
+      minmax(0,1fr) !important;
+  }
+
+  .lia-dash-r3-sidebar-shell {
+    box-sizing: border-box !important;
+    width: var(--lia-dash-r3-sidebar-width) !important;
+    min-width: var(--lia-dash-r3-sidebar-width) !important;
+    max-width: var(--lia-dash-r3-sidebar-width) !important;
+  }
+
+  /* Intermediate debe mostrar texto completo cuando dispone de 206px. */
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-brand-copy {
+    min-width: 0 !important;
+    max-width: none !important;
+    opacity: 1 !important;
+  }
+
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-nav-item {
+    justify-content: flex-start !important;
+    gap: 10px !important;
+  }
+
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-nav-label {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-tile {
+    min-width: 0 !important;
+    width: calc(100% - 18px) !important;
+    margin-inline: 9px !important;
+    padding-inline: 10px !important;
+  }
+
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-copy {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    opacity: 1 !important;
+  }
+
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-copy strong,
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-copy span,
+  .lia-dash-r3-sidebar-shell.is-intermediate .lia-dash-r3-operator-copy small {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+}
+
+/* END LIA_SIDEBAR_TRACK_AUTHORITY_V18 */

@@ -56,7 +56,6 @@ export function DashboardHeaderR3({ now, conversationController, onLogout }: Pro
       <div className="lia-dash-r3-header-controls">
         <button type="button" aria-label="Notificaciones">
           <DashboardIconR3 name="campana" />
-          <b>3</b>
         </button>
         <button type="button" aria-label="Mensajes"><DashboardIconR3 name="mensajes" /></button>
         <span className="lia-dash-r3-avatar">OL</span>

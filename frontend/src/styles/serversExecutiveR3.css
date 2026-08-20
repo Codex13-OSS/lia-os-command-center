@@ -1,0 +1,701 @@
+.lia-servers-r3-shell .lia-dash-r3-main {
+  gap:14px;
+  height:auto;
+  min-height:0;
+  align-self:start;
+  overflow:visible;
+}
+
+.lia-servers-r3-title {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+  padding:18px 20px;
+  border:1px solid rgba(113,184,223,.17);
+  border-radius:20px;
+  background:
+    radial-gradient(circle at 82% 18%,rgba(31,157,210,.12),transparent 32%),
+    linear-gradient(145deg,rgba(8,35,54,.66),rgba(5,21,36,.48));
+  box-shadow:0 20px 48px rgba(0,5,13,.22),inset 0 1px rgba(226,246,255,.06);
+  backdrop-filter:blur(18px) saturate(140%);
+  -webkit-backdrop-filter:blur(18px) saturate(140%);
+}
+
+.lia-servers-r3-title span,
+.lia-servers-r3-card header span,
+.lia-servers-r3-health header span,
+.lia-servers-r3-node header span {
+  color:#72bde5;
+  font-size:8px;
+  font-weight:800;
+  letter-spacing:.15em;
+}
+
+.lia-servers-r3-title h1 {
+  margin:5px 0 4px;
+  color:#eff9fd;
+  font-size:28px;
+  letter-spacing:-.035em;
+}
+
+.lia-servers-r3-title p {
+  margin:0;
+  color:#839dad;
+  font-size:10px;
+}
+
+.lia-servers-r3-title-actions {
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.lia-servers-r3-mode {
+  min-width:155px;
+  padding:10px 12px;
+  display:grid;
+  grid-template-columns:auto 1fr;
+  gap:2px 8px;
+  border-radius:12px;
+  background:rgba(4,20,33,.44);
+}
+
+.lia-servers-r3-mode i {
+  grid-row:1/4;
+  width:9px;
+  height:9px;
+  margin-top:9px;
+  border-radius:50%;
+  background:#5fc799;
+  box-shadow:0 0 12px rgba(95,199,153,.45);
+}
+
+.lia-servers-r3-mode span,
+.lia-servers-r3-mode strong,
+.lia-servers-r3-mode small { display:block; }
+
+.lia-servers-r3-mode span { color:#6b8a9d;font-size:7px; }
+.lia-servers-r3-mode strong { color:#ddecf4;font-size:10px; }
+.lia-servers-r3-mode small { color:#637e90;font-size:7px; }
+
+.lia-servers-r3-overview {
+  display:grid;
+  grid-template-columns:minmax(260px,.72fr) minmax(0,1.28fr);
+  gap:12px;
+}
+
+.lia-servers-r3-node,
+.lia-servers-r3-health,
+.lia-servers-r3-card {
+  min-width:0;
+  padding:15px;
+  border:1px solid rgba(115,177,211,.14);
+  border-radius:18px;
+  background:
+    linear-gradient(180deg,rgba(255,255,255,.025),transparent 30%),
+    rgba(5,24,39,.40);
+  box-shadow:0 16px 36px rgba(0,5,12,.18),inset 0 1px rgba(220,243,255,.045);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+}
+
+.lia-servers-r3-node header,
+.lia-servers-r3-card header,
+.lia-servers-r3-health header {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.lia-servers-r3-node h2 {
+  margin:4px 0 0;
+  color:#eaf6fb;
+  font-size:18px;
+}
+
+.lia-servers-r3-node header b,
+.lia-servers-r3-card header b {
+  padding:5px 7px;
+  color:#7894a5;
+  border:1px solid rgba(111,162,190,.13);
+  border-radius:999px;
+  background:rgba(4,19,31,.42);
+  font-size:7px;
+  letter-spacing:.08em;
+}
+
+.lia-servers-r3-node-map {
+  position:relative;
+  height:145px;
+  margin:13px 0;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  border-radius:14px;
+  background:
+    linear-gradient(rgba(71,132,163,.07) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(71,132,163,.07) 1px,transparent 1px),
+    radial-gradient(circle at 50% 45%,rgba(33,146,199,.16),rgba(3,16,28,.46) 58%);
+  background-size:20px 20px,20px 20px,auto;
+}
+
+.lia-servers-r3-rack {
+  width:92px;
+  padding:7px;
+  display:grid;
+  gap:5px;
+  border:1px solid rgba(118,193,230,.22);
+  border-radius:11px;
+  background:rgba(4,18,30,.70);
+  box-shadow:0 0 36px rgba(39,151,206,.13);
+}
+
+.lia-servers-r3-rack i {
+  height:18px;
+  border:1px solid rgba(115,178,210,.17);
+  border-radius:5px;
+  background:linear-gradient(90deg,rgba(28,74,99,.55),rgba(8,29,44,.64));
+}
+
+.lia-servers-r3-rack i::after {
+  content:"";
+  display:block;
+  width:5px;
+  height:5px;
+  margin:6px;
+  border-radius:50%;
+  background:#607d8d;
+}
+
+.lia-servers-r3-pulse {
+  position:absolute;
+  width:150px;
+  height:150px;
+  border:1px solid rgba(50,165,215,.10);
+  border-radius:50%;
+  animation:lia-server-pulse 3.2s ease-in-out infinite;
+}
+
+@keyframes lia-server-pulse {
+  0%,100% { transform:scale(.8);opacity:.25; }
+  50% { transform:scale(1);opacity:.65; }
+}
+
+.lia-servers-r3-node footer {
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:6px;
+}
+
+.lia-servers-r3-node footer div,
+.lia-servers-r3-metric {
+  padding:9px;
+  border-radius:10px;
+  background:rgba(3,17,29,.38);
+}
+
+.lia-servers-r3-node footer span,
+.lia-servers-r3-node footer strong,
+.lia-servers-r3-metric span,
+.lia-servers-r3-metric strong,
+.lia-servers-r3-metric small {
+  display:block;
+}
+
+.lia-servers-r3-node footer span,
+.lia-servers-r3-metric span {
+  color:#6d899c;
+  font-size:7px;
+}
+
+.lia-servers-r3-node footer strong,
+.lia-servers-r3-metric strong {
+  margin-top:4px;
+  color:#dcecf4;
+  font-size:10px;
+}
+
+.lia-servers-r3-health header small {
+  color:#688497;
+  font-size:8px;
+}
+
+.lia-servers-r3-metrics {
+  margin-top:11px;
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:7px;
+}
+
+.lia-servers-r3-metric strong {
+  font-size:22px;
+  letter-spacing:-.04em;
+}
+
+.lia-servers-r3-metric small {
+  margin-top:3px;
+  color:#607b8d;
+  font-size:7px;
+}
+
+.lia-servers-r3-grid {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+}
+
+.lia-servers-r3-services {
+  margin-top:10px;
+  display:grid;
+  gap:6px;
+}
+
+.lia-servers-r3-services > div {
+  padding:9px;
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:9px;
+  border-radius:10px;
+  background:rgba(4,18,30,.35);
+}
+
+.lia-servers-r3-services i {
+  width:7px;
+  height:7px;
+  border-radius:50%;
+  background:#607d8d;
+}
+
+.lia-servers-r3-services span,
+.lia-servers-r3-services strong,
+.lia-servers-r3-services small {
+  display:block;
+}
+
+.lia-servers-r3-services strong { color:#d9eaf2;font-size:9px; }
+.lia-servers-r3-services small { margin-top:2px;color:#617c8e;font-size:7px; }
+.lia-servers-r3-services > div > b { color:#6c899b;font-size:9px; }
+
+.lia-servers-r3-empty {
+  min-height:110px;
+  display:grid;
+  align-content:center;
+  text-align:center;
+}
+
+.lia-servers-r3-empty strong {
+  color:#b9ced9;
+  font-size:10px;
+}
+
+.lia-servers-r3-empty p,
+.lia-servers-r3-operator p {
+  margin:6px auto 0;
+  max-width:390px;
+  color:#6f899a;
+  font-size:8px;
+  line-height:1.5;
+}
+
+.lia-servers-r3-operator > div {
+  margin-top:13px;
+}
+
+.lia-servers-r3-operator > div > strong {
+  color:#d9e9f1;
+  font-size:10px;
+}
+
+.lia-servers-r3-operator button {
+  width:100%;
+  min-height:42px;
+  margin-top:12px;
+  border:1px solid rgba(115,168,197,.12);
+  border-radius:10px;
+  color:#6c8595;
+  background:rgba(4,17,28,.42);
+}
+
+@media (max-width:1000px) {
+  .lia-servers-r3-overview,
+  .lia-servers-r3-grid {
+    grid-template-columns:1fr;
+  }
+}
+
+@media (max-width:720px) {
+  .lia-servers-r3-title {
+    align-items:flex-start;
+    flex-direction:column;
+  }
+
+  .lia-servers-r3-title-actions {
+    width:100%;
+    flex-direction:column;
+    align-items:stretch;
+  }
+
+  .lia-servers-r3-metrics {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+
+
+/* LIA_SERVERS_LIVE_TELEMETRY_V2 */
+
+.lia-servers-r3-node header b.is-online {
+  color:#80d9af;
+  border-color:rgba(92,202,149,.20);
+  background:rgba(27,105,73,.20);
+  box-shadow:0 0 18px rgba(67,196,139,.08);
+}
+
+.lia-servers-r3-meter {
+  position:relative;
+  height:4px;
+  margin-top:9px;
+  overflow:hidden;
+  border-radius:999px;
+  background:rgba(90,139,168,.12);
+}
+
+.lia-servers-r3-meter > i {
+  position:absolute;
+  inset:0 auto 0 0;
+  min-width:2px;
+  border-radius:inherit;
+  background:linear-gradient(90deg,#3fa8dc,#65d4e5);
+  box-shadow:0 0 10px rgba(71,181,221,.30);
+  transition:width .45s ease;
+}
+
+.lia-servers-r3-metric {
+  min-height:104px;
+  display:flex;
+  flex-direction:column;
+}
+
+.lia-servers-r3-metric > strong {
+  margin-top:auto;
+  padding-top:8px;
+}
+
+.lia-servers-r3-metric > small {
+  min-height:20px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+/* END LIA_SERVERS_LIVE_TELEMETRY_V2 */
+
+
+/* LIA_SERVERS_INVENTORY_V3 */
+
+.lia-servers-r3-services i.is-online {
+  background:#65d09b;
+  box-shadow:0 0 10px rgba(84,207,152,.38);
+}
+
+.lia-servers-r3-service-chips,
+.lia-servers-r3-ports {
+  margin-top:13px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+
+.lia-servers-r3-service-chips > span,
+.lia-servers-r3-ports > span {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 8px;
+  border:1px solid rgba(106,171,207,.12);
+  border-radius:999px;
+  color:#91aebe;
+  background:rgba(3,18,30,.38);
+  font-size:7px;
+}
+
+.lia-servers-r3-service-chips i {
+  width:5px;
+  height:5px;
+  border-radius:50%;
+  background:#64ca98;
+  box-shadow:0 0 7px rgba(83,203,147,.30);
+}
+
+.lia-servers-r3-ports > span {
+  min-width:46px;
+  justify-content:center;
+  color:#8fc7e4;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+
+.lia-servers-r3-containers {
+  margin-top:12px;
+  display:grid;
+  gap:7px;
+}
+
+.lia-servers-r3-containers > div {
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  gap:10px;
+  align-items:center;
+  padding:10px;
+  border-radius:11px;
+  background:rgba(3,18,30,.38);
+}
+
+.lia-servers-r3-container-icon {
+  width:30px;
+  height:27px;
+  padding:5px;
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:2px;
+  border:1px solid rgba(79,174,216,.16);
+  border-radius:7px;
+  background:rgba(20,87,116,.16);
+}
+
+.lia-servers-r3-container-icon i {
+  border-radius:2px;
+  background:rgba(93,193,226,.46);
+}
+
+.lia-servers-r3-containers span,
+.lia-servers-r3-containers strong,
+.lia-servers-r3-containers small {
+  min-width:0;
+  display:block;
+}
+
+.lia-servers-r3-containers strong {
+  overflow:hidden;
+  color:#dcecf3;
+  font-size:9px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.lia-servers-r3-containers small {
+  margin-top:3px;
+  overflow:hidden;
+  color:#678497;
+  font-size:7px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.lia-servers-r3-containers > div > b {
+  max-width:145px;
+  color:#73c9a1;
+  font-size:7px;
+  text-align:right;
+}
+
+.lia-servers-r3-explorer {
+  padding:17px;
+  border:1px solid rgba(113,184,223,.15);
+  border-radius:20px;
+  background:
+    radial-gradient(circle at 50% 0,rgba(30,125,172,.10),transparent 40%),
+    rgba(4,21,35,.42);
+  box-shadow:0 18px 42px rgba(0,5,13,.19),inset 0 1px rgba(222,244,255,.04);
+  backdrop-filter:blur(16px);
+  -webkit-backdrop-filter:blur(16px);
+}
+
+.lia-servers-r3-explorer > header {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:20px;
+  margin-bottom:13px;
+}
+
+.lia-servers-r3-explorer > header span {
+  color:#6fbae1;
+  font-size:8px;
+  font-weight:800;
+  letter-spacing:.15em;
+}
+
+.lia-servers-r3-explorer > header h2 {
+  margin:5px 0 3px;
+  color:#edf7fb;
+  font-size:18px;
+}
+
+.lia-servers-r3-explorer > header p {
+  margin:0;
+  color:#718b9c;
+  font-size:8px;
+}
+
+.lia-servers-r3-explorer > header > b {
+  padding:6px 8px;
+  border:1px solid rgba(82,199,151,.17);
+  border-radius:999px;
+  color:#71d0a2;
+  background:rgba(33,110,76,.16);
+  font-size:7px;
+}
+
+.lia-servers-r3-root-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+}
+
+.lia-servers-r3-root {
+  min-width:0;
+  overflow:hidden;
+  border:1px solid rgba(107,169,201,.12);
+  border-radius:14px;
+  background:rgba(2,15,26,.34);
+}
+
+.lia-servers-r3-root > header {
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:9px;
+  padding:10px;
+  border-bottom:1px solid rgba(105,167,200,.09);
+}
+
+.lia-servers-r3-root > header > i {
+  width:23px;
+  height:17px;
+  border:1px solid rgba(80,170,211,.25);
+  border-radius:4px;
+  background:linear-gradient(145deg,rgba(38,128,170,.35),rgba(14,66,92,.30));
+}
+
+.lia-servers-r3-root > header span,
+.lia-servers-r3-root > header strong {
+  display:block;
+}
+
+.lia-servers-r3-root > header span {
+  color:#607f92;
+  font-size:6px;
+  letter-spacing:.12em;
+}
+
+.lia-servers-r3-root > header strong {
+  margin-top:2px;
+  color:#dcecf4;
+  font-size:10px;
+}
+
+.lia-servers-r3-root > header > b {
+  color:#75bddd;
+  font-size:9px;
+}
+
+.lia-servers-r3-tree {
+  max-height:280px;
+  overflow:auto;
+  scrollbar-width:thin;
+}
+
+.lia-servers-r3-tree > div {
+  min-width:0;
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:center;
+  gap:7px;
+  padding:7px 9px;
+  border-bottom:1px solid rgba(102,153,181,.055);
+}
+
+.lia-servers-r3-tree > div:hover {
+  background:rgba(54,133,169,.07);
+}
+
+.lia-servers-r3-tree > div > i {
+  width:8px;
+  height:7px;
+  border-radius:2px;
+  background:#5b8196;
+}
+
+.lia-servers-r3-tree > div > i.is-directory {
+  background:#4fa5cb;
+  box-shadow:0 0 7px rgba(59,153,194,.18);
+}
+
+.lia-servers-r3-tree > div > span {
+  min-width:0;
+  overflow:hidden;
+  color:#a7becb;
+  font-size:8px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.lia-servers-r3-tree > div > small {
+  color:#506d80;
+  font-size:6px;
+}
+
+.lia-servers-r3-bottom-grid {
+  grid-template-columns:minmax(220px,.65fr) minmax(0,1.35fr);
+}
+
+.lia-servers-r3-backup-summary {
+  min-height:105px;
+  display:grid;
+  place-content:center;
+  text-align:center;
+}
+
+.lia-servers-r3-backup-summary strong {
+  color:#e2f2f7;
+  font-size:28px;
+}
+
+.lia-servers-r3-backup-summary span {
+  max-width:240px;
+  margin-top:4px;
+  color:#6d8798;
+  font-size:8px;
+}
+
+.lia-servers-r3-inline-empty {
+  padding:18px !important;
+  display:block !important;
+  color:#6f899a;
+  text-align:center;
+  font-size:8px;
+}
+
+@media(max-width:1100px) {
+  .lia-servers-r3-root-grid {
+    grid-template-columns:1fr;
+  }
+
+  .lia-servers-r3-tree {
+    max-height:190px;
+  }
+}
+
+@media(max-width:720px) {
+  .lia-servers-r3-bottom-grid {
+    grid-template-columns:1fr;
+  }
+
+  .lia-servers-r3-explorer > header {
+    flex-direction:column;
+  }
+}
+
+/* END LIA_SERVERS_INVENTORY_V3 */

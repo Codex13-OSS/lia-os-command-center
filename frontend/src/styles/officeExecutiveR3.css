@@ -1,0 +1,150 @@
+/* LÍA Agent Office — evidence-backed 2.5D management-game scene. */
+.lia-office-r3-shell {
+  --office-line: rgba(126, 190, 225, .18);
+  --office-ink: #edf8ff;
+  --office-muted: #7f98aa;
+  --office-blue: #55bdf2;
+  --office-teal: #4fd8c4;
+  --office-amber: #e8b462;
+  --office-red: #ec7873;
+  grid-template-columns: var(--lia-dash-r3-sidebar-width) minmax(0, 1fr);
+}
+.lia-office-r3-shell .lia-dash-r3-header-shell,
+.lia-office-r3-shell .lia-dash-r3-main { grid-column: 2; }
+.lia-office-r3-shell .lia-dash-r3-main { min-height: 0; padding: 16px 18px 18px; overflow-y: auto; overflow-x: hidden; }
+.lia-office-r3-title { flex: 0 0 auto; display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 2px 2px 14px; }
+.lia-office-r3-title > div:first-child > span,
+.lia-office-r3-world-head span,
+.lia-office-r3-evidence header span { color: #70bde6; font-size: 9px; font-weight: 800; letter-spacing: .15em; }
+.lia-office-r3-title h1 { margin: 4px 0; color: var(--office-ink); font-size: 27px; line-height: 1.05; letter-spacing: -.035em; }
+.lia-office-r3-title p { margin: 0; color: var(--office-muted); font-size: 11.5px; }
+.lia-office-r3-live { min-width: 190px; padding: 10px 13px; display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 2px 8px; border: 1px solid var(--office-line); border-radius: 14px; background: rgba(8, 28, 44, .72); }
+.lia-office-r3-live > i { width: 7px; height: 7px; grid-row: 1/3; border-radius: 50%; background: #45d28c; box-shadow: 0 0 12px rgba(69, 210, 140, .6); }
+.lia-office-r3-live span { color: #7895a9; font-size: 9px; text-transform: uppercase; }
+.lia-office-r3-live strong { color: #dceef8; font-size: 11px; text-transform: capitalize; }
+.lia-office-r3-live small { grid-column: 2/4; color: #668093; font-size: 9px; }
+.lia-office-r3-content { min-width: 0; min-height: 0; display: grid; gap: 12px; }
+.lia-office-r3-world { min-width: 0; min-height: 500px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--office-line); border-radius: 22px; background: linear-gradient(145deg, rgba(9, 31, 49, .93), rgba(4, 16, 27, .97)); box-shadow: 0 26px 65px rgba(0, 5, 12, .34), inset 0 1px rgba(229, 247, 255, .06); }
+.lia-office-r3-world-head { flex: 0 0 54px; padding: 0 18px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid rgba(111, 177, 216, .11); }
+.lia-office-r3-world-head strong { display: block; max-width: 650px; margin-top: 3px; overflow: hidden; color: #dcecf5; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.lia-office-r3-chips { display: flex; gap: 6px; }
+.lia-office-r3-chips b { padding: 6px 8px; color: #8fb4ca; border-radius: 999px; background: rgba(13, 47, 70, .58); font-size: 8px; font-weight: 700; white-space: nowrap; }
+.lia-office-r3-floor { position: relative; flex: 1 1 auto; min-height: 444px; overflow: hidden; perspective: 900px; background: radial-gradient(ellipse at 50% 35%, rgba(44, 115, 150, .16), transparent 49%), linear-gradient(160deg, #0b2837 0 48%, #071c2a 48% 100%); }
+.lia-office-r3-grid { position: absolute; inset: 14px 18px 18px; border-radius: 8px; background: linear-gradient(30deg, transparent 49.5%, rgba(99, 161, 190, .08) 50%, transparent 50.5%), linear-gradient(150deg, transparent 49.5%, rgba(99, 161, 190, .08) 50%, transparent 50.5%); background-size: 58px 34px; clip-path: polygon(50% 0, 100% 27%, 100% 73%, 50% 100%, 0 73%, 0 27%); box-shadow: inset 0 0 90px rgba(0, 5, 12, .48); }
+.lia-office-r3-walls { position: absolute; inset: 14px 18px 18px; pointer-events: none; }
+.lia-office-r3-walls i { position: absolute; top: 0; height: 27%; background: linear-gradient(180deg, rgba(26, 66, 85, .92), rgba(11, 37, 52, .66)); border-top: 1px solid rgba(168, 218, 239, .19); }
+.lia-office-r3-walls i:first-child { left: 0; width: 50%; clip-path: polygon(0 0, 100% 0, 100% 100%, 0 49%); }
+.lia-office-r3-walls i:last-child { right: 0; width: 50%; clip-path: polygon(0 0, 100% 0, 100% 49%, 0 100%); }
+.lia-office-r3-zone { position: absolute; z-index: 3; width: 148px; height: 112px; padding-top: 17px; border: 1px solid rgba(111, 184, 218, .12); border-radius: 10px; background: linear-gradient(145deg, rgba(16, 53, 70, .72), rgba(7, 29, 43, .44)); box-shadow: 0 15px 22px rgba(0, 6, 13, .24), inset 0 1px rgba(214, 241, 252, .05); transform: skewY(-3deg); }
+.lia-office-r3-zone > span { position: absolute; top: 7px; left: 9px; right: 7px; overflow: hidden; color: #6f9fb8; font-size: 7px; font-weight: 800; letter-spacing: .1em; text-overflow: ellipsis; white-space: nowrap; }
+.lia-office-r3-zone.is-hub { z-index: 5; top: 40%; left: 50%; width: 180px; height: 126px; border-color: rgba(81, 192, 235, .28); background: radial-gradient(circle at 50% 44%, rgba(51, 169, 213, .22), transparent 48%), rgba(7, 35, 52, .84); transform: translate(-50%, -50%) skewY(-3deg); }
+.lia-office-r3-zone.is-architecture { top: 14%; left: 7%; }
+.lia-office-r3-zone.is-implementation { bottom: 11%; left: 19%; }
+.lia-office-r3-zone.is-verification { bottom: 11%; right: 19%; }
+.lia-office-r3-zone.is-risk { top: 14%; right: 7%; }
+.lia-office-r3-desk { position: absolute; left: 22px; right: 22px; top: 43px; height: 31px; border-radius: 4px; background: linear-gradient(145deg, #22536a, #123548); box-shadow: 0 9px 0 #092130, 0 13px 14px rgba(0, 4, 10, .4); transform: skewY(4deg); }
+.lia-office-r3-desk i { position: absolute; top: -16px; left: 50%; width: 29px; height: 19px; border: 2px solid #326c88; border-radius: 3px; background: linear-gradient(145deg, #153f55, #081e2d); transform: translateX(-50%); box-shadow: 0 0 12px rgba(73, 177, 224, .16); }
+.lia-office-r3-console { position: absolute; inset: 36px 25px 35px; border: 1px solid rgba(81, 190, 231, .25); border-radius: 50%; background: radial-gradient(circle, rgba(73, 184, 225, .25), rgba(8, 37, 54, .72) 58%); box-shadow: 0 0 25px rgba(46, 150, 194, .14); }
+.lia-office-r3-console i { position: absolute; inset: 12%; border: 1px solid rgba(94, 203, 240, .18); border-radius: 50%; }
+.lia-office-r3-console i:nth-child(2) { inset: 28%; }
+.lia-office-r3-console i:nth-child(3) { inset: 43%; background: #78d5f2; box-shadow: 0 0 13px #47add3; }
+.lia-office-r3-agent { position: absolute; z-index: 7; left: 50%; bottom: 4px; width: 86px; min-height: 70px; padding: 0 3px 2px; color: #ddecf4; border: 0; background: transparent; cursor: pointer; transform: translateX(-50%) skewY(3deg); touch-action: manipulation; }
+.lia-office-r3-person { position: relative; width: 33px; height: 45px; margin: 0 auto; display: block; filter: drop-shadow(0 7px 5px rgba(0, 4, 10, .44)); }
+.lia-office-r3-person .head { position: absolute; z-index: 2; top: 1px; left: 9px; width: 16px; height: 18px; border-radius: 48% 48% 43% 43%; background: linear-gradient(145deg, #f0c7a3, #b9785f); box-shadow: inset -3px -2px rgba(60, 27, 25, .15); }
+.lia-office-r3-person .head::before { content: ""; position: absolute; left: -1px; right: -1px; top: -1px; height: 7px; border-radius: 9px 9px 3px 3px; background: #17384b; }
+.lia-office-r3-person .body { position: absolute; z-index: 1; top: 17px; left: 5px; width: 24px; height: 25px; border-radius: 8px 8px 5px 5px; background: linear-gradient(145deg, #4daed7, #1b6285); box-shadow: inset -4px -4px rgba(2, 20, 32, .16); }
+.lia-office-r3-person .arms { position: absolute; z-index: 2; top: 21px; left: 1px; width: 32px; height: 14px; border: solid rgba(55, 139, 174, .95); border-width: 0 5px; border-radius: 45%; transform: rotate(-5deg); }
+.lia-office-r3-agent.is-hermes .lia-office-r3-person .body { background: linear-gradient(145deg, #76d9d0, #267e88); }
+.lia-office-r3-agent.is-verification .lia-office-r3-person .body { background: linear-gradient(145deg, #b298e9, #594d9b); }
+.lia-office-r3-agent.is-data-risk .lia-office-r3-person .body { background: linear-gradient(145deg, #e0b36d, #92642b); }
+.lia-office-r3-person .shadow { position: absolute; left: 0; right: 0; bottom: -3px; height: 8px; border-radius: 50%; background: rgba(0, 6, 12, .45); transform: scaleX(1.15); }
+.lia-office-r3-agent > strong, .lia-office-r3-agent > small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lia-office-r3-agent > strong { font-size: 8.5px; }
+.lia-office-r3-agent > small { color: #7899ad; font-size: 7px; }
+.lia-office-r3-state { position: absolute; left: 50%; bottom: calc(100% + 3px); min-width: 72px; padding: 4px 6px; display: flex; align-items: center; justify-content: center; gap: 4px; color: #9ec6da; border: 1px solid rgba(128, 190, 220, .15); border-radius: 999px; background: rgba(5, 23, 35, .88); font-size: 7px; transform: translateX(-50%); white-space: nowrap; }
+.lia-office-r3-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--office-blue); }
+.lia-office-r3-agent.is-waiting_human .lia-office-r3-state i { background: var(--office-amber); }
+.lia-office-r3-agent.is-failed .lia-office-r3-state i { background: var(--office-red); }
+.lia-office-r3-agent.is-selected .lia-office-r3-person { filter: drop-shadow(0 0 8px rgba(93, 202, 245, .65)); }
+.lia-office-r3-agent:focus-visible { outline: 2px solid #73cef4; outline-offset: 3px; border-radius: 9px; }
+.lia-office-r3-waiting { position: absolute; z-index: 2; left: 4%; bottom: 5%; width: 130px; height: 72px; padding: 8px; border: 1px solid rgba(99, 157, 184, .14); border-radius: 28px 10px 28px 10px; background: rgba(11, 40, 51, .66); color: #6f9aad; font-size: 7px; font-weight: 800; letter-spacing: .1em; }
+.lia-office-r3-waiting i { position: absolute; bottom: 13px; width: 40px; height: 24px; border-radius: 12px 12px 5px 5px; background: #1b5060; box-shadow: 0 6px 0 #0b2c39; }
+.lia-office-r3-waiting i:first-of-type { left: 15px; }.lia-office-r3-waiting i:last-of-type { right: 15px; }
+.lia-office-r3-boardroom { position: absolute; z-index: 4; top: 5%; left: 50%; width: 240px; min-height: 104px; padding: 10px 12px; border: 1px solid rgba(167, 144, 213, .24); border-radius: 8px; background: linear-gradient(150deg, rgba(46, 44, 75, .76), rgba(15, 29, 45, .84)); box-shadow: inset 0 1px rgba(226, 218, 255, .07), 0 13px 24px rgba(0, 5, 12, .3); transform: translateX(-50%); }
+.lia-office-r3-boardroom header { display: flex; justify-content: space-between; gap: 8px; color: #b8a9dc; font-size: 7px; font-weight: 800; letter-spacing: .11em; }
+.lia-office-r3-boardroom header small { color: #7f83a2; font-size: 7px; letter-spacing: 0; }
+.lia-office-r3-board-table { width: 125px; height: 35px; margin: 10px auto 6px; border-radius: 50%; background: linear-gradient(145deg, #665c83, #302f50); box-shadow: 0 7px 0 #171b31, 0 11px 15px rgba(0, 3, 9, .35); }
+.lia-office-r3-board-seats { display: flex; justify-content: center; gap: 5px; color: #888ca8; font-size: 7px; }
+.lia-office-r3-board-seats span { max-width: 54px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.lia-office-r3-board-seats i { display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: 50%; background: #a995d1; }
+.lia-office-r3-board-seats em { font-style: normal; }
+.lia-office-r3-evidence { min-width: 0; display: grid; grid-template-columns: 1.05fr 1.1fr .85fr; gap: 10px; }
+.lia-office-r3-evidence article { min-width: 0; padding: 13px 14px; border: 1px solid rgba(111, 171, 205, .14); border-radius: 15px; background: rgba(7, 24, 38, .68); }
+.lia-office-r3-evidence header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.lia-office-r3-evidence header b { color: #7898ab; font-size: 8px; }
+.lia-office-r3-evidence article > strong { display: block; margin-top: 10px; color: #dceaf2; font-size: 11px; }.lia-office-r3-evidence article > div { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; }.lia-office-r3-evidence article > div span { padding: 5px 7px; color: #8ba9ba; border-radius: 7px; background: rgba(13, 45, 64, .57); font-size: 8px; }.lia-office-r3-evidence p,.lia-office-r3-evidence small { color: #7892a4; font-size: 9px; line-height: 1.45; }.lia-office-r3-evidence ol { max-height: 108px; margin: 8px 0 0; padding: 0; overflow-y: auto; list-style: none; }.lia-office-r3-evidence li { padding: 5px 0; display: flex; gap: 7px; border-bottom: 1px solid rgba(104, 153, 183, .08); }.lia-office-r3-evidence li i { width: 6px; height: 6px; margin-top: 3px; border-radius: 50%; background: #6997b3; }.lia-office-r3-evidence li strong,.lia-office-r3-evidence li small { display: block; }.lia-office-r3-evidence li strong { color: #cbdde7; font-size: 9px; }
+.lia-office-r3-empty { min-height: 150px; display: grid; place-content: center; justify-items: center; gap: 5px; color: #8099aa; border: 1px dashed var(--office-line); border-radius: 18px; }.lia-office-r3-empty strong { color: #d6e8f2; }
+.lia-office-r3-inspector-layer { position: fixed; z-index: 80; inset: 0; display: flex; justify-content: flex-end; padding: 70px 0 0; background: rgba(0, 6, 12, .34); backdrop-filter: blur(2px); }
+.lia-office-r3-inspector-layer > div { width: min(390px, calc(100vw - 24px)); height: 100%; }
+.lia-office-r3-inspector { width: 100%; height: 100%; padding: 18px; overflow-y: auto; border-left: 1px solid rgba(125, 190, 225, .23); background: rgba(5, 20, 33, .97); box-shadow: -24px 0 60px rgba(0, 4, 10, .48); }
+.lia-office-r3-inspector > header { display: grid; grid-template-columns: 1fr auto 44px; align-items: center; gap: 8px; }.lia-office-r3-inspector header span { color: #70bce5; font-size: 9px; font-weight: 800; letter-spacing: .14em; }.lia-office-r3-inspector header b { padding: 5px 7px; color: #9bc7dc; border-radius: 999px; background: rgba(27, 76, 104, .54); font-size: 8px; }.lia-office-r3-inspector header button { width: 44px; height: 44px; color: #b9d3e2; border: 1px solid rgba(124, 181, 214, .18); border-radius: 12px; background: rgba(17, 49, 69, .68); font-size: 20px; cursor: pointer; }
+.lia-office-r3-inspector-id { margin-top: 20px; padding: 14px; display: flex; align-items: center; gap: 11px; border-radius: 14px; background: rgba(12, 40, 58, .64); }.lia-office-r3-inspector-id > i { width: 42px; height: 42px; display: grid; place-items: center; color: #dff5ff; border-radius: 14px; background: linear-gradient(145deg, #318ebe, #175372); font-size: 11px; font-style: normal; font-weight: 800; }.lia-office-r3-inspector-id strong,.lia-office-r3-inspector-id small { display: block; }.lia-office-r3-inspector-id strong { color: #e7f3f9; font-size: 13px; }.lia-office-r3-inspector-id small { margin-top: 3px; color: #7895a8; font-size: 9px; }
+.lia-office-r3-inspector dl { margin: 14px 0 0; }.lia-office-r3-inspector dl div { padding: 11px 3px; border-bottom: 1px solid rgba(106, 157, 187, .1); }.lia-office-r3-inspector dt { color: #68879a; font-size: 8px; text-transform: uppercase; }.lia-office-r3-inspector dd { margin: 4px 0 0; overflow-wrap: anywhere; color: #cbdde7; font-size: 10px; line-height: 1.45; }
+@media (max-width: 1180px) {
+  .lia-office-r3-zone.is-architecture { left: 3%; }.lia-office-r3-zone.is-risk { right: 3%; }
+  .lia-office-r3-zone.is-implementation { left: 12%; }.lia-office-r3-zone.is-verification { right: 12%; }
+  .lia-office-r3-evidence { grid-template-columns: 1fr 1fr; }.lia-office-r3-evidence article:last-child { grid-column: 1/-1; }
+}
+@media (max-width: 900px) {
+  .lia-office-r3-shell .lia-dash-r3-main { min-height: 0; padding: 12px; overflow: visible; }
+  .lia-office-r3-title { align-items: flex-start; }.lia-office-r3-title p { max-width: 470px; }
+  .lia-office-r3-world { min-height: 570px; }.lia-office-r3-floor { min-height: 510px; }
+  .lia-office-r3-zone.is-architecture { top: 18%; left: 3%; }.lia-office-r3-zone.is-risk { top: 18%; right: 3%; }
+  .lia-office-r3-zone.is-implementation { bottom: 8%; left: 6%; }.lia-office-r3-zone.is-verification { bottom: 8%; right: 6%; }
+  .lia-office-r3-waiting { display: none; }.lia-office-r3-boardroom { top: 3%; }
+}
+@media (max-width: 720px) {
+  .lia-office-r3-shell { grid-template-columns: minmax(0, 1fr); }
+  .lia-office-r3-shell .lia-dash-r3-header-shell,.lia-office-r3-shell .lia-dash-r3-main { grid-column: 1; }
+  .lia-office-r3-shell .lia-dash-r3-main { padding: 10px 10px 96px; }
+  .lia-office-r3-title { display: block; }.lia-office-r3-title h1 { font-size: 24px; }.lia-office-r3-live { min-width: 0; margin-top: 10px; }
+  .lia-office-r3-world { min-height: 690px; border-radius: 17px; }.lia-office-r3-world-head { min-height: 68px; height: auto; align-items: flex-start; padding: 10px; }.lia-office-r3-chips { display: grid; }
+  .lia-office-r3-floor { min-height: 620px; }.lia-office-r3-grid,.lia-office-r3-walls { inset-inline: 7px; }
+  .lia-office-r3-zone { width: 126px; }.lia-office-r3-zone.is-hub { top: 46%; width: 150px; }.lia-office-r3-zone.is-architecture { top: 20%; left: 2%; }.lia-office-r3-zone.is-risk { top: 20%; right: 2%; }.lia-office-r3-zone.is-implementation { bottom: 7%; left: 2%; }.lia-office-r3-zone.is-verification { bottom: 7%; right: 2%; }
+  .lia-office-r3-boardroom { top: 2%; width: 210px; }.lia-office-r3-evidence { grid-template-columns: 1fr; }.lia-office-r3-evidence article:last-child { grid-column: auto; }
+  .lia-office-r3-inspector-layer { padding-top: max(54px, env(safe-area-inset-top)); align-items: flex-end; }.lia-office-r3-inspector-layer > div { width: 100%; height: min(72dvh, 610px); }.lia-office-r3-inspector { border: 1px solid rgba(125, 190, 225, .23); border-radius: 22px 22px 0 0; }
+}
+@media (max-width: 390px) {
+  .lia-office-r3-world { min-height: 650px; }.lia-office-r3-floor { min-height: 580px; }.lia-office-r3-zone { width: 116px; }.lia-office-r3-zone.is-hub { width: 140px; }.lia-office-r3-zone.is-architecture,.lia-office-r3-zone.is-implementation { left: 1%; }.lia-office-r3-zone.is-risk,.lia-office-r3-zone.is-verification { right: 1%; }
+}
+@media (prefers-reduced-motion: no-preference) { .lia-office-r3-agent.is-idle .lia-office-r3-person { animation: lia-office-idle 3.8s ease-in-out infinite; }.lia-office-r3-agent:is(.is-planning,.is-implementing,.is-verifying,.is-correcting) .lia-office-r3-state i { animation: lia-office-signal 1.6s ease-in-out infinite; } }
+@keyframes lia-office-idle { 50% { transform: translateY(-1.5px); } } @keyframes lia-office-signal { 50% { opacity: .45; transform: scale(.72); } }
+@media (prefers-reduced-motion: reduce) { .lia-office-r3-shell * { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
+
+/* V3 page authority: the scene and evidence share the shell's single scroll. */
+.lia-dash-r3-shell.lia-office-r3-shell { height:auto;min-height:100dvh;grid-template-rows:70px auto;overflow-x:hidden;overflow-y:auto; }
+.lia-office-r3-shell .lia-dash-r3-sidebar-shell { position:sticky;top:0;height:100dvh; }
+.lia-office-r3-shell .lia-dash-r3-main { min-height:0;overflow:visible; }
+
+/* iPad forensic V4: a physical floor, not five floating agent cards. */
+.lia-dash-r3-shell.lia-office-r3-shell { height:auto;min-height:100dvh;grid-template-rows:70px auto;overflow-x:clip;overflow-y:visible;align-items:start; }
+.lia-office-r3-shell .lia-dash-r3-main,.lia-office-r3-content { height:auto;min-height:0;align-self:start;overflow:visible; }
+.lia-office-r3-title-actions { display:flex;align-items:center;gap:10px; }
+.lia-office-r3-world { height:560px;min-height:560px;max-height:560px; }
+.lia-office-r3-floor { min-height:506px;background:radial-gradient(ellipse at 50% 42%,rgba(56,145,178,.2),transparent 47%),linear-gradient(150deg,#0d3442 0 49.7%,#092733 50% 100%); }
+.lia-office-r3-grid { inset:10px 14px 12px;background:linear-gradient(30deg,transparent 49.3%,rgba(125,194,214,.11) 50%,transparent 50.7%),linear-gradient(150deg,transparent 49.3%,rgba(125,194,214,.11) 50%,transparent 50.7%);background-size:64px 37px;filter:drop-shadow(0 24px 34px rgba(0,3,8,.35)); }
+.lia-office-r3-connections { position:absolute;z-index:2;inset:0;width:100%;height:100%;pointer-events:none; }.lia-office-r3-connections path { fill:none;stroke:rgba(80,205,236,.35);stroke-width:1.5;stroke-dasharray:7 8;filter:drop-shadow(0 0 4px rgba(61,183,224,.32)); }
+.lia-office-r3-zone { width:154px;height:116px;padding:0;border:0;border-radius:50%;background:radial-gradient(ellipse at 50% 72%,rgba(65,166,190,.13),transparent 63%);box-shadow:none;transform:none; }
+.lia-office-r3-zone::after { content:"";position:absolute;left:18%;right:18%;bottom:9px;height:10px;border-radius:50%;background:rgba(52,166,194,.13);filter:blur(5px); }
+.lia-office-r3-zone > span { top:2px;left:50%;right:auto;max-width:130px;padding:3px 6px;border-radius:999px;background:rgba(4,22,31,.66);transform:translateX(-50%);text-align:center; }
+.lia-office-r3-zone.is-hub { width:182px;height:138px;border:0;background:radial-gradient(circle at 50% 50%,rgba(56,194,229,.2),transparent 64%);box-shadow:none;transform:translate(-50%,-50%); }
+.lia-office-r3-desk { top:39px;left:17px;right:17px;height:34px;border-top:2px solid rgba(132,212,234,.25);background:linear-gradient(145deg,#29677b,#123b4d);box-shadow:0 8px 0 #082634,0 14px 18px rgba(0,4,9,.43);transform:skewY(5deg) rotateX(7deg); }
+.lia-office-r3-desk::before,.lia-office-r3-desk::after { content:"";position:absolute;bottom:-13px;width:5px;height:15px;background:#0b2d3a; }.lia-office-r3-desk::before { left:8px; }.lia-office-r3-desk::after { right:8px; }
+.lia-office-r3-desk i::after { content:"";position:absolute;left:50%;bottom:-8px;width:10px;height:8px;border-radius:50%;background:#123a49;transform:translateX(-50%); }
+.lia-office-r3-agent { bottom:-1px;width:92px;min-height:72px; }
+.lia-office-r3-agent > strong,.lia-office-r3-agent > small { padding:1px 5px;border-radius:6px;background:rgba(4,20,29,.58); }
+.lia-office-r3-state { bottom:calc(100% + 1px); }
+.lia-office-r3-boardroom { top:3%;width:244px;min-height:100px;border:0;background:radial-gradient(ellipse at 50% 70%,rgba(145,102,202,.16),transparent 70%);box-shadow:none; }
+.lia-office-r3-boardroom header { padding:3px 7px;border-radius:999px;background:rgba(20,22,46,.62); }
+.lia-office-r3-board-table { width:150px;height:42px;border:1px solid rgba(208,184,244,.22);background:linear-gradient(145deg,#746a91,#393652);box-shadow:0 8px 0 #181b2f,0 14px 18px rgba(0,3,9,.4); }
+.lia-office-r3-waiting { border:0;background:radial-gradient(ellipse at 50% 70%,rgba(63,145,158,.15),transparent 72%); }
+.lia-office-r3-evidence { align-items:start; }
+@media (min-width:1000px) and (max-width:1239px) { .lia-office-r3-shell { grid-template-columns:min(var(--lia-dash-r3-sidebar-width),176px) minmax(0,1fr); }.lia-office-r3-world { height:550px;min-height:550px; }.lia-office-r3-floor { min-height:496px; } }

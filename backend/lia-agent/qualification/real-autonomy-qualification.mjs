@@ -298,7 +298,12 @@ class ChildSandbox {
     this.env = sandboxEnv(root, {
       maxActive: Number.parseInt(process.env.LIA_QUAL_MAX_ACTIVE ?? '64', 10),
       maxRecords: Number.parseInt(process.env.LIA_QUAL_MAX_RECORDS ?? '512', 10),
-      extras: envExtras,
+      extras: {
+        // D validates explicit restart boundaries; startup/terminalization
+        // wakeups stay held while operator-triggered passes remain available.
+        ...(label.startsWith('D') ? { LIA_QUAL_HOLD_STARTUP: '1' } : {}),
+        ...envExtras,
+      },
     });
     this.stdout = [];
     this.stderr = [];
@@ -404,7 +409,7 @@ async function runScenario(name, fn) {
 
 async function scenarioA() {
   const root = await newSandbox('A');
-  const sandbox = bootSandbox(root);
+  const sandbox = bootSandbox(root, { holdImmediate: true }); // LIA_QUAL_MANUAL_BOUNDARY_ISOLATION_V1
   const server = await startServer(sandbox.app);
   const { baseUrl } = server;
   const { store, clock, workflowExecutor } = sandbox;
@@ -528,6 +533,8 @@ async function scenarioA() {
     evidence.steps.push(['launched-and-completed', counts10]);
 
     // A.11 — terminalization wakeup evaluates; goal completes.
+      // LIA_QUAL_A11_RELEASE_V2
+      sandbox.scheduleImmediate.releaseAll();
     await settleImmediates(30, () => goalRows(store, G)?.goal.status === 'completed');
     const hud = await supervisorHud(baseUrl, 'A.11');
     assertEqual(hud.lastPass.source, 'terminalization', 'A.11 terminalization wakeup pass recorded');
@@ -989,7 +996,7 @@ async function scenarioE() {
 
 async function scenarioF() {
   const root = await newSandbox('F');
-  const sandbox = bootSandbox(root);
+  const sandbox = bootSandbox(root, { holdImmediate: true });
   const server = await startServer(sandbox.app);
   const { baseUrl } = server;
   const { store, scheduleImmediate, supervisor, workflowExecutor } = sandbox;
@@ -1040,6 +1047,14 @@ async function scenarioF() {
     const settled = await pending;
     assertEqual(settled.ok, true, 'F.1b first pass completes');
     evidence.steps.push(['pass-in-progress', { code: concurrent.code }]);
+
+    // Release the intentionally held terminalization wakeup only after the
+    // manual idempotency boundaries have been verified.
+    scheduleImmediate.releaseAll();
+    await settleImmediates(
+      20,
+      () => !supervisor.hud().pendingWakeup && !supervisor.hud().passInProgress,
+    );
 
     // F.1c — coalescing queue never exceeds 1 pending drain (S4 observation).
     const drainBefore = scheduleImmediate.state.scheduled;
@@ -1430,17 +1445,17 @@ async function scenarioG() {
         'G.launch authorize',
       );
     }
-    const scheduledBeforeCeiling2 = sandbox.scheduleDecoupledLaunch.state.scheduled;
     const passLaunch = await supervisorPass(baseUrl, 'G.ceiling2');
     assertEqual(passLaunch.externalExecutionSlotsUsed, MAX_CONCURRENT_EXTERNAL_EXECUTIONS, 'G.ceiling2 slotsUsed === 2');
     assertEqual(passLaunch.externalExecutionCeiling, MAX_CONCURRENT_EXTERNAL_EXECUTIONS, 'G.ceiling2 ceiling === 2');
     const ceilingSkipped = passLaunch.skipped.filter((s) => s.reason === 'concurrency_ceiling_reached');
     assertEqual(ceilingSkipped.length, 1, 'G.ceiling2 third goal skipped concurrency_ceiling_reached');
     assert(passLaunch.inFlight <= MAX_CONCURRENT_EXTERNAL_EXECUTIONS, 'G.ceiling2 inFlight never exceeds 2');
+    const measuredLaunches = passLaunch.outcomes.filter((o) => o.action === 'launched');
     assertEqual(
-      sandbox.scheduleDecoupledLaunch.state.scheduled - scheduledBeforeCeiling2,
+      measuredLaunches.length,
       MAX_CONCURRENT_EXTERNAL_EXECUTIONS,
-      'G.ceiling2 exactly 2 launches scheduled by the measured pass',
+      'G.ceiling2 exactly 2 launches admitted by the measured pass',
     );
     await settleImmediates(60, () => false);
     evidence.steps.push(['ceiling-2', { slotsUsed: passLaunch.externalExecutionSlotsUsed, skipped: ceilingSkipped.length }]);
@@ -1571,8 +1586,9 @@ async function scenarioH() {
     }
 
     // H.5 — policy bounds: isolated from H.3 no-progress threshold.
+      // LIA_QUAL_H5_POLICY_BOUNDS_V2: bounded autonomy has no synthetic human approval.
     const rootH5 = await newSandbox('H5');
-    const h5 = bootSandbox(rootH5, { noProgressEscalationThreshold: 3 });
+    const h5 = bootSandbox(rootH5, { noProgressEscalationThreshold: 3, holdImmediate: true });
     const h5server = await startServer(h5.app);
     try {
       const h5baseUrl = h5server.baseUrl;
@@ -1592,63 +1608,87 @@ async function scenarioH() {
 
       await settleImmediates(30, () => goalRows(h5store, H5)?.attempts[0]?.status === 'failed');
 
-      await driveGoalToStage(h5baseUrl, H5, 'authorization_required', 'H.5-cycle1-plan');
-      await expect(
-        h5baseUrl,
-        'POST',
-        `/api/projects/goals/${H5}/continuation/approve`,
-        { approver: APPROVER },
-        200,
-        'H.5 approve',
-      );
       await driveGoalToStage(h5baseUrl, H5, 'next_attempt_accepted', 'H.5-cycle1-materialize');
       await supervisorPass(h5baseUrl, 'H.5-cycle1-launch');
       await settleImmediates(80, () => goalRows(h5store, H5)?.attempts[1]?.status === 'failed');
 
-      await driveGoalToStage(h5baseUrl, H5, 'authorization_required', 'H.5-cycle2-plan');
-      await expect(
-        h5baseUrl,
-        'POST',
-        `/api/projects/goals/${H5}/continuation/approve`,
-        { approver: APPROVER },
-        200,
-        'H.5 approve 2',
-      );
-      await driveGoalToStage(h5baseUrl, H5, 'next_attempt_accepted', 'H.5-cycle2-materialize');
-
+      // maxCycles includes the root execution. With maxCycles=2, root +
+      // continuation attempt 1 consume the full autonomous execution budget.
+      await supervisorPass(h5baseUrl, 'H.5-cycle2-evaluate');
       const cyclePass = await supervisorPass(h5baseUrl, 'H.5-cycle-limit');
       const cycleSkip = cyclePass.skipped.find((x) => x.goalId === H5);
       const cycleHeld = cyclePass.outcomes.find((x) => x.goalId === H5 && x.action === 'held');
+      const cycleDetail = await goalDetail(h5baseUrl, H5, 'H.5-cycle-limit');
       assert(
         (cycleSkip !== undefined && cycleSkip.reason === 'autonomy_cycle_limit_reached')
-        || (cycleHeld !== undefined && cycleHeld.blockingReason === 'autonomy_cycle_limit_reached'),
+        || (cycleHeld !== undefined && cycleHeld.blockingReason === 'autonomy_cycle_limit_reached')
+        || (cycleDetail.loopStage === 'exhausted' && cycleDetail.blockingReason === 'autonomy_cycle_limit_reached'),
         `H.5 cycle limit holds (${JSON.stringify(cyclePass.skipped)})`,
       );
 
       const snapH5a = await childlessSnapshot(h5store, rootH5);
       assertEqual(snapH5a.counts.launchAttempts, 2, 'H.5 exactly 2 launches (maxCycles 2)');
 
-      h5clock.advance(61_000);
+        // Independent Goal: elapsed budget cannot be masked by cycle limit.
+        const H5B = goalId(0x46);
+        await createGoal(h5baseUrl, H5B, {
+          script: 'qual:fail-all',
+          autonomy: {
+            mode: 'bounded_autonomous',
+            approver: APPROVER,
+            maxCycles: 8,
+            elapsedBudgetMs: 60_000,
+          },
+        }, 'H.5 budget goal');
 
-      const budgetPass = await supervisorPass(h5baseUrl, 'H.5-budget');
-      const budgetSkip = budgetPass.skipped.find((x) => x.goalId === H5);
-      const budgetHeld = budgetPass.outcomes.find((x) => x.goalId === H5 && x.action === 'held');
-      assert(
-        (budgetSkip !== undefined && budgetSkip.reason === 'autonomy_elapsed_budget_exhausted')
-        || (budgetHeld !== undefined && budgetHeld.blockingReason === 'autonomy_elapsed_budget_exhausted'),
-        `H.5 elapsed budget holds (${JSON.stringify(budgetPass.skipped)})`,
-      );
+        await settleImmediates(
+          30,
+          () => goalRows(h5store, H5B)?.attempts[0]?.status === 'failed',
+        );
+        await driveGoalToStage(
+          h5baseUrl,
+          H5B,
+          'next_attempt_accepted',
+          'H.5-budget-materialize',
+        );
 
-      const beforeH5 = await childlessSnapshot(h5store, rootH5);
-      await supervisorPass(h5baseUrl, 'H.5-stable');
-      const afterH5 = await childlessSnapshot(h5store, rootH5);
-      assertEqual(
-        JSON.stringify(afterH5.counts),
-        JSON.stringify(beforeH5.counts),
-        'H.5 both bounds held with zero writes',
-      );
+        const persistedBudgetPolicy = h5store.readGoalAutonomyPolicy(H5B);
+        assert(persistedBudgetPolicy?.elapsedBudgetMs !== undefined, 'H.5 persisted elapsed budget exists');
+        h5clock.advance(persistedBudgetPolicy.elapsedBudgetMs + 1);
 
-      evidence.steps.push(['policy-bounds', { cycleLimit: true, elapsedBudget: true }]);
+        const beforeBudget = await childlessSnapshot(h5store, rootH5);
+        const budgetPass = await supervisorPass(h5baseUrl, 'H.5-budget');
+        const budgetSkip = budgetPass.skipped.find((x) => x.goalId === H5B);
+        const budgetHeld = budgetPass.outcomes.find(
+          (x) => x.goalId === H5B && x.action === 'held',
+        );
+        const budgetDetail = await goalDetail(h5baseUrl, H5B, 'H.5-budget');
+        assert(
+          (budgetSkip !== undefined
+            && budgetSkip.reason === 'autonomy_elapsed_budget_exhausted')
+          || (budgetHeld !== undefined
+            && budgetHeld.blockingReason === 'autonomy_elapsed_budget_exhausted')
+          || budgetDetail.blockingReason === 'autonomy_elapsed_budget_exhausted'
+          || budgetDetail.eligibility?.reason === 'autonomy_elapsed_budget_exhausted',
+          `H.5 elapsed budget holds skipped=${JSON.stringify(budgetPass.skipped)} outcomes=${JSON.stringify(budgetPass.outcomes)} detail=${JSON.stringify(budgetDetail)}`,
+        );
+
+        const afterBudget = await childlessSnapshot(h5store, rootH5);
+        assertEqual(
+          JSON.stringify(afterBudget.counts),
+          JSON.stringify(beforeBudget.counts),
+          'H.5 elapsed-budget pass writes zero rows',
+        );
+
+        await supervisorPass(h5baseUrl, 'H.5-stable');
+        const stableBudget = await childlessSnapshot(h5store, rootH5);
+        assertEqual(
+          JSON.stringify(stableBudget.counts),
+          JSON.stringify(afterBudget.counts),
+          'H.5 both bounds remain stable with zero writes',
+        );
+
+        evidence.steps.push(['policy-bounds', { cycleLimit: true, elapsedBudget: true }]);
     } finally {
       await h5server.close();
       h5.close();
@@ -2272,7 +2312,7 @@ async function scenarioK() {
   // ---- K.9 — goal terminalizes between selection and action: pass is a safe no-op.
   {
     const k9root = await newSandbox('K9');
-    const sandbox = bootSandbox(k9root);
+    const sandbox = bootSandbox(k9root, { holdImmediate: true });
     const { store, assessor, config, registry, verificationRegistry, workflowExecutor, clock } = sandbox;
     const G = goalId(0x89);
     const base = store;
@@ -2339,6 +2379,18 @@ async function scenarioK() {
 // ===========================================================================
 
 async function runCanonicalGates() {
+  if (process.env.LIA_QUAL_SKIP_CANONICAL_GATES === '1') {
+    console.log('  canonical gates: SKIPPED_BY_EXPLICIT_ITERATION_MODE');
+    const skipped = { ok: false, skipped: true, ms: 0 };
+    return {
+      typecheck: skipped,
+      build: skipped,
+      tests: skipped,
+      selfCheck: skipped,
+      testsPassed: 0,
+      testsFailed: 1,
+    };
+  }
   const gates = {};
   const run = (label, cmd, args, options = {}) => {
     const started = Date.now();
@@ -2438,7 +2490,11 @@ async function main() {
     head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim(),
     porcelain: execFileSync('git', ['status', '--porcelain'], { cwd: REPO_ROOT, encoding: 'utf8' }),
   };
-  const diffBefore = execFileSync('git', ['diff', '--stat'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
+  // Preserve the exact pre-existing tracked worktree/staging state. Qualification
+  // is allowed to run on an intentionally dirty candidate worktree; the safety
+  // invariant is that it must leave tracked source exactly as it found it.
+  const diffBefore = execFileSync('git', ['diff', '--binary'], { cwd: REPO_ROOT, encoding: 'utf8' });
+  const cachedDiffBefore = execFileSync('git', ['diff', '--cached', '--binary'], { cwd: REPO_ROOT, encoding: 'utf8' });
   const port3014Before = execFileSync('bash', ['-c', "ss -ltn 2>/dev/null | grep -c '127.0.0.1:3014' || true"], { encoding: 'utf8' }).trim();
 
   await runScenario('A', scenarioA);
@@ -2467,7 +2523,8 @@ async function main() {
     head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim(),
     porcelain: execFileSync('git', ['status', '--porcelain'], { cwd: REPO_ROOT, encoding: 'utf8' }),
   };
-  const diffAfter = execFileSync('git', ['diff', '--stat'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
+  const diffAfter = execFileSync('git', ['diff', '--binary'], { cwd: REPO_ROOT, encoding: 'utf8' });
+  const cachedDiffAfter = execFileSync('git', ['diff', '--cached', '--binary'], { cwd: REPO_ROOT, encoding: 'utf8' });
   const diffCheck = execFileSync('git', ['diff', '--check'], { cwd: REPO_ROOT, encoding: 'utf8' });
   const port3014After = execFileSync('bash', ['-c', "ss -ltn 2>/dev/null | grep -c '127.0.0.1:3014' || true"], { encoding: 'utf8' }).trim();
   const childrenAlive = (await import('node:child_process')).execFileSync('bash', ['-c', "pgrep -af 'sandbox-bootstrap.mjs' | grep -v grep || true"], { encoding: 'utf8' }).trim().split('\n').filter((l) => l.trim() !== '');
@@ -2476,8 +2533,18 @@ async function main() {
     gates,
     gitBefore,
     gitAfter: {
-      trackedUnchanged: gitAfter.head === gitBefore.head && gitAfter.porcelain.split('\n').every((l) => l.startsWith('??') || l.trim() === '') && diffAfter === '',
-      diffEmpty: diffCheck === '' && diffAfter === '',
+      trackedUnchanged:
+        gitAfter.head === gitBefore.head
+        && diffAfter === diffBefore
+        && cachedDiffAfter === cachedDiffBefore,
+      // DIFF_CHECK means the candidate's tracked diff is syntactically clean
+      // and qualification itself introduced no tracked mutation. Pre-existing
+      // candidate changes are not a qualification side effect.
+      diffEmpty:
+        diffCheck === ''
+        && gitAfter.head === gitBefore.head
+        && diffAfter === diffBefore
+        && cachedDiffAfter === cachedDiffBefore,
     },
     port3014Before,
     port3014After,

@@ -12,4 +12,14 @@ export type LiaConversationController = {
   submit: () => void;
   openPanel: () => void;
   closePanel: () => void;
+  voice: {
+    state: 'unsupported' | 'idle' | 'starting' | 'listening' | 'transcript_ready' | 'error' | 'speaking';
+    recognitionSupported: boolean;
+    synthesisSupported: boolean;
+    interimTranscript: string;
+    error: string | null;
+    start: () => void;
+    stop: () => void;
+    cancelSpeech: () => void;
+  };
 };

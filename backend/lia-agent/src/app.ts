@@ -25,10 +25,23 @@ import { createSameOriginStatusRouter } from './routes/sameOriginStatus.js';
 import { createProjectTasksRouter, type ProjectTasksDependencies } from './routes/projectTasks.js';
 import { createProjectSupervisorRouter } from './routes/projectSupervisor.js';
 import { createProjectGoalControlRouter } from './routes/projectGoalControl.js';
+import { createExecutiveBoardRouter } from './routes/executiveBoard.js';
+import { createDecisionLearningRouter } from './routes/decisionLearning.js';
+import { createOfficeRouter } from './routes/office.js';
+import type { ExecutiveBoardDecisionStore } from './contracts/executiveBoard.js';
 import { InMemoryProjectTaskStore } from './services/inMemoryProjectTaskStore.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
 import type { HermesQueryExecutor } from './services/hermesExecutor.js';
 import type { ProjectSupervisorSchedulingRuntime } from './services/projectSupervisorSchedulingRuntime.js';
+import type { DecisionLearningGoalSource } from './services/decisionLearningReadModel.js';
+
+function isDecisionLearningGoalSource(value: unknown): value is DecisionLearningGoalSource {
+  const source = value as Partial<Record<keyof DecisionLearningGoalSource, unknown>> | null;
+  return source !== null && source !== undefined
+    && typeof source.readGoal === 'function'
+    && typeof source.listGoalAttempts === 'function'
+    && typeof source.listGoalEvaluations === 'function';
+}
 
 export type LiaAgentDependencies = {
   agendaReadSource?: AgendaReadSource;
@@ -41,6 +54,7 @@ export type LiaAgentDependencies = {
   projectTaskStore?: ProjectTasksDependencies['store'];
   projectTasksWorkflowExecutor?: ProjectTasksDependencies['executeWorkflow'];
   projectSupervisorRuntime?: ProjectSupervisorSchedulingRuntime;
+  executiveBoardStore?: ExecutiveBoardDecisionStore;
   /** Clock seam forwarded to the goal control surface (test/qualification only). */
   now?: () => number;
 };
@@ -98,6 +112,25 @@ export function createApp(
     executeWorkflow: dependencies.projectTasksWorkflowExecutor,
   }));
   app.use(createProjectSupervisorRouter(dependencies.projectSupervisorRuntime));
+  // Advisory reads plus append-only outcome recording. Decision creation stays
+  // behind the controlled orchestrator and cannot grant or execute capabilities.
+  app.use(createExecutiveBoardRouter(dependencies.executiveBoardStore, dependencies.now));
+  // Decision Learning V1 is a deterministic projection over existing Board
+  // and Goal evidence. This router is GET-only and owns no persistence.
+  app.use(createDecisionLearningRouter({
+    ...(dependencies.executiveBoardStore !== undefined ? { board: dependencies.executiveBoardStore } : {}),
+    ...(isDecisionLearningGoalSource(dependencies.projectTaskStore)
+      ? { goals: dependencies.projectTaskStore }
+      : {}),
+  }));
+  // Office V2 is a projection only: GET-only and composed from the existing
+  // task, supervisor and Board evidence stores. It owns no write primitive.
+  app.use(createOfficeRouter({
+    ...(dependencies.projectTaskStore !== undefined ? { store: dependencies.projectTaskStore as never } : {}),
+    ...(dependencies.projectSupervisorRuntime !== undefined ? { supervisor: dependencies.projectSupervisorRuntime } : {}),
+    ...(dependencies.executiveBoardStore !== undefined ? { board: dependencies.executiveBoardStore } : {}),
+    ...(dependencies.now !== undefined ? { now: dependencies.now } : {}),
+  }));
   // Operator Goal Control Surface — mounted strictly AFTER the supervisor
   // router so `/api/projects/goals/supervisor` never matches `:goalId`
   // (routing-order constraint, design §J).

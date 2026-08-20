@@ -33,6 +33,7 @@ import {
 } from './projectGoalContinuationPlanningOrchestrator.js';
 import {
   materializeApprovedContinuation,
+  materializeBoundedAutonomousContinuation,
   type ContinuationExecutionGateStore,
 } from './projectGoalContinuationExecutionGate.js';
 import {
@@ -445,6 +446,15 @@ export function deriveLoopStageDetails(
     if (approvalState === 'approval_present') {
       return { ...base, stage: 'materializing_next_attempt', goal, policy, policyState, mode, currentTask, evaluation: latestApplied, plan, approval, approvalState, noProgressCount, noProgressThreshold: threshold, escalated, budget };
     }
+    if (mode === 'bounded_autonomous' && policy !== undefined) {
+      if (policy.elapsedBudgetMs !== undefined && now - policy.createdAt >= policy.elapsedBudgetMs) {
+        return { ...base, stage: 'failed_closed', blockingReason: 'autonomy_elapsed_budget_exhausted', humanInterventionRequired: true, terminal: true, goal, policy, policyState, mode, currentTask, evaluation: latestApplied, plan, noProgressCount, noProgressThreshold: threshold, escalated, budget };
+      }
+      if (policy.maxCycles !== undefined && plan.nextAttemptNumber >= policy.maxCycles) {
+        return { ...base, stage: 'exhausted', blockingReason: 'autonomy_cycle_limit_reached', humanInterventionRequired: true, terminal: true, goal, policy, policyState, mode, currentTask, evaluation: latestApplied, plan, noProgressCount, noProgressThreshold: threshold, escalated, budget };
+      }
+      return { ...base, stage: 'materializing_next_attempt', goal, policy, policyState, mode, currentTask, evaluation: latestApplied, plan, noProgressCount, noProgressThreshold: threshold, escalated, budget };
+    }
     return {
       ...base,
       stage: 'authorization_required',
@@ -713,7 +723,13 @@ export async function runLoopOnce(
         return buildResult('held', { blockingReason: 'corrupt_lineage' });
       }
       try {
-        const result = materializeApprovedContinuation(store, detailsBefore.plan.planId);
+        const result = detailsBefore.mode === 'bounded_autonomous'
+          ? materializeBoundedAutonomousContinuation(
+              store,
+              detailsBefore.plan.planId,
+              (dependencies.now ?? Date.now)(),
+            )
+          : materializeApprovedContinuation(store, detailsBefore.plan.planId);
         return buildResult('materialized', { createdTaskId: result.createdTaskId });
       } catch (error) {
         return buildResult('held', { blockingReason: toSafeBlockingReason(error) });

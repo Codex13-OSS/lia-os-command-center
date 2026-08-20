@@ -269,11 +269,13 @@ export function createQualAssessor(overrides = new Map()) {
 // wakeup); `throwFirstDrain` makes the first drain callback throw (K.3).
 // ---------------------------------------------------------------------------
 
+// LIA_QUAL_SCHEDULER_RELEASE_V2
 export function makeScheduleImmediate({ hold = false, throwFirstDrain = false } = {}) {
+  let holding = hold;
   const state = { scheduled: 0, executed: 0, held: 0, heldCallbacks: [] };
   const scheduleImmediate = (fn) => {
     state.scheduled += 1;
-    if (hold) {
+    if (holding) {
       state.held += 1;
       state.heldCallbacks.push(fn);
       return;
@@ -285,6 +287,7 @@ export function makeScheduleImmediate({ hold = false, throwFirstDrain = false } 
   };
   scheduleImmediate.state = state;
   scheduleImmediate.releaseAll = () => {
+    holding = false;
     const callbacks = state.heldCallbacks.splice(0);
     state.held = 0;
     for (const fn of callbacks) {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ExecutiveShellR3 } from '../executive-r3/ExecutiveShellR3';
 import { createAgendaStoreR3 } from '../../store/agendaStoreR3';
-import { createAgendaSeedEventsR3 } from '../../data/agendaR3SeedData';
+
 import { useAgendaStoreR3 } from '../../hooks/useAgendaStoreR3';
 import {
   getAgendaTemporalStateR3,
@@ -18,6 +18,8 @@ import { AgendaMetricsR3 } from './AgendaMetricsR3';
 import { AgendaTimelineR3 } from './AgendaTimelineR3';
 import { AgendaMonthPanelR3 } from './AgendaMonthPanelR3';
 import { AgendaExecutiveRailR3 } from './AgendaExecutiveRailR3';
+import type { LiaConversationController } from '../lia-r3/liaConversationController';
+import { LiaVoiceSurfaceR3 } from '../lia-r3/LiaVoiceSurfaceR3';
 
 const TZ = 'America/Mexico_City';
 
@@ -58,10 +60,13 @@ type Props = {
   onDashboard: () => void;
   onAgenda: () => void;
   onProjects: () => void;
+  onAgents: () => void; onServers: () => void;
+  onSettings: () => void;
   onTracking: () => void;
   onDocuments: () => void;
   onAlerts: () => void;
   onLogout: () => void;
+  conversationController?: LiaConversationController;
 };
 
 export function AgendaShellR3(props: Props) {
@@ -75,18 +80,23 @@ export function AgendaShellR3(props: Props) {
 
   const store = useMemo(() => createAgendaStoreR3({
     storage: typeof window === 'undefined' ? undefined : window.localStorage,
-    seedEvents: createAgendaSeedEventsR3(seedAnchor, TZ),
+    seedEvents: [],
     timezone: TZ,
   }), [seedAnchor]);
 
   const snapshot = useAgendaStoreR3(store);
+  const premiumEvents = useMemo(
+    () => snapshot.events.filter((event) => event.source !== 'seed' && !event.id.startsWith('seed-')),
+    [snapshot.events],
+  );
+  const premiumSnapshot = useMemo(() => ({ ...snapshot, events: premiumEvents }), [premiumEvents, snapshot]);
   const [selected, setSelected] = useState(seedAnchor);
   const [all, setAll] = useState(false);
   const [feedback, setFeedback] = useState('');
 
   const day = key(selected);
   const today = day === key(now);
-  const events = selectEventsForDayR3(snapshot.events, day, TZ);
+  const events = selectEventsForDayR3(premiumEvents, day, TZ);
 
   const workdayStartTime = workdayIso(day, 7);
   const workdayEndTime = workdayIso(day, 20);
@@ -98,12 +108,12 @@ export function AgendaShellR3(props: Props) {
     && Date.parse(occurrence.occurrenceStartTime) < workdayEnd);
 
   const conflicts = selectAgendaConflictsR3(
-    snapshot.events,
+    premiumEvents,
     workdayStartTime,
     workdayEndTime,
   );
 
-  const next = selectNextAgendaEventR3(snapshot.events, now);
+  const next = selectNextAgendaEventR3(premiumEvents, now);
   const minutesNow = clockMinutes(now);
   const workdayState = !today
     ? 'other-day'
@@ -117,7 +127,7 @@ export function AgendaShellR3(props: Props) {
     ? ((minutesNow - 7 * 60) / (13 * 60)) * 100
     : undefined;
 
-  const free = selectAgendaFreeWindowsR3(snapshot.events, {
+  const free = selectAgendaFreeWindowsR3(premiumEvents, {
     day,
     timezone: TZ,
     workdayStart: '07:00',
@@ -127,7 +137,7 @@ export function AgendaShellR3(props: Props) {
   }).find(window => !today || Date.parse(window.endTime) > now.getTime());
 
   const importantIds = new Set(
-    selectAgendaPriorityEventsR3(snapshot.events).map(event => event.id),
+    selectAgendaPriorityEventsR3(premiumEvents).map(event => event.id),
   );
 
   workdayEvents.forEach((occurrence, index) => {
@@ -153,7 +163,7 @@ export function AgendaShellR3(props: Props) {
   const hidden = workdayEvents.length - visible.length;
 
   const upcoming = selectUpcomingAgendaEventsR3(
-    snapshot.events,
+    premiumEvents,
     now,
     new Date(now.getTime() + 90 * 86400000),
     { limit: 20 },
@@ -163,12 +173,13 @@ export function AgendaShellR3(props: Props) {
     setFeedback('Creación de citas disponible en la siguiente fase');
 
   const rail = <AgendaExecutiveRailR3
-    snapshot={snapshot}
+    snapshot={premiumSnapshot}
     next={next}
     conflicts={conflicts}
     onCreate={create}
     onDashboard={props.onDashboard}
     onDocuments={props.onDocuments}
+    conversationController={props.conversationController}
   />;
 
   return <ExecutiveShellR3
@@ -185,6 +196,7 @@ export function AgendaShellR3(props: Props) {
         <p>Prioridades, reuniones y ventanas ejecutivas</p>
       </div>
       <button type="button" onClick={create}>+ Nueva cita</button>
+      <LiaVoiceSurfaceR3 controller={props.conversationController} compact />
       <span aria-live="polite">{feedback}</span>
     </header>
 
@@ -198,7 +210,7 @@ export function AgendaShellR3(props: Props) {
     <AgendaWeekStripR3
       selected={selected}
       onSelect={date => setSelected(new Date(date))}
-      events={snapshot.events}
+      events={premiumEvents}
     />
 
     <AgendaMetricsR3
@@ -236,7 +248,7 @@ export function AgendaShellR3(props: Props) {
       <AgendaMonthPanelR3
         selected={selected}
         onSelect={date => setSelected(new Date(date))}
-        events={snapshot.events}
+        events={premiumEvents}
         upcoming={upcoming}
         conflicts={conflicts}
         onShowAll={() => setAll(true)}

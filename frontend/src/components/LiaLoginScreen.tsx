@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type FormEvent, type PointerEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type PointerEvent } from 'react';
 import '../styles/liaLogin.css';
 
 type LiaLoginScreenProps = {
@@ -8,6 +8,8 @@ type LiaLoginScreenProps = {
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onSubmit: () => void;
+  onCreateAccount: () => void;
+  pending?: boolean;
 };
 
 export function LiaLoginScreen({
@@ -17,8 +19,95 @@ export function LiaLoginScreen({
   onEmailChange,
   onPasswordChange,
   onSubmit,
+  onCreateAccount,
+  pending = false,
 }: LiaLoginScreenProps) {
   const [showPassword, setShowPassword] = useState(false);
+  const screenRef = useRef<HTMLElement>(null);
+
+  useLayoutEffect(() => {
+    const node = screenRef.current;
+    if (!node || typeof window === 'undefined') return;
+
+    /*
+     * Cross-browser viewport stabilizer.
+     * Mantiene el efecto de repintado que demostró V14,
+     * pero sin diagnóstico visible.
+     */
+    const sentinel = document.createElement('span');
+    sentinel.setAttribute('aria-hidden', 'true');
+    Object.assign(sentinel.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      width: '1px',
+      height: '1px',
+      zIndex: '2147483647',
+      pointerEvents: 'none',
+      background: 'rgb(2, 9, 17)',
+    });
+    document.body.appendChild(sentinel);
+
+    let frame = 0;
+    let settleFrame = 0;
+    let paintTick = 0;
+
+    const syncViewport = () => {
+      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(settleFrame);
+
+      frame = window.requestAnimationFrame(() => {
+        const viewport = window.visualViewport;
+        const width = Math.round(viewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth);
+        const height = Math.round(viewport?.height ?? document.documentElement.clientHeight ?? window.innerHeight);
+
+        node.style.setProperty('--lia-login-vw', `${width}px`);
+        node.style.setProperty('--lia-login-vh', `${height}px`);
+
+        /* Lectura de geometría: estabiliza layout después del resize. */
+        node.getBoundingClientRect();
+        node.querySelector('.lia-login-r1-stack')?.getBoundingClientRect();
+        node.querySelector('.lia-login-r1-panel')?.getBoundingClientRect();
+
+        /*
+         * Un píxel del mismo fondo cambia un nivel imperceptible.
+         * Fuerza repaint real sin overlay ni parpadeo.
+         */
+        paintTick += 1;
+        sentinel.style.background =
+          paintTick % 2
+            ? 'rgb(2, 9, 17)'
+            : 'rgb(2, 9, 18)';
+
+        settleFrame = window.requestAnimationFrame(() => {
+          node.getBoundingClientRect();
+        });
+      });
+    };
+
+    syncViewport();
+
+    window.addEventListener('resize', syncViewport, { passive: true });
+    window.addEventListener('orientationchange', syncViewport, { passive: true });
+    window.visualViewport?.addEventListener('resize', syncViewport, { passive: true });
+
+    const observer =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(syncViewport)
+        : null;
+
+    observer?.observe(document.documentElement);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(settleFrame);
+      window.removeEventListener('resize', syncViewport);
+      window.removeEventListener('orientationchange', syncViewport);
+      window.visualViewport?.removeEventListener('resize', syncViewport);
+      observer?.disconnect();
+      sentinel.remove();
+    };
+  }, []);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -54,6 +143,7 @@ export function LiaLoginScreen({
 
   return (
     <main
+      ref={screenRef}
       className="lia-login-r1-screen"
       onPointerMove={handlePointerMove}
       onPointerLeave={resetPointerMotion}
@@ -144,7 +234,18 @@ export function LiaLoginScreen({
             {error ?? ''}
           </div>
 
-          <button className="lia-login-r1-submit" type="submit">Iniciar sesión</button>
+          <button className="lia-login-r1-submit" type="submit" disabled={pending}>
+              {pending ? 'Entrando…' : 'Iniciar sesión'}
+            </button>
+
+            <button
+              className="lia-login-r1-create-account"
+              type="button"
+              disabled={pending}
+              onClick={onCreateAccount}
+            >
+              Crear una cuenta nueva
+            </button>
 
           <div className="lia-login-r1-divider"><span>o continúa con</span></div>
 

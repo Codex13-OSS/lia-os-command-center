@@ -417,6 +417,16 @@
 .lia-projects-r3-priority-chip.is-high { color: #f5d9a8; border-color: rgba(240, 164, 92, .3); }
 .lia-projects-r3-priority-chip.is-critical { color: #f6b7b2; border-color: rgba(248, 113, 113, .34); }
 
+.lia-projects-r3-autonomy-chip {
+  padding: 2px 8px;
+  color: #bfe6d2;
+  border: 1px solid rgba(91, 201, 151, .22);
+  border-radius: 999px;
+  background: rgba(21, 73, 57, .28);
+  font-size: 9px;
+  font-weight: 700;
+}
+
 /* Avisos y errores. */
 .lia-projects-r3-notice {
   max-width: 620px;
@@ -775,6 +785,38 @@
   cursor: default;
 }
 
+.lia-projects-r3-autonomy-select {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(91, 201, 151, .16);
+  border-radius: 999px;
+  background: rgba(8, 31, 35, .55);
+}
+
+.lia-projects-r3-autonomy-select button {
+  padding: 4px 10px;
+  color: #799a91;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 680;
+}
+
+.lia-projects-r3-autonomy-select button.is-selected {
+  color: #dcf7e9;
+  background: rgba(39, 132, 96, .3);
+  box-shadow: inset 0 0 0 1px rgba(91, 201, 151, .3);
+}
+
+.lia-projects-r3-autonomy-select button:disabled { opacity: .5; cursor: default; }
+.lia-projects-r3-estimate { color: #91adbe; font-size: 9px; white-space: nowrap; }
+.lia-projects-r3-estimate.is-high, .lia-projects-r3-estimate.is-critical { color: #e8c384; }
+.lia-projects-r3-autonomy-help { margin: 5px 3px 0; color: #718c9e; font-size: 9px; line-height: 1.4; }
+
 .lia-projects-r3-composer-hint {
   color: #5f7a8e;
   font-size: 9px;
@@ -851,21 +893,24 @@
   .lia-projects-r3-send-busy {
     animation: none;
   }
+  .lia-autonomy-hud-r3-meter i {
+    transition: none;
+  }
 }
 
 /* Responsive: chat fijo en tablet y móvil; el rail auxiliar se oculta. */
 @media (max-width: 1120px) {
   .lia-dash-r3-shell.lia-projects-r3-shell {
-    height: 100dvh;
+    height: auto;
     min-height: 0;
-    overflow: hidden;
-    grid-template-rows: 70px minmax(0, 1fr);
+    overflow: visible;
+    grid-template-rows: 70px auto;
   }
 
   .lia-projects-r3-shell .lia-dash-r3-main {
     min-height: 0;
     height: auto;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .lia-projects-r3-shell .lia-projects-r3-rail {
@@ -923,17 +968,17 @@
    ========================================================= */
 @media (max-width: 720px) {
   .lia-dash-r3-shell.lia-projects-r3-shell {
-    height: 100dvh !important;
-    min-height: 100dvh !important;
-    overflow: hidden !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
     padding-bottom: 0 !important;
   }
 
   .lia-projects-r3-shell .lia-dash-r3-main {
-    height: calc(100dvh - 64px) !important;
+    height: auto !important;
     min-height: 0 !important;
     padding: 8px 10px calc(76px + env(safe-area-inset-bottom, 0px)) !important;
-    overflow: hidden !important;
+    overflow: visible !important;
   }
 
   .lia-projects-r3-title {
@@ -957,16 +1002,16 @@
   }
 
   .lia-projects-r3-chat {
-    flex: 1;
+    flex: 0 0 auto;
     min-height: 0;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .lia-projects-r3-thread {
     min-height: 0;
     padding: 4px 2px 12px;
     gap: 12px;
-    overflow-y: auto;
+    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
   }
 
@@ -1010,9 +1055,13 @@
     line-height: 1.4;
   }
 
-  .lia-projects-r3-composer-meta {
-    display: none;
-  }
+  .lia-projects-r3-composer-meta { display: flex; margin-top: 5px; gap: 5px; }
+  .lia-projects-r3-composer-meta .lia-projects-r3-priority,
+  .lia-projects-r3-composer-meta .lia-projects-r3-attach-note,
+  .lia-projects-r3-composer-meta .lia-projects-r3-composer-hint { display: none; }
+  .lia-projects-r3-autonomy-select { order: 1; }
+  .lia-projects-r3-estimate { order: 2; overflow: hidden; text-overflow: ellipsis; }
+  .lia-projects-r3-autonomy-help { margin-top: 3px; font-size: 8px; }
 
   .lia-projects-r3-attach,
   .lia-projects-r3-send {
@@ -1036,16 +1085,199 @@
   box-shadow: 0 0 10px rgba(216, 111, 120, .5);
 }
 
-/* LIA AUTONOMY HUD R3 */
-.lia-autonomy-hud-r3{margin:0 0 18px;padding:18px;border:1px solid rgba(255,255,255,.1);border-radius:22px;background:rgba(15,18,26,.78)}
-.lia-autonomy-hud-r3-head,.lia-autonomy-hud-r3-foot{display:flex;justify-content:space-between;gap:14px;align-items:center}
-.lia-autonomy-hud-r3-head div{display:grid;gap:4px}
-.lia-autonomy-hud-r3-head span{font-size:11px;letter-spacing:.12em;opacity:.7}
-.lia-autonomy-hud-r3-head strong{font-size:16px}
-.lia-autonomy-hud-r3-head b{font-size:12px}
-.lia-autonomy-hud-r3-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0}
-.lia-autonomy-hud-r3-grid article{display:grid;gap:4px;padding:12px;border-radius:16px;background:rgba(255,255,255,.05)}
-.lia-autonomy-hud-r3-grid span,.lia-autonomy-hud-r3-grid small,.lia-autonomy-hud-r3-foot{font-size:11px;opacity:.68}
-.lia-autonomy-hud-r3-grid strong{font-size:20px}
-.lia-autonomy-hud-r3-foot{padding-top:12px;border-top:1px solid rgba(255,255,255,.08)}
-@media(max-width:760px){.lia-autonomy-hud-r3-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.lia-autonomy-hud-r3-foot{align-items:flex-start;flex-direction:column}}
+/* LÍA Executive Autonomy — read-only Goals/Supervisor instrument. */
+.lia-autonomy-hud-r3 {
+  flex: 0 0 auto;
+  margin: 0 4px 12px;
+  padding: 14px 15px 11px;
+  overflow: hidden;
+  border: 1px solid rgba(132, 196, 236, .18);
+  border-radius: 19px;
+  background: radial-gradient(circle at 0 0, rgba(55, 143, 204, .13), transparent 32%), linear-gradient(145deg, rgba(10, 31, 50, .76), rgba(5, 18, 31, .7));
+  box-shadow: 0 20px 44px rgba(0, 4, 11, .34), inset 0 1px rgba(232, 247, 255, .08);
+  backdrop-filter: blur(18px) saturate(128%);
+}
+.lia-autonomy-hud-r3-head, .lia-autonomy-hud-r3-foot { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
+.lia-autonomy-hud-r3-head > div { display: grid; gap: 3px; }
+.lia-autonomy-hud-r3-head span, .lia-autonomy-hud-r3-recent header span { color: #6fb9e9; font-size: 9px; font-weight: 800; letter-spacing: .13em; }
+.lia-autonomy-hud-r3-head span { display: flex; align-items: center; gap: 7px; }
+.lia-autonomy-hud-r3-head span i { width: 6px; height: 6px; border-radius: 50%; background: #55d797; box-shadow: 0 0 11px rgba(85,215,151,.6); }
+.lia-autonomy-hud-r3-head strong { color: #edf7fd; font-size: 15px; }
+.lia-autonomy-hud-r3-head b { padding: 5px 9px; color: #bce7d2; border: 1px solid rgba(85,215,151,.2); border-radius: 999px; background: rgba(31,101,76,.22); font-size: 9.5px; }
+.lia-autonomy-hud-r3-head b.is-fail_closed { color: #f1c2be; border-color: rgba(232,111,105,.25); background: rgba(103,39,38,.25); }
+.lia-autonomy-hud-r3-head b.is-loading { color: #b4c7d5; border-color: rgba(137,170,194,.18); background: rgba(61,82,98,.2); }
+.lia-autonomy-hud-r3-layout { margin-top: 11px; display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(150px, .55fr) minmax(250px, 1fr); gap: 9px; }
+.lia-autonomy-hud-r3-overview { display: grid; grid-template-columns: 1.2fr repeat(3, 1fr); gap: 7px; }
+.lia-autonomy-hud-r3-overview article { min-width: 0; padding: 10px; display: grid; align-content: center; gap: 3px; border: 1px solid rgba(126,180,216,.1); border-radius: 12px; background: rgba(7, 25, 41, .52); box-shadow: inset 0 1px rgba(230,246,255,.04); }
+.lia-autonomy-hud-r3-overview article.is-attention { border-color: rgba(225,173,84,.22); background: rgba(91,61,20,.2); }
+.lia-autonomy-hud-r3-overview span, .lia-autonomy-hud-r3-distribution > span { color: #87a1b4; font-size: 8.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.lia-autonomy-hud-r3-overview strong { color: #eef8fe; font-size: 20px; line-height: 1; font-variant-numeric: tabular-nums; }
+.lia-autonomy-hud-r3-overview strong em { color: #819bad; font-size: 11px; font-style: normal; font-weight: 600; }
+.lia-autonomy-hud-r3-overview small { overflow: hidden; color: #6f899c; font-size: 8.5px; white-space: nowrap; text-overflow: ellipsis; }
+.lia-autonomy-hud-r3-meter { height: 3px; margin-top: 3px; overflow: hidden; border-radius: 99px; background: rgba(100,146,178,.16); }
+.lia-autonomy-hud-r3-meter i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#3e9ddd,#67c5f7); transition: width .35s ease; }
+.lia-autonomy-hud-r3-distribution { padding: 9px 10px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; border-radius: 12px; background: rgba(7,25,41,.42); }
+.lia-autonomy-hud-r3-distribution > span { grid-column: 1 / -1; }
+.lia-autonomy-hud-r3-distribution div { min-width: 0; display: grid; grid-template-columns: 5px 1fr; column-gap: 5px; align-items: center; }
+.lia-autonomy-hud-r3-distribution i { width: 5px; height: 18px; grid-row: 1 / 3; border-radius: 99px; background: #57bce9; }
+.lia-autonomy-hud-r3-distribution i.is-blocked { background: #e2ad55; }.lia-autonomy-hud-r3-distribution i.is-failed { background: #df706e; }
+.lia-autonomy-hud-r3-distribution strong { color: #e8f3fa; font-size: 14px; line-height: 1; }.lia-autonomy-hud-r3-distribution small { color: #748da0; font-size: 7.5px; }
+.lia-autonomy-hud-r3-recent { min-width: 0; padding: 8px 9px; border-radius: 12px; background: rgba(7,25,41,.42); }
+.lia-autonomy-hud-r3-recent header { display: flex; justify-content: space-between; gap: 8px; }.lia-autonomy-hud-r3-recent header small { color: #607b90; font-size: 7.5px; }
+.lia-autonomy-hud-r3-recent article { padding: 5px 0; display: grid; grid-template-columns: 5px minmax(0,1fr) auto; align-items: center; gap: 7px; }
+.lia-autonomy-hud-r3-recent article > i { width: 5px; height: 5px; border-radius: 50%; background: #57bce9; box-shadow: 0 0 7px rgba(87,188,233,.38); }
+.lia-autonomy-hud-r3-recent article.is-blocked > i { background: #e2ad55; }.lia-autonomy-hud-r3-recent article.is-failed > i { background: #df706e; }.lia-autonomy-hud-r3-recent article.is-completed > i { background: #55d797; }
+.lia-autonomy-hud-r3-recent article div { min-width: 0; }.lia-autonomy-hud-r3-recent article strong, .lia-autonomy-hud-r3-recent article small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lia-autonomy-hud-r3-recent article strong { color: #dcebf5; font-size: 9px; }.lia-autonomy-hud-r3-recent article small, .lia-autonomy-hud-r3-recent time { color: #6f899c; font-size: 7.5px; }
+.lia-autonomy-hud-r3-recent > p { margin: 12px 0 4px; color: #7892a5; font-size: 9px; }
+.lia-autonomy-hud-r3-foot { margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(113,164,199,.09); color: #6e899d; font-size: 8.5px; }
+.lia-autonomy-hud-r3-foot time { margin-left: auto; }
+@media (max-width: 1320px) { .lia-autonomy-hud-r3-layout { grid-template-columns: minmax(0,1.6fr) minmax(145px,.6fr); }.lia-autonomy-hud-r3-recent { display: none; } }
+@media (max-width: 900px) { .lia-autonomy-hud-r3-layout { grid-template-columns: 1fr; }.lia-autonomy-hud-r3-distribution { grid-template-columns: 72px repeat(3,1fr); align-items: center; }.lia-autonomy-hud-r3-distribution > span { grid-column: auto; } }
+@media (max-width: 720px) {
+  .lia-autonomy-hud-r3 { margin: 0 1px 7px; padding: 10px; border-radius: 15px; }
+  .lia-autonomy-hud-r3-layout { margin-top: 8px; }.lia-autonomy-hud-r3-overview { grid-template-columns: repeat(4, minmax(72px,1fr)); overflow-x: auto; scrollbar-width: none; }
+  .lia-autonomy-hud-r3-overview article { padding: 8px; }.lia-autonomy-hud-r3-overview strong { font-size: 17px; }.lia-autonomy-hud-r3-overview small { display: none; }
+  .lia-autonomy-hud-r3-distribution, .lia-autonomy-hud-r3-foot { display: none; }.lia-autonomy-hud-r3-head strong { font-size: 13px; }
+}
+
+/* Executive Board V1 — decision instrument; absent data stays visibly absent. */
+.lia-board-r3 { flex: 0 0 auto; margin: 0 4px 12px; padding: 14px 15px; border: 1px solid rgba(121,184,228,.17); border-radius: 19px; background: linear-gradient(145deg,rgba(9,28,46,.82),rgba(5,17,29,.76)); box-shadow: 0 18px 42px rgba(0,4,11,.3),inset 0 1px rgba(232,247,255,.07); backdrop-filter: blur(20px) saturate(130%); }
+.lia-board-r3-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.lia-board-r3-head > div:first-child > span,.lia-board-r3-grid article > span,.lia-board-r3-signals span { color: #72bae7; font-size: 8.5px; font-weight: 800; letter-spacing: .13em; }
+.lia-board-r3-head h2 { margin: 3px 0 1px; color: #edf7fd; font-size: 15px; letter-spacing: -.01em; }.lia-board-r3-head p { margin: 0; color: #7892a5; font-size: 9px; }
+.lia-board-r3-mode { min-width: 102px; padding: 7px 10px; display: grid; justify-items: end; gap: 2px; border: 1px solid rgba(112,184,229,.14); border-radius: 11px; background: rgba(7,24,40,.48); }.lia-board-r3-mode small { color: #6f9fbe; font-size: 7.5px; font-weight: 750; letter-spacing: .08em; }.lia-board-r3-mode strong { color: #d9edf9; font-size: 10px; }
+.lia-board-r3-empty { min-height: 82px; margin-top: 10px; padding: 14px; display: flex; align-items: center; justify-content: center; gap: 14px; border: 1px dashed rgba(122,183,222,.16); border-radius: 14px; background: rgba(5,20,34,.38); }
+.lia-board-r3-empty-mark { width: 45px; height: 38px; flex: 0 0 auto; display: flex; align-items: flex-end; justify-content: center; gap: 4px; padding: 8px; border: 1px solid rgba(111,180,224,.18); border-radius: 12px; }.lia-board-r3-empty-mark span { width: 5px; border-radius: 9px; background: #397ca7; }.lia-board-r3-empty-mark span:nth-child(1) { height: 10px; }.lia-board-r3-empty-mark span:nth-child(2) { height: 21px; }.lia-board-r3-empty-mark span:nth-child(3) { height: 15px; }
+.lia-board-r3-empty strong { display: block; color: #d7e8f3; font-size: 11.5px; }.lia-board-r3-empty p { max-width: 620px; margin: 4px 0; color: #7891a3; font-size: 9.5px; line-height: 1.45; }.lia-board-r3-empty small { color: #54748a; font-size: 8px; }.lia-board-r3-empty > i { width: 10px; height: 10px; border: 2px solid rgba(111,185,232,.25); border-top-color: #70b9e8; border-radius: 50%; animation: lia-projects-r3-spin 1s linear infinite; }
+.lia-board-r3-specialists { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit,minmax(102px,1fr)); gap: 6px; }.lia-board-r3-specialists > div { min-width: 0; padding: 7px 9px; border: 1px solid rgba(112,181,225,.11); border-radius: 10px; background: rgba(6,23,38,.46); }.lia-board-r3-specialists > div.is-blocked_missing_data { border-color: rgba(225,173,84,.25); }.lia-board-r3-specialists > div.is-failed { border-color: rgba(223,112,110,.25); }
+.lia-board-r3-specialists span,.lia-board-r3-specialists strong,.lia-board-r3-specialists small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.lia-board-r3-specialists span { color: #72bae7; font-size: 7.5px; font-weight: 800; }.lia-board-r3-specialists strong { margin-top: 2px; color: #dcebf5; font-size: 9.5px; }.lia-board-r3-specialists small { margin-top: 2px; color: #688397; font-size: 7.5px; }
+.lia-board-r3-grid { margin-top: 7px; display: grid; grid-template-columns: minmax(0,1.35fr) minmax(150px,.55fr) minmax(190px,.8fr); gap: 7px; }.lia-board-r3-grid article { min-width: 0; padding: 10px 11px; border: 1px solid rgba(119,179,219,.1); border-radius: 12px; background: rgba(6,22,37,.46); }
+.lia-board-r3-recommendation h3 { margin: 5px 0 0; color: #e8f4fb; font-size: 12px; line-height: 1.35; }.lia-board-r3-recommendation > p,.lia-board-r3-approval p,.lia-board-r3-tension p,.lia-board-r3-signals p { margin: 4px 0 0; color: #758da0; font-size: 8.5px; line-height: 1.4; }
+.lia-board-r3-confidence { margin-top: 8px; display: grid; grid-template-columns: auto auto minmax(50px,1fr); gap: 7px; align-items: center; }.lia-board-r3-confidence span { color: #7893a6; font-size: 8px; }.lia-board-r3-confidence strong { color: #dbeef9; font-size: 9px; font-variant-numeric: tabular-nums; }.lia-board-r3-confidence i { height: 3px; overflow: hidden; border-radius: 9px; background: rgba(98,146,177,.15); }.lia-board-r3-confidence b { width: 100%; height: 100%; display: block; transform-origin: left; background: #58b9e8; }
+.lia-board-r3-approval strong { display: block; margin-top: 7px; color: #bce7d2; font-size: 12px; }.lia-board-r3-approval.is-required { border-color: rgba(225,173,84,.22); background: rgba(77,53,19,.18); }.lia-board-r3-approval.is-required strong { color: #edca8e; }.lia-board-r3-approval small { display: block; margin-top: 8px; color: #688397; font-size: 7.5px; }
+.lia-board-r3-tension.has-tension { border-color: rgba(225,173,84,.22); }.lia-board-r3-tension strong { display: block; margin-top: 5px; color: #e6d0a8; font-size: 9px; }.lia-board-r3-tension p b { margin-right: 5px; color: #d5a85a; }.lia-board-r3-tension small { color: #d2a85f; font-size: 7.5px; }
+.lia-board-r3-signals { grid-column: 1/-1; display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }.lia-board-r3-signals > div { min-width: 0; }.lia-board-r3-signals ul { margin: 4px 0 0; padding-left: 14px; color: #94a9b8; font-size: 8.5px; }.lia-board-r3-signals strong { display: block; margin-top: 4px; color: #dbeef9; font-size: 13px; }
+@media (max-width:1024px) { .lia-board-r3-grid { grid-template-columns: minmax(0,1fr) minmax(150px,.55fr); }.lia-board-r3-tension { grid-column: 1/-1; } }
+@media (max-width:720px) { .lia-board-r3 { margin: 0 1px 7px; padding: 9px 10px; border-radius: 15px; }.lia-board-r3-head p { display: none; }.lia-board-r3-empty { min-height: 54px; margin-top: 7px; padding: 8px 10px; justify-content: flex-start; }.lia-board-r3-empty-mark { width: 34px; height: 31px; padding: 6px; }.lia-board-r3-empty p { margin: 2px 0 0; max-width: none; }.lia-board-r3-empty small { display: none; }.lia-board-r3-specialists { grid-template-columns: repeat(3,minmax(92px,1fr)); overflow-x: auto; }.lia-board-r3-grid { grid-template-columns: 1fr; max-height: 180px; overflow-y: auto; }.lia-board-r3-approval,.lia-board-r3-tension,.lia-board-r3-signals { grid-column: auto; } }
+@media (prefers-reduced-motion:reduce) { .lia-board-r3-empty > i { animation: none; } }
+
+/* Point 10 — deterministic Decision Learning projection, never a score/ranking. */
+.lia-learning-r3 { margin-top:10px; padding-top:11px; border-top:1px solid rgba(111,180,224,.14); }
+.lia-learning-r3 > header { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }.lia-learning-r3 > header span,.lia-learning-r3-sections > article > span,.lia-learning-r3-summary span { color:#72bae7; font-size:8px; font-weight:800; letter-spacing:.12em; }.lia-learning-r3 > header h3 { margin:3px 0 1px; color:#e9f5fb; font-size:14px; }.lia-learning-r3 > header p,.lia-learning-r3 > p,.lia-learning-r3-sections p { margin:2px 0 0; color:#7892a5; font-size:8.5px; line-height:1.45; }.lia-learning-r3 > header > b { color:#b9dced; font-size:10px; }
+.lia-learning-r3-empty { margin-top:8px; padding:13px; border:1px dashed rgba(122,183,222,.16); border-radius:12px; color:#8ca5b5; font-size:10px; text-align:center; }
+.lia-learning-r3-summary { margin-top:8px; display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }.lia-learning-r3-summary article,.lia-learning-r3-sections > article { padding:9px 10px; border:1px solid rgba(119,179,219,.1); border-radius:11px; background:rgba(5,20,34,.4); }.lia-learning-r3-summary strong { display:block; margin-top:4px; color:#e2f1f9; font-size:15px; }.lia-learning-r3-summary small { color:#708a9c; font-size:7.5px; }
+.lia-learning-r3-sections { margin-top:7px; display:grid; grid-template-columns:1fr 1fr; gap:7px; }.lia-learning-r3-calibration { margin-top:6px; display:grid; gap:4px; }.lia-learning-r3-calibration > div { display:grid; grid-template-columns:90px 1fr auto; gap:7px; align-items:center; }.lia-learning-r3-calibration b { color:#bcd7e7; font-size:8px; }.lia-learning-r3-calibration small { color:#718b9d; font-size:7.5px; }.lia-learning-r3-calibration strong { color:#9cc9df; font-size:7.5px; }
+.lia-learning-r3-sections ul { margin:6px 0 0; padding-left:14px; color:#91a8b7; font-size:8px; line-height:1.45; }.lia-learning-r3-roles,.lia-learning-r3-cases { grid-column:1/-1; }.lia-learning-r3-roles > div { margin-top:6px; display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:5px; }.lia-learning-r3-roles > div > div { padding:6px 7px; border-radius:8px; background:rgba(15,40,57,.48); }.lia-learning-r3-roles b,.lia-learning-r3-roles small,.lia-learning-r3-roles div span { display:block; }.lia-learning-r3-roles b { color:#cce3ef; font-size:8px; }.lia-learning-r3-roles small,.lia-learning-r3-roles div span { margin-top:2px; color:#718c9e; font-size:7.5px; }
+.lia-learning-r3-cases > div { padding:7px 0; border-bottom:1px solid rgba(119,179,219,.08); }.lia-learning-r3-cases > div:last-child { border-bottom:0; }.lia-learning-r3-cases header { display:flex; justify-content:space-between; gap:10px; }.lia-learning-r3-cases header strong { overflow:hidden; color:#d9ebf5; font-size:9px; white-space:nowrap; text-overflow:ellipsis; }.lia-learning-r3-cases header b { color:#79badc; font-size:8px; }.lia-learning-r3-cases small { color:#688598; font-size:7.5px; }
+@media (max-width:720px) { .lia-learning-r3-summary,.lia-learning-r3-sections { grid-template-columns:1fr; }.lia-learning-r3-roles,.lia-learning-r3-cases { grid-column:auto; }.lia-learning-r3-calibration > div { grid-template-columns:82px 1fr; }.lia-learning-r3-calibration strong { grid-column:2; } }
+
+/* Point 9 — bounded human control surfaces. All controls are touch-first. */
+.lia-human-control-r3 { position: relative; flex: 0 0 auto; margin: 0 4px 12px; padding: 13px 15px; border: 1px solid rgba(225,173,84,.24); border-radius: 19px; background: linear-gradient(145deg,rgba(49,37,18,.42),rgba(8,24,39,.78)); }
+.lia-human-control-r3 > header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.lia-human-control-r3 > header span { color:#dfb96f; font-size:8.5px; font-weight:800; letter-spacing:.13em; }
+.lia-human-control-r3 > header h2 { margin:3px 0 0; color:#edf7fd; font-size:15px; }
+.lia-human-control-r3 > header b { color:#9db5c5; font-size:9px; }
+.lia-human-control-r3 > p { margin:9px 0 0; color:#829bad; font-size:10px; }
+.lia-human-control-r3 > p.is-error,.lia-human-control-r3-feedback { color:#efb2ad !important; }
+.lia-human-control-r3-context { margin-top:9px; display:grid; gap:2px; }.lia-human-control-r3-context strong { color:#dcebf5; font-size:11px; }.lia-human-control-r3-context small { color:#7e98aa; font-size:9px; }
+.lia-human-control-r3-actions,.lia-board-r3-actions { margin-top:9px; display:flex; flex-wrap:wrap; gap:8px; }
+.lia-human-control-r3-actions button,.lia-board-r3-actions button { min-height:44px; padding:9px 14px; border:1px solid rgba(85,188,235,.3); border-radius:12px; color:#dff2fc; background:rgba(28,102,146,.28); font:inherit; font-size:10px; font-weight:750; cursor:pointer; touch-action:manipulation; }
+.lia-human-control-r3-actions button.is-destructive,.lia-board-r3-actions button.is-destructive { border-color:rgba(224,105,103,.34); color:#f4c0bc; background:rgba(112,39,38,.27); }
+.lia-human-control-r3-actions button:disabled,.lia-board-r3-actions button:disabled { opacity:.55; cursor:wait; }
+.lia-human-control-r3-separation,.lia-board-r3-separation { color:#9cb0bd !important; line-height:1.45 !important; }.lia-board-r3-separation b { display:block; color:#edca8e; }
+.lia-board-r3-feedback { color:#9ddbbf !important; }
+.lia-control-dialog-backdrop { position:fixed; z-index:1000; inset:0; display:grid; place-items:center; padding:20px; background:rgba(1,8,14,.74); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+.lia-control-dialog { width:min(440px,100%); padding:22px; border:1px solid rgba(224,105,103,.3); border-radius:20px; background:#0a1d2d; box-shadow:0 24px 80px rgba(0,0,0,.55); }
+.lia-control-dialog > span { color:#df9b75; font-size:9px; font-weight:800; letter-spacing:.12em; }.lia-control-dialog h3 { margin:8px 0 0; color:#eef7fc; font-size:18px; }.lia-control-dialog p { margin:8px 0 18px; color:#9bb0be; font-size:12px; line-height:1.5; }
+.lia-control-dialog > div { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:9px; }.lia-control-dialog button { min-width:110px; min-height:44px; padding:9px 14px; border:1px solid rgba(127,174,203,.25); border-radius:12px; color:#dcebf4; background:rgba(37,70,91,.55); font:inherit; font-weight:750; touch-action:manipulation; }.lia-control-dialog button.is-destructive { border-color:rgba(224,105,103,.4); color:#ffd0cc; background:rgba(116,41,40,.55); }
+@media (max-width:720px) { .lia-human-control-r3 { margin:0 1px 7px; padding:10px; border-radius:15px; }.lia-human-control-r3-actions { flex-wrap:nowrap; overflow-x:auto; }.lia-human-control-r3-actions button { flex:0 0 auto; }.lia-control-dialog { padding:18px; }.lia-control-dialog > div button { flex:1 1 120px; } }
+
+/* V3 page authority: one vertical page scroll; content ends at the composer. */
+.lia-dash-r3-shell.lia-projects-r3-shell { height:auto;min-height:100dvh;grid-template-rows:70px auto;overflow-x:hidden;overflow-y:auto; }
+.lia-projects-r3-shell .lia-dash-r3-sidebar-shell { position:sticky;top:0;height:100dvh; }
+.lia-projects-r3-shell .lia-dash-r3-main { min-height:0;overflow:visible; }
+.lia-projects-r3-chat { flex:0 0 auto; }
+.lia-projects-r3-thread { flex:0 0 auto;overflow:visible; }
+.lia-projects-r3-rail { overflow:visible;align-self:start; }
+@media (max-width:720px) { .lia-dash-r3-shell.lia-projects-r3-shell { min-height:0; }.lia-projects-r3-shell .lia-dash-r3-main { height:auto!important;overflow:visible!important; } }
+
+/* iPad forensic V4: no flex-grown chat viewport; the composer follows real modules. */
+.lia-dash-r3-shell.lia-projects-r3-shell { height:auto;min-height:100dvh;grid-template-rows:70px auto;overflow-x:clip;overflow-y:visible;align-items:start; }
+.lia-projects-r3-shell .lia-dash-r3-main { height:auto;min-height:0;align-self:start;overflow:visible; }
+.lia-projects-r3-chat,.lia-projects-r3-thread { height:auto;min-height:0;flex:0 0 auto;overflow:visible; }
+.lia-projects-r3-thread { gap:10px;padding-bottom:10px; }
+.lia-projects-r3-welcome { margin:4px auto;padding:14px 16px; }
+.lia-projects-r3-voice-access { margin:0 4px 7px; }
+.lia-projects-r3-voice-access .lia-voice-surface-r3 { grid-template-columns:44px minmax(180px,1fr) auto; padding:8px 10px; }
+.lia-projects-r3-voice-access .lia-voice-surface-r3 dl { grid-column:auto;display:flex;margin:0; }
+.lia-projects-r3-voice-access .lia-voice-surface-r3-write { grid-column:auto; }
+.lia-board-r3-empty { min-height:58px;padding:9px 12px; }
+.lia-learning-r3-empty { padding:8px; }
+@media (min-width:1000px) and (max-width:1239px) { .lia-projects-r3-rail { display:none; }.lia-projects-r3-shell { grid-template-columns:min(var(--lia-dash-r3-sidebar-width),176px) minmax(0,1fr); } }
+@media (max-width:720px) { .lia-projects-r3-voice-access .lia-voice-surface-r3 { grid-template-columns:44px 1fr; }.lia-projects-r3-voice-access .lia-voice-surface-r3 dl { grid-column:1/-1; }.lia-projects-r3-voice-access .lia-voice-surface-r3-write { grid-column:1/-1; } }
+
+/* LIA_PROJECTS_FLOW_V9
+   Projects iPad: un único flujo vertical físico y un único scroll. */
+
+@media (min-width:721px) and (max-width:1599px) {
+
+  .lia-projects-r3-shell .lia-dash-r3-scroll {
+    display: block !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+
+  .lia-projects-r3-shell .lia-dash-r3-main {
+    position: relative !important;
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .lia-projects-r3-chat,
+  .lia-projects-r3-thread {
+    position: relative !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .lia-projects-r3-composer,
+  .lia-projects-r3-voice-access {
+    position: relative !important;
+    inset: auto !important;
+    width: 100% !important;
+    flex: 0 0 auto !important;
+    transform: none !important;
+  }
+
+  .lia-projects-r3-shell .lia-projects-r3-rail {
+    position: relative !important;
+    inset: auto !important;
+    display: grid !important;
+    grid-template-columns: repeat(2,minmax(0,1fr)) !important;
+    width: auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 16px 18px !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    transform: none !important;
+  }
+}
+
+/* END LIA_PROJECTS_FLOW_V9 */

@@ -5,6 +5,7 @@ export type DashboardIconNameR3 =
   | 'documentos'
   | 'alertas'
   | 'agentes'
+  | 'servidores'
   | 'configuracion'
   | 'busqueda'
   | 'campana'
@@ -21,24 +22,14 @@ export type DashboardIconNameR3 =
   | 'metrica-documento'
   | 'metrica-operacion';
 
-export const dashboardMetricsR3 = [
-  { id: 'decisions', label: 'DECISIONES PENDIENTES', value: 8 },
-  { id: 'risks', label: 'RIESGOS CRÍTICOS', value: 3 },
-] as const satisfies ReadonlyArray<{
-  id: string;
-  label: string;
-  value: number;
-}>;
-
 export const dashboardNavigationR3 = [
   { id: 'dashboard', label: 'Inicio', icon: 'inicio' },
   { id: 'agenda', label: 'Agenda', icon: 'agenda' },
   { id: 'projects', label: 'Proyectos', icon: 'procesos' },
-  { id: 'tracking', label: 'Procesos', icon: 'procesos' },
+  { id: 'agents', label: 'Oficina', icon: 'agentes' },
+  { id: 'servers', label: 'Servidores', icon: 'servidores' },
   { id: 'documents', label: 'Documentos', icon: 'documentos' },
-  { id: 'alerts', label: 'Alertas', icon: 'alertas', badge: 3 },
-  { id: 'agents', label: 'Agentes', icon: 'agentes', disabled: true },
-  { id: 'settings', label: 'Configuración', icon: 'configuracion', disabled: true },
+  { id: 'settings', label: 'Configuración', icon: 'configuracion' },
 ] as const satisfies ReadonlyArray<{
   id: string;
   label: string;
@@ -46,12 +37,6 @@ export const dashboardNavigationR3 = [
   badge?: number;
   disabled?: boolean;
 }>;
-
-export const executiveStatsR3 = [
-  { label: 'SISTEMAS', value: '24', detail: 'Activos' },
-  { label: 'AGENTES', value: '16', detail: 'En línea' },
-  { label: 'OPERACIÓN', value: '88%', detail: 'Dentro de parámetros' },
-] as const;
 
 export const quickActionsR3 = [
   { id: 'meeting', label: 'Crear reunión', icon: 'reunion' },
@@ -63,21 +48,4 @@ export const quickActionsR3 = [
   label: string;
   icon: DashboardIconNameR3;
   disabled?: boolean;
-}>;
-
-export const recentActivityR3 = [
-  { id: 'daily-report', title: 'Informe operativo diario actualizado', detail: 'Actualización operativa reciente', icon: 'informe', tone: 'blue', actionRequired: false, routine: true, temporalOffsetMinutes: -15, temporalMode: 'past' },
-  { id: 'critical-risk', title: 'Riesgo crítico identificado', detail: 'Requiere atención ejecutiva', icon: 'riesgo', tone: 'red', actionRequired: true, temporalOffsetMinutes: -32, temporalMode: 'past' },
-  { id: 'requirement-review', title: 'Revisión de requerimiento', detail: 'Revisión programada', icon: 'agenda', tone: 'blue', actionRequired: true, dueInMinutes: 20, temporalOffsetMinutes: 20, temporalMode: 'scheduled' },
-] as const satisfies ReadonlyArray<{
-  id: string;
-  title: string;
-  detail: string;
-  icon: DashboardIconNameR3;
-  tone: 'blue' | 'red';
-  actionRequired: boolean;
-  routine?: boolean;
-  dueInMinutes?: number;
-  temporalOffsetMinutes: number;
-  temporalMode: 'past' | 'scheduled';
 }>;

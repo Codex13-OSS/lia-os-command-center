@@ -9,6 +9,7 @@ import { deriveContinuationApprovalState } from '../contracts/projectGoalContinu
 import type { ProjectTaskRecord } from '../contracts/projectTask.js';
 import type { ProjectContinuationMaterializationResult } from '../contracts/projectContinuationRuntime.js';
 import { PROJECT_CONTINUATION_RUNTIME_ERRORS } from '../contracts/projectContinuationRuntime.js';
+import type { ProjectGoalAutonomyPolicyRecord } from '../contracts/projectGoalAutonomyPolicy.js';
 import {
   countConsecutiveNoProgressCycles,
   resolveNoProgressThreshold,
@@ -46,6 +47,10 @@ export interface ContinuationExecutionGateStore {
   readGoal(goalId: string): ProjectGoalRecord | undefined;
   readContinuationPlan(planId: string): ProjectGoalContinuationPlanRecord | undefined;
   readContinuationApproval(planId: string): ProjectGoalContinuationApprovalRecord | undefined;
+}
+
+export interface BoundedContinuationExecutionGateStore extends ContinuationExecutionGateStore {
+  readGoalAutonomyPolicy(goalId: string): ProjectGoalAutonomyPolicyRecord | undefined;
 }
 
 export const PROJECT_GOAL_CONTINUATION_GATE_ERRORS = {
@@ -125,6 +130,35 @@ export function materializeApprovedContinuation(
   store.assertContinuationPlanUsable(planId);
   const approval = store.assertContinuationApprovalValid(planId);
   assertNoForbiddenAuthority(plan, approval);
+  return store.materializeContinuation(planId);
+}
+
+/**
+ * Materializes under the operator's durable bounded policy instead of claiming
+ * a new per-plan human approval. The policy carries no capability and this
+ * gate still re-validates plan lineage plus attempt/depth/cycle/time bounds.
+ */
+export function materializeBoundedAutonomousContinuation(
+  store: BoundedContinuationExecutionGateStore,
+  planId: string,
+  now: number = Date.now(),
+): ProjectContinuationMaterializationResult {
+  const plan = store.readContinuationPlan(planId);
+  if (plan === undefined) throw new Error(PROJECT_CONTINUATION_RUNTIME_ERRORS.planNotFound);
+  if (plan.status === 'consumed') return store.materializeContinuation(planId);
+  store.assertContinuationPlanUsable(planId);
+  const policy = store.readGoalAutonomyPolicy(plan.goalId);
+  if (policy === undefined || policy.mode !== 'bounded_autonomous') throw new Error('autonomy_manual_only');
+  if (policy.revokedAt !== undefined) throw new Error('autonomy_policy_revoked');
+  if (policy.suspendedAt !== undefined) throw new Error('autonomy_suspended');
+  if (policy.expiresAt !== undefined && now >= policy.expiresAt) throw new Error('autonomy_policy_expired');
+  if (policy.elapsedBudgetMs !== undefined && now - policy.createdAt >= policy.elapsedBudgetMs) {
+    throw new Error('autonomy_elapsed_budget_exhausted');
+  }
+  if (policy.maxCycles !== undefined && plan.nextAttemptNumber >= policy.maxCycles) {
+    throw new Error('autonomy_cycle_limit_reached');
+  }
+  assertNoForbiddenAuthority(plan, undefined);
   return store.materializeContinuation(planId);
 }
 

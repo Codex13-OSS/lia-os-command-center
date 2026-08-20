@@ -1,26 +1,27 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { ExecutiveShellR3 } from '../executive-r3/ExecutiveShellR3';
-import { type LiaProjectTaskPriority } from '../../integrations/liaProjectTaskWorkflowClient';
+import type { LiaProjectTaskPriority } from '../../integrations/liaProjectTaskWorkflowClient';
 import {
-  clearPersistedProjectTask,
-  getProjectTaskStatus,
-  loadPersistedProjectTask,
-  persistProjectTaskStatus,
-  prepareProjectTask,
-  submitProjectTask,
-  type LiaProjectTaskReceipt,
-  type LiaProjectTaskStage,
-  type PersistedProjectTask,
-} from '../../integrations/liaProjectTaskClient';
+  LIA_GOAL_CREATED_EVENT,
+  estimateLiaProjectGoalEffort,
+  prepareLiaProjectGoal,
+  submitLiaProjectGoal,
+  type LiaProjectGoalEffortEstimate,
+} from '../../integrations/liaProjectGoalClient';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import '../../styles/projectsExecutiveR3.css';
-import { readLiaHermesUiStatus, type LiaHermesUiStatus } from '../../integrations/liaHermesStatusClient';
-import { readLiaAutonomyHud, type LiaAutonomyHud } from '../../integrations/liaAutonomyHudClient';
+import { useLiaCoreState } from '../lia-core-r3/useLiaCoreState';
+import { ProjectsAutonomyHudR3 } from '../autonomy-r3/AutonomyPanelsR3';
+import { ExecutiveBoardPanelR3 } from '../autonomy-r3/ExecutiveBoardPanelR3';
+import { HumanGoalControlPanelR3 } from '../autonomy-r3/HumanGoalControlPanelR3';
+import { LiaVoiceSurfaceR3 } from '../lia-r3/LiaVoiceSurfaceR3';
 
 type Props = {
   onDashboard: () => void;
   onAgenda: () => void;
   onProjects: () => void;
+  onAgents: () => void; onServers: () => void;
+  onSettings: () => void;
   onTracking: () => void;
   onDocuments: () => void;
   onAlerts: () => void;
@@ -28,102 +29,20 @@ type Props = {
   conversationController?: LiaConversationController;
 };
 
-const PROJECT_ID = 'lia-hermes-mobile-preview';
-const POLL_INTERVAL_MS = 1500;
-const TEMPORARY_RETRY_MS = 2500;
+const PROJECT_ID = 'lia-hermes';
 const COMPOSER_MAX_HEIGHT = 150;
 
-type ProjectStageKey = LiaProjectTaskStage | 'recovering';
-
-type StageMeta = {
-  human: string;
-  detail: string;
-};
-
-/** Textos humanos para cada estado público del flujo (sin jerga técnica). */
-const STAGE_META: Record<ProjectStageKey, StageMeta> = {
-  accepted: {
-    human: 'Recibí tu solicitud',
-    detail: 'Estoy validando tu instrucción y el proyecto antes de empezar.',
-  },
-  planning: {
-    human: 'Estoy organizando el trabajo',
-    detail: 'Preparo el plan mínimo y verifico el entorno aislado.',
-  },
-  hermes: {
-    human: 'Estoy analizando y decidiendo cómo hacerlo',
-    detail: 'Defino el enfoque y la secuencia de cambios necesarios.',
-  },
-  codex: {
-    human: 'Estoy trabajando en los archivos',
-    detail: 'Aplico los cambios dentro de un entorno aislado y seguro.',
-  },
-  verification: {
-    human: 'Estoy comprobando que todo funcione',
-    detail: 'Ejecuto las verificaciones autorizadas sobre el resultado.',
-  },
-  commit: {
-    human: 'Estoy guardando el resultado',
-    detail: 'Registro el cambio verificado de forma local.',
-  },
-  completed: {
-    human: 'Trabajo terminado',
-    detail: 'El resultado final ya está disponible abajo.',
-  },
-  failed: {
-    human: 'No pude completar esta parte',
-    detail: 'Algo no salió como esperaba; revisa el diagnóstico seguro.',
-  },
-  recovering: {
-    human: 'Estoy recuperando tu última tarea',
-    detail: 'LÍA está recuperando el último estado confirmado de la tarea.',
-  },
-};
-
-const IDLE_STAGE = {
-  eyebrow: 'LÍA ESTÁ LISTA',
-  human: 'Describe qué quieres lograr',
-  detail: 'La ejecución aparecerá aquí usando únicamente estados reales del backend.',
-};
-
-const WORKFLOW_STEPS = [
-  { technical: 'planning', label: 'Preparando', human: 'Organizando el trabajo' },
-  { technical: 'hermes', label: 'Hermes', human: 'Analizando el enfoque' },
-  { technical: 'codex', label: 'Ejecutando', human: 'Trabajando en los archivos' },
-  { technical: 'verification', label: 'Verificando', human: 'Comprobando que todo funcione' },
-  { technical: 'commit', label: 'Guardando', human: 'Guardando el resultado' },
-] as const;
-
-type StepState = 'pending' | 'active' | 'completed' | 'failed';
-
-function progressFor(stage: ProjectStageKey | null): StepState[] {
-  if (stage === 'failed') return WORKFLOW_STEPS.map(() => 'failed');
-  if (stage === null || stage === 'recovering') return WORKFLOW_STEPS.map(() => 'pending');
-  const activeIndex =
-    stage === 'accepted' || stage === 'planning' ? 0
-      : stage === 'hermes' ? 1
-        : stage === 'codex' ? 2
-          : stage === 'verification' ? 3
-            : 4;
-  return WORKFLOW_STEPS.map((_, index) => {
-    if (index < activeIndex) return 'completed';
-    if (index === activeIndex) return 'active';
-    return 'pending';
-  });
-}
-
-type ProjectRun = {
-  taskId: string;
-  instruction: string;
+type GoalTurn = {
+  goalId: string;
+  objective: string;
   priority: LiaProjectTaskPriority;
   createdAt: number;
-  stage: ProjectStageKey | null;
-  pending: boolean;
   error: string | null;
-  receipt: LiaProjectTaskReceipt | null;
-  /** Preparado para futura solicitud de información (human-in-the-loop). */
-  infoRequest: { prompt: string } | null;
+  autonomyMode: AutonomyChoice;
+  estimate: LiaProjectGoalEffortEstimate;
 };
+
+type AutonomyChoice = 'supervised' | 'bounded_autonomous';
 
 const PRIORITY_OPTIONS: ReadonlyArray<{ value: LiaProjectTaskPriority; label: string }> = [
   { value: 'low', label: 'Baja' },
@@ -139,24 +58,13 @@ const PRIORITY_LABELS: Record<LiaProjectTaskPriority, string> = {
   critical: 'Crítica',
 };
 
-function formatElapsed(fromMs: number, nowMs: number): string {
-  const seconds = Math.max(0, Math.floor((nowMs - fromMs) / 1000));
-  if (seconds < 60) return `${seconds} s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours} h ${minutes % 60} min`;
-}
-
-function safeTaskDate(fromMs: number): Date | null {
-  if (!Number.isFinite(fromMs) || fromMs <= 0) return null;
-  const date = new Date(fromMs);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
+const COMPLEXITY_LABELS: Record<LiaProjectGoalEffortEstimate['complexity'], string> = {
+  low: 'Baja', medium: 'Media', high: 'Alta', critical: 'Crítica',
+};
 
 function formatClock(fromMs: number): string {
-  const date = safeTaskDate(fromMs);
-  if (!date) return 'Hora no disponible';
+  const date = new Date(fromMs);
+  if (!Number.isFinite(fromMs) || Number.isNaN(date.getTime())) return 'Hora no disponible';
   try {
     return new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit' }).format(date);
   } catch {
@@ -164,159 +72,33 @@ function formatClock(fromMs: number): string {
   }
 }
 
-function formatDateTimeAttribute(fromMs: number): string | undefined {
-  const date = safeTaskDate(fromMs);
-  return date ? date.toISOString() : undefined;
-}
-
-function ReceiptCard({ receipt }: { receipt: LiaProjectTaskReceipt }) {
-  const statusLabel = receipt.status === 'committed'
-    ? 'Trabajo terminado'
-    : receipt.status === 'verified'
-      ? 'Resultado verificado'
-      : receipt.status === 'ready_for_review'
-        ? 'Listo para revisión'
-        : 'Análisis completado';
-  const statusEyebrow = receipt.status === 'committed'
-    ? 'RESULTADO VERIFICADO'
-    : receipt.status === 'verified'
-      ? 'VERIFICADO'
-      : receipt.status === 'ready_for_review'
-        ? 'LISTO PARA REVISIÓN'
-        : 'ANÁLISIS COMPLETADO';
-
-  return (
-    <div className={`lia-projects-r3-receipt is-${receipt.status}`}>
-      <div className="lia-projects-r3-receipt-head">
-        <div>
-          <span>{statusEyebrow}</span>
-          <h3>{statusLabel}</h3>
-        </div>
-        <span className="lia-projects-r3-receipt-check" aria-hidden="true">✓</span>
-      </div>
-
-      <p className="lia-projects-r3-result-text">{receipt.resultText}</p>
-
-      <div className="lia-projects-r3-result-facts">
-        {receipt.verification && (
-          <div>
-            <span>Verificación</span>
-            <strong>{receipt.verification.checksPassed}/{receipt.verification.totalChecks}</strong>
-            <small>comprobaciones aprobadas</small>
-          </div>
-        )}
-
-        {receipt.commit && (
-          <div>
-            <span>Guardado local</span>
-            <strong>{receipt.commit.slice(0, 10)}</strong>
-            <small>Registro del cambio en el repositorio</small>
-          </div>
-        )}
-
-        {receipt.status === 'ready_for_review' && (
-          <div>
-            <span>Estado</span>
-            <strong>Revisión</strong>
-            <small>El cambio no fue finalizado automáticamente</small>
-          </div>
-        )}
-
-        {receipt.status === 'analyzed' && (
-          <div>
-            <span>Verificación</span>
-            <strong>No requerida</strong>
-            <small>La tarea fue únicamente de análisis</small>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ConversationTurn({ run, now }: { run: ProjectRun; now: number }) {
-  const meta = run.stage ? STAGE_META[run.stage] : null;
-  const progress = progressFor(run.stage);
-  const live = run.pending;
-  const activeStepIndex = progress.indexOf('active');
-  const completedCount = progress.filter((state) => state === 'completed').length;
-  const progressWidth = Math.round(((completedCount + (activeStepIndex >= 0 ? 1 : 0)) / WORKFLOW_STEPS.length) * 100);
-
+function ConversationTurn({ turn }: { turn: GoalTurn }) {
   return (
     <>
       <article className="lia-projects-r3-msg is-user">
         <div className="lia-projects-r3-msg-bubble">
-          <p>{run.instruction}</p>
+          <p>{turn.objective}</p>
           <footer>
-            <span className={`lia-projects-r3-priority-chip is-${run.priority}`}>
-              Prioridad {PRIORITY_LABELS[run.priority]}
+            <span className={`lia-projects-r3-priority-chip is-${turn.priority}`}>
+              Prioridad {PRIORITY_LABELS[turn.priority]}
             </span>
-            <time dateTime={formatDateTimeAttribute(run.createdAt)}>{formatClock(run.createdAt)}</time>
+            <span className="lia-projects-r3-autonomy-chip">
+              {turn.autonomyMode === 'bounded_autonomous' ? 'Autónoma acotada' : 'Supervisada'}
+            </span>
+            <span className="lia-projects-r3-autonomy-chip">Complejidad {COMPLEXITY_LABELS[turn.estimate.complexity]}</span>
+            <time dateTime={new Date(turn.createdAt).toISOString()}>{formatClock(turn.createdAt)}</time>
           </footer>
         </div>
       </article>
 
-      <article className={`lia-projects-r3-msg is-lia${meta ? ` is-${run.stage}` : ' is-neutral'}`}>
+      <article className={`lia-projects-r3-msg is-lia${turn.error ? ' is-failed' : ' is-completed'}`}>
         <div className="lia-projects-r3-lia-avatar" aria-hidden="true">LÍA</div>
         <div className="lia-projects-r3-msg-bubble">
-          <header className="lia-projects-r3-msg-head">
-            <strong>LÍA</strong>
-            {live && meta && (
-              <span className="lia-projects-r3-live-chip" role="status">
-                <i aria-hidden="true" />
-                {run.stage === 'recovering' ? 'Recuperando' : `En curso · hace ${formatElapsed(run.createdAt, now)}`}
-              </span>
-            )}
-          </header>
-
-          {meta && (
-            <div className="lia-projects-r3-status-copy">
-              <h3>{meta.human}</h3>
-              <p>{meta.detail}</p>
-            </div>
-          )}
-
-          {run.error && <div className="lia-projects-r3-error" role="alert">{run.error}</div>}
-
-          {run.infoRequest && (
-            <div className="lia-projects-r3-info-request" role="status">
-              <span className="lia-projects-r3-info-request-icon" aria-hidden="true">?</span>
-              <div>
-                <strong>LÍA necesita un dato</strong>
-                <p>{run.infoRequest.prompt}</p>
-                <small>Respóndele en el mensaje de abajo.</small>
-              </div>
-            </div>
-          )}
-
-          {!run.receipt && (
-            <ol className="lia-projects-r3-stages" aria-label="Progreso del trabajo">
-              {WORKFLOW_STEPS.map((base, index) => {
-                const step = { ...base, state: progress[index] };
-                return (
-                  <li
-                    key={step.technical}
-                    className={`is-${step.state} lia-projects-r3-step-${step.technical}`}
-                    aria-current={step.state === 'active' ? 'step' : undefined}
-                  >
-                    <span className="lia-projects-r3-stage-dot" aria-hidden="true" />
-                    <div className="lia-projects-r3-stage-copy">
-                      <strong>{step.human}</strong>
-                      <small>{step.label}</small>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-
-          {live && meta && (
-            <div className="lia-projects-r3-progress" aria-hidden="true">
-              <span style={{ width: `${progressWidth}%` }} />
-            </div>
-          )}
-
-          {run.receipt && <ReceiptCard receipt={run.receipt} />}
+          <header className="lia-projects-r3-msg-head"><strong>LÍA</strong></header>
+          <div className="lia-projects-r3-status-copy">
+            <h3>{turn.error ? 'No pude registrar el objetivo' : 'Objetivo registrado'}</h3>
+            <p>{turn.error ?? 'El Goal durable ya está en control de LÍA. El HUD muestra su estado real de ejecución, espera o finalización.'}</p>
+          </div>
         </div>
       </article>
     </>
@@ -324,195 +106,59 @@ function ConversationTurn({ run, now }: { run: ProjectRun; now: number }) {
 }
 
 export function ProjectsShellR3(props: Props) {
-  const [hermesUiStatus, setHermesUiStatus] = useState<LiaHermesUiStatus>({
-    state: 'checking',
-    label: 'Comprobando Hermes…',
-  });
-  const [autonomyHud, setAutonomyHud] = useState<LiaAutonomyHud | null>(null);
+  const { core, loaded: coreLoaded } = useLiaCoreState();
+  const hermesUiStatus = coreLoaded
+    ? core.hermesAvailability === 'available'
+      ? { state: 'available' as const, label: 'Hermes disponible' as const }
+      : { state: 'unavailable' as const, label: 'Hermes no disponible' as const }
+    : { state: 'checking' as const, label: 'Comprobando Hermes…' as const };
   const [instruction, setInstruction] = useState('');
   const [priority, setPriority] = useState<LiaProjectTaskPriority>('normal');
-  const [runs, setRuns] = useState<ProjectRun[]>([]);
-  const [activeRun, setActiveRun] = useState<ProjectRun | null>(null);
+  const [autonomyMode, setAutonomyMode] = useState<AutonomyChoice>('supervised');
+  const [effortEstimate, setEffortEstimate] = useState<LiaProjectGoalEffortEstimate | null>(null);
+  const [estimateKey, setEstimateKey] = useState('');
+  const [turns, setTurns] = useState<GoalTurn[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const mountedRef = useRef(false);
-  const pollRunRef = useRef(0);
-  const activeRunRef = useRef<ProjectRun | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
-  const sleepRef = useRef<{ run: number; timer: ReturnType<typeof setTimeout>; resolve: () => void } | null>(null);
-
-  const composerBusy = activeRun?.pending === true;
-
-  const cancelSleep = () => {
-    const sleep = sleepRef.current;
-    if (!sleep) return;
-    clearTimeout(sleep.timer);
-    sleepRef.current = null;
-    sleep.resolve();
-  };
-
-  const updateActive = (patch: Partial<ProjectRun>) => {
-    const current = activeRunRef.current;
-    if (!current) return;
-    const next = { ...current, ...patch };
-    activeRunRef.current = next;
-    setActiveRun(next);
-  };
-
-  const setReceipt = (receipt: LiaProjectTaskReceipt | null) => {
-    updateActive({ receipt });
-  };
-
-  const finishRun = (patch: Partial<ProjectRun>) => {
-    const current = activeRunRef.current;
-    if (!current) return;
-    const done = { ...current, ...patch, pending: false };
-    submittingRef.current = false;
-    activeRunRef.current = null;
-    setActiveRun(null);
-    setRuns((previous) => {
-      const index = previous.findIndex((run) => run.taskId === done.taskId);
-      if (index >= 0) {
-        const next = [...previous];
-        next[index] = done;
-        return next;
-      }
-      return [...previous, done];
-    });
-  };
-
-  const beginRun = (task: PersistedProjectTask) => {
-    const run: ProjectRun = {
-      taskId: task.taskId,
-      instruction: task.request.instruction,
-      priority: task.request.priority,
-      createdAt: task.createdAt,
-      stage: 'accepted',
-      pending: true,
-      error: null,
-      receipt: null,
-      infoRequest: null,
-    };
-    activeRunRef.current = run;
-    setActiveRun(run);
-  };
-
-  const beginRecoveredRun = (task: PersistedProjectTask) => {
-    const run: ProjectRun = {
-      taskId: task.taskId,
-      instruction: task.request.instruction,
-      priority: task.request.priority,
-      createdAt: task.createdAt,
-      stage: 'recovering',
-      pending: true,
-      error: null,
-      receipt: null,
-      infoRequest: null,
-    };
-    activeRunRef.current = run;
-    setActiveRun(run);
-  };
-
-  const poll = async (task: PersistedProjectTask) => {
-    const run = ++pollRunRef.current;
-    cancelSleep();
-    if (mountedRef.current) updateActive({ pending: true });
-
-    const isCurrent = () => mountedRef.current && pollRunRef.current === run;
-    const wait = (delay: number) => new Promise<void>((resolve) => {
-      let sleep: { run: number; timer: ReturnType<typeof setTimeout>; resolve: () => void };
-      const timer = setTimeout(() => {
-        if (sleepRef.current === sleep) sleepRef.current = null;
-        resolve();
-      }, delay);
-      sleep = { run, timer, resolve };
-      sleepRef.current = sleep;
-    });
-
-    while (isCurrent()) {
-      const result = await getProjectTaskStatus(task.taskId);
-      if (!isCurrent()) return;
-      if (result.kind === 'active') {
-        updateActive({ stage: result.status, error: null, pending: true });
-        persistProjectTaskStatus(task, result.status);
-        await wait(POLL_INTERVAL_MS);
-        continue;
-      }
-      if (result.kind === 'temporary') {
-        await wait(TEMPORARY_RETRY_MS);
-        continue;
-      }
-      if (result.kind === 'completed') {
-        clearPersistedProjectTask(task.taskId);
-        setReceipt(result.receipt);
-        finishRun({ stage: 'completed', error: null });
-      } else if (result.kind === 'failed') {
-        clearPersistedProjectTask(task.taskId);
-        finishRun({ stage: 'failed', error: result.message });
-      } else if (result.kind === 'unknown') { clearPersistedProjectTask(task.taskId); finishRun({ stage: null, error: 'No se pudo recuperar el estado de esta ejecución. El servicio pudo haberse reiniciado.' }); } else {
-        finishRun({ stage: null, error: result.message });
-      }
-      return;
-    }
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void readLiaHermesUiStatus().then((status) => {
-      if (!cancelled) setHermesUiStatus(status);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      const next = await readLiaAutonomyHud();
-      if (!cancelled) setAutonomyHud(next);
-    };
-    void refresh();
-    const timer = window.setInterval(refresh, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
-    const saved = loadPersistedProjectTask();
-    if (saved && saved.lastStatus !== 'completed' && saved.lastStatus !== 'failed') {
-      beginRecoveredRun(saved);
-      void poll(saved);
-    } else if (saved) {
-      clearPersistedProjectTask(saved.taskId);
-    }
     return () => {
       mountedRef.current = false;
-      pollRunRef.current += 1;
-      cancelSleep();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (!activeRun?.pending) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [activeRun?.pending]);
+    const objective = instruction.trim();
+    const key = `${priority}\n${objective}`;
+    if (!objective) {
+      setEffortEstimate(null);
+      setEstimateKey('');
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void estimateLiaProjectGoalEffort({ projectId: PROJECT_ID, objective, priority }).then((estimate) => {
+        if (!cancelled) {
+          setEffortEstimate(estimate);
+          setEstimateKey(estimate === null ? '' : key);
+        }
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [instruction, priority]);
 
   useEffect(() => {
     const el = threadRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
-  }, [runs, activeRun, notice]);
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns, notice, submitting]);
 
   const resizeComposer = () => {
     const el = composerRef.current;
@@ -523,40 +169,72 @@ export function ProjectsShellR3(props: Props) {
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (submittingRef.current || activeRun?.pending) return;
-    const cleanInstruction = instruction.trim();
-    if (!cleanInstruction) {
-      setNotice('Escribe una instrucción concreta para LÍA.');
+    if (submittingRef.current) return;
+    const objective = instruction.trim();
+    if (!objective) {
+      setNotice('Escribe una misión concreta para LÍA.');
       return;
     }
+
     setNotice(null);
     submittingRef.current = true;
-    const task = prepareProjectTask({ projectId: PROJECT_ID, instruction: cleanInstruction, priority });
-    beginRun(task);
-    setInstruction('');
-    window.requestAnimationFrame(resizeComposer);
-    try {
-      const submitted = await submitProjectTask(task);
-      if (!mountedRef.current) return;
-      if (submitted === 'contract') {
-        clearPersistedProjectTask(task.taskId);
-        finishRun({ stage: null, error: 'No fue posible aceptar la tarea. Revisa la instrucción e inténtalo de nuevo.' });
-        submittingRef.current = false;
-        setInstruction(cleanInstruction);
-        return;
-      }
-      if (submitted === 'ambiguous') {
-        await submitProjectTask(task); // Same persisted UUID; backend idempotency is authoritative.
-        if (!mountedRef.current) return;
-      }
-      await poll(task);
-    } catch {
-      submittingRef.current = false;
-      if (mountedRef.current) {
-        finishRun({ stage: null, error: 'No fue posible preparar o enviar la tarea.' });
-        setInstruction(cleanInstruction);
-      }
+    setSubmitting(true);
+    const currentEstimateKey = `${priority}\n${objective}`;
+    let confirmedEstimate = estimateKey === currentEstimateKey ? effortEstimate : null;
+    if (confirmedEstimate === null) {
+      confirmedEstimate = await estimateLiaProjectGoalEffort({ projectId: PROJECT_ID, objective, priority });
     }
+    if (confirmedEstimate === null) {
+      if (mountedRef.current) {
+        submittingRef.current = false;
+        setSubmitting(false);
+        setNotice('No pude confirmar la estimación y sus límites seguros. Inténtalo de nuevo.');
+      }
+      return;
+    }
+    const goal = prepareLiaProjectGoal({
+      projectId: PROJECT_ID,
+      objective,
+      priority,
+      autonomyMode,
+      estimate: confirmedEstimate,
+    });
+    const result = await submitLiaProjectGoal(goal);
+    if (!mountedRef.current) return;
+
+    submittingRef.current = false;
+    setSubmitting(false);
+    if (result.kind === 'accepted') {
+      setTurns((previous) => [...previous, {
+        goalId: goal.request.goalId,
+        objective,
+        priority,
+        createdAt: goal.createdAt,
+        error: null,
+        autonomyMode,
+        estimate: confirmedEstimate,
+      }]);
+      setInstruction('');
+      window.dispatchEvent(new Event(LIA_GOAL_CREATED_EVENT));
+      window.requestAnimationFrame(resizeComposer);
+      return;
+    }
+
+    const message = result.kind === 'contract'
+      ? result.message
+      : 'No pude confirmar si el objetivo fue registrado. La misión se conserva para que puedas reintentarlo.';
+    setTurns((previous) => [...previous, {
+      goalId: goal.request.goalId,
+      objective,
+      priority,
+      createdAt: goal.createdAt,
+      error: message,
+      autonomyMode,
+      estimate: confirmedEstimate,
+    }]);
+    // Contractual and ambiguous failures preserve the exact user instruction.
+    setInstruction(objective);
+    window.requestAnimationFrame(resizeComposer);
   };
 
   const handleInstructionChange = (value: string) => {
@@ -571,20 +249,10 @@ export function ProjectsShellR3(props: Props) {
     }
   };
 
-  const threadItems = [...runs, ...(activeRun ? [activeRun] : [])];
-
   const rail = (
     <aside className="lia-dash-r3-rail-shell lia-projects-r3-rail" aria-label="Contexto del proyecto">
-      <section>
-        <span>PROYECTO ACTIVO</span>
-        <strong>LÍA O.S. / Hermes</strong>
-        <small>Proyecto conectado al ejecutor local</small>
-      </section>
-      <section>
-        <span>ENTORNO</span>
-        <strong>Entorno aislado</strong>
-        <small>Cambios verificados y guardado local habilitados</small>
-      </section>
+      <section><span>PROYECTO ACTIVO</span><strong>LÍA O.S. / Hermes</strong><small>Proyecto conectado al ejecutor local</small></section>
+      <section><span>ENTORNO</span><strong>Entorno aislado</strong><small>Autorizaciones y límites controlados por LÍA</small></section>
     </aside>
   );
 
@@ -594,95 +262,44 @@ export function ProjectsShellR3(props: Props) {
         <div>
           <span>PROYECTOS</span>
           <h1>Proyectos</h1>
-          <div
-            className={`lia-projects-r3-live-badge is-${hermesUiStatus.state}`}
-            role="status"
-            aria-live="polite"
-          >
-            <i aria-hidden="true" />
-            LÍA · {hermesUiStatus.label}
+          <div className={`lia-projects-r3-live-badge is-${hermesUiStatus.state}`} role="status" aria-live="polite">
+            <i aria-hidden="true" /> LÍA · {hermesUiStatus.label}
           </div>
-          <p>Envía una instrucción y sigue el trabajo de LÍA en vivo</p>
+          <p>Registra una misión y sigue sus estados reales en el HUD</p>
         </div>
       </header>
 
-      <section className="lia-autonomy-hud-r3" aria-label="LÍA Autonomy HUD">
-        <header className="lia-autonomy-hud-r3-head">
-          <div>
-            <span>🤖 LÍA AUTONOMY HUD</span>
-            <strong>{autonomyHud ? 'Supervisor conectado' : 'Conectando al supervisor…'}</strong>
-          </div>
-          <b>{autonomyHud?.supervisor.failClosed ? 'Protección activa' : autonomyHud ? 'Operativo' : 'Conectando'}</b>
-        </header>
-
-        <div className="lia-autonomy-hud-r3-grid">
-          <article>
-            <span>Estado</span>
-            <strong>{autonomyHud?.supervisor.state ?? '—'}</strong>
-            <small>{autonomyHud?.supervisor.enabled ? 'Autonomía habilitada' : 'Esperando estado'}</small>
-          </article>
-          <article>
-            <span>Objetivos activos</span>
-            <strong>{autonomyHud?.supervisor.goals.activeGoalCount ?? '—'}</strong>
-            <small>{autonomyHud ? `${autonomyHud.totalGoals} registrados` : 'Leyendo objetivos'}</small>
-          </article>
-          <article>
-            <span>Ejecutando</span>
-            <strong>{autonomyHud?.supervisor.goals.executingGoalCount ?? '—'}</strong>
-            <small>{autonomyHud ? `${autonomyHud.supervisor.goals.inFlight}/${autonomyHud.supervisor.goals.externalExecutionCeiling} slots` : 'Sin datos'}</small>
-          </article>
-          <article>
-            <span>Intervención humana</span>
-            <strong>{autonomyHud?.supervisor.goals.humanInterventionRequiredCount ?? '—'}</strong>
-            <small>{autonomyHud?.supervisor.goals.blockedOnHumanGoalCount ? 'Hay bloqueos pendientes' : 'Sin bloqueos'}</small>
-          </article>
-        </div>
-
-        <footer className="lia-autonomy-hud-r3-foot">
-          <span>Último impulso: {autonomyHud?.supervisor.lastPass?.source ?? '—'}</span>
-          <span>{autonomyHud?.supervisor.pendingWakeup ? 'Siguiente paso pendiente' : 'Sin trabajo pendiente'}</span>
-        </footer>
-      </section>
+      <ProjectsAutonomyHudR3 />
+      <HumanGoalControlPanelR3 />
+      <ExecutiveBoardPanelR3 projectId={PROJECT_ID} />
 
       <section className="lia-projects-r3-chat" aria-label="Conversación con LÍA">
         <div className="lia-projects-r3-thread" ref={threadRef} role="log" aria-live="polite">
-          {threadItems.length === 0 && !notice && (
+          {turns.length === 0 && !notice && (
             <div className="lia-projects-r3-welcome">
               <span className="lia-projects-r3-lia-avatar" aria-hidden="true">LÍA</span>
               <div>
-                <span className="lia-projects-r3-welcome-eyebrow">{IDLE_STAGE.eyebrow}</span>
-                <strong>{IDLE_STAGE.human}</strong>
-                <p>Estoy lista para trabajar en tu proyecto. Escríbeme una instrucción y te iré contando qué estoy haciendo, en qué etapa voy y qué terminé haciendo.</p>
+                <span className="lia-projects-r3-welcome-eyebrow">LÍA ESTÁ LISTA</span>
+                <strong>Describe qué quieres lograr</strong>
+                <p>Registraré tu misión como un objetivo durable. Su avance aparecerá únicamente en el HUD con estados reales del backend.</p>
               </div>
             </div>
           )}
-
-          {threadItems.map((run) => (
-            <ConversationTurn key={run.taskId} run={run} now={now} />
-          ))}
-
+          {turns.map((turn) => <ConversationTurn key={turn.goalId} turn={turn} />)}
+          {submitting && (
+            <div className="lia-projects-r3-notice" role="status"><span aria-hidden="true">·</span><p>Registrando el objetivo durable…</p></div>
+          )}
           {notice && (
-            <div className="lia-projects-r3-notice" role="status">
-              <span aria-hidden="true">!</span>
-              <p>{notice}</p>
-            </div>
+            <div className="lia-projects-r3-notice" role="status"><span aria-hidden="true">!</span><p>{notice}</p></div>
           )}
         </div>
 
+        <div className="lia-projects-r3-voice-access"><LiaVoiceSurfaceR3 controller={props.conversationController} /></div>
         <form className="lia-projects-r3-composer" onSubmit={submit}>
           <div className="lia-projects-r3-composer-field">
-            <button
-              type="button"
-              className="lia-projects-r3-attach"
-              disabled
-              aria-label="Adjuntos próximamente"
-              title="Adjuntos próximamente"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.82l8.49-8.48" />
-              </svg>
+            <button type="button" className="lia-projects-r3-attach" disabled aria-label="Adjuntos próximamente" title="Adjuntos próximamente">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.82l8.49-8.48" /></svg>
             </button>
-
             <textarea
               ref={composerRef}
               value={instruction}
@@ -690,45 +307,39 @@ export function ProjectsShellR3(props: Props) {
               onKeyDown={handleComposerKeyDown}
               maxLength={8000}
               rows={1}
-              placeholder={composerBusy ? 'LÍA está trabajando… puedes ir preparando tu siguiente instrucción' : 'Escribe una instrucción para LÍA…'}
-              aria-label="Escribe una instrucción para LÍA"
+              placeholder={submitting ? 'Registrando objetivo…' : 'Escribe una misión para LÍA…'}
+              aria-label="Escribe una misión para LÍA"
             />
 
-            <button
-              type="submit"
-              className="lia-projects-r3-send"
-              disabled={composerBusy || !instruction.trim()}
-              aria-label={composerBusy ? 'LÍA está trabajando' : 'Enviar instrucción a LÍA'}
-            >
-              {composerBusy ? (
-                <span className="lia-projects-r3-send-busy" aria-hidden="true" />
-              ) : (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M12 19V5" />
-                  <path d="m5 12 7-7 7 7" />
-                </svg>
+            <button type="submit" className="lia-projects-r3-send" disabled={submitting || !instruction.trim()} aria-label={submitting ? 'Registrando objetivo' : 'Registrar objetivo'}>
+              {submitting ? <span className="lia-projects-r3-send-busy" aria-hidden="true" /> : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
               )}
             </button>
           </div>
-
           <div className="lia-projects-r3-composer-meta">
             <span className="lia-projects-r3-attach-note">Adjuntos próximamente</span>
-            <div className="lia-projects-r3-priority" role="group" aria-label="Prioridad de la instrucción">
+            <div className="lia-projects-r3-priority" role="group" aria-label="Prioridad de la misión">
               {PRIORITY_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={priority === option.value ? 'is-selected' : undefined}
-                  aria-pressed={priority === option.value}
-                  disabled={composerBusy}
-                  onClick={() => setPriority(option.value)}
-                >
-                  {option.label}
-                </button>
+                <button key={option.value} type="button" className={priority === option.value ? 'is-selected' : undefined} aria-pressed={priority === option.value} disabled={submitting} onClick={() => setPriority(option.value)}>{option.label}</button>
               ))}
             </div>
+            <div className="lia-projects-r3-autonomy-select" role="group" aria-label="Autonomía del Goal">
+              <button type="button" className={autonomyMode === 'supervised' ? 'is-selected' : undefined} aria-pressed={autonomyMode === 'supervised'} disabled={submitting} onClick={() => setAutonomyMode('supervised')}>Supervisada</button>
+              <button type="button" className={autonomyMode === 'bounded_autonomous' ? 'is-selected' : undefined} aria-pressed={autonomyMode === 'bounded_autonomous'} disabled={submitting} onClick={() => setAutonomyMode('bounded_autonomous')}>Autónoma acotada</button>
+            </div>
+            {effortEstimate && estimateKey === `${priority}\n${instruction.trim()}` && (
+              <span className={`lia-projects-r3-estimate is-${effortEstimate.complexity}`}>
+                Complejidad {COMPLEXITY_LABELS[effortEstimate.complexity]} · {effortEstimate.recommendedMaxAttempts} intentos · profundidad {effortEstimate.recommendedContinuationDepth}
+              </span>
+            )}
             <span className="lia-projects-r3-composer-hint">Enter envía · Shift+Enter nueva línea</span>
           </div>
+          <p className="lia-projects-r3-autonomy-help">
+            {autonomyMode === 'bounded_autonomous'
+              ? 'Autónoma acotada: LÍA puede corregir y reintentar dentro de límites; las acciones riesgosas siguen requiriendo humano.'
+              : 'Supervisada: el primer intento corre y LÍA pide permiso para continuar.'}
+          </p>
         </form>
       </section>
     </ExecutiveShellR3>

@@ -49,6 +49,10 @@
 .lia-agenda-r3-empty strong { color: #dce8f5; font-size: 18px; }
 .lia-agenda-r3-empty span, .lia-agenda-r3-empty small { display: block; margin-top: 5px; }
 .lia-agenda-r3-empty small { max-width: 380px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #7890a9; }
+.lia-agenda-r3-timeline.is-empty { min-height: 230px; grid-template-columns: 1fr; }
+.lia-agenda-r3-timeline.is-empty .lia-agenda-r3-hours { display: none; }
+.lia-agenda-r3-timeline.is-empty .lia-agenda-r3-canvas { height: 230px; background: radial-gradient(circle at 50% 28%, rgba(55, 118, 160, .09), transparent 48%); }
+.lia-agenda-r3-timeline.is-empty .lia-agenda-r3-empty { inset: 0; min-height: 230px; }
 .lia-agenda-r3-hidden { position: absolute; z-index: 6; right: 10px; bottom: 8px; margin: 0; padding: 4px 7px; border-radius: 6px; color: #91a3b8; background: rgba(8, 16, 25, .88); }
 .lia-agenda-r3-month { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .lia-agenda-r3-month-head { display: flex; align-items: center; justify-content: space-between; }
@@ -83,7 +87,7 @@
 .lia-agenda-r3-timeline::-webkit-scrollbar-track, .lia-agenda-r3-month-lists::-webkit-scrollbar-track, .lia-agenda-r3-rail::-webkit-scrollbar-track { background: transparent; }
 .lia-agenda-r3-timeline::-webkit-scrollbar-thumb, .lia-agenda-r3-month-lists::-webkit-scrollbar-thumb, .lia-agenda-r3-rail::-webkit-scrollbar-thumb { border-radius: 999px; background: #40566d; }
 @media (max-width: 1320px) { .lia-agenda-r3-layout { grid-template-columns: minmax(0, 1.4fr) minmax(250px, .7fr); } }
-@media (max-width: 1120px) { .lia-agenda-r3-metrics { grid-template-columns: repeat(2, 1fr); } .lia-agenda-r3-layout { grid-template-columns: 1fr; overflow: visible; } .lia-agenda-r3-month { max-height: 520px; } .lia-agenda-r3-rail { grid-column: 2; grid-row: 3; } }
+@media (max-width: 1120px) { .lia-agenda-r3-shell .lia-dash-r3-main { min-height: 0; } .lia-agenda-r3-metrics { grid-template-columns: repeat(2, 1fr); } .lia-agenda-r3-layout { grid-template-columns: 1fr; overflow: visible; } .lia-agenda-r3-month { max-height: 520px; } .lia-agenda-r3-rail { grid-column: 2; grid-row: 3; } }
 @media (max-width: 900px) { .lia-agenda-r3-week { overflow-x: auto; } .lia-agenda-r3-timeline { min-height: 580px; } .lia-agenda-r3-rail .lia-dash-r3-weather strong, .lia-agenda-r3-rail .lia-dash-r3-weather small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
 @media (max-width: 720px) { .lia-agenda-r3-metrics { grid-template-columns: 1fr 1fr; } .lia-agenda-r3-title { flex-wrap: wrap; } .lia-agenda-r3-week { grid-template-columns: 40px repeat(7, 58px) 40px 58px; } }
 @media (max-width: 430px) { .lia-agenda-r3-metrics { grid-template-columns: 1fr; } .lia-agenda-r3-filter { flex-wrap: wrap; } .lia-agenda-r3-timeline { grid-template-columns: 48px 1fr; } }
@@ -176,6 +180,11 @@
     overflow-x: hidden;
   }
 
+  .lia-agenda-r3-timeline.is-empty {
+    min-height: 230px;
+    grid-template-columns: 1fr !important;
+  }
+
   .lia-agenda-r3-month {
     margin-top: 12px;
     max-height: none !important;
@@ -207,4 +216,24 @@
   .lia-agenda-r3-metrics {
     grid-template-columns: 1fr !important;
   }
+}
+
+/* V3 page authority: the calendar does not create another viewport-sized page. */
+.lia-dash-r3-shell.lia-agenda-r3-shell { height:auto;min-height:100dvh;grid-template-rows:70px auto;overflow-x:hidden;overflow-y:auto; }
+.lia-agenda-r3-shell .lia-dash-r3-sidebar-shell { position:sticky;top:0;height:100dvh; }
+.lia-agenda-r3-shell .lia-dash-r3-main { min-height:0;overflow:visible; }
+.lia-agenda-r3-layout { flex:0 0 auto;overflow:visible; }
+.lia-agenda-r3-rail { overflow:visible;align-self:start; }
+@media (max-width:1120px) { .lia-agenda-r3-layout { display:grid; }.lia-agenda-r3-rail { overflow:visible; } }
+
+/* iPad forensic V4: content-sized agenda, including the genuinely empty day. */
+.lia-dash-r3-shell.lia-agenda-r3-shell { height:auto;min-height:100dvh;grid-template-rows:70px auto;overflow-x:clip;overflow-y:visible;align-items:start; }
+.lia-agenda-r3-shell .lia-dash-r3-main { height:auto;min-height:0;align-self:start;overflow:visible; }
+.lia-agenda-r3-layout { height:auto;min-height:0;flex:0 0 auto;align-items:start;overflow:visible; }
+.lia-agenda-r3-day-column,.lia-agenda-r3-month { height:auto;min-height:0;align-self:start; }
+.lia-agenda-r3-timeline.is-empty,.lia-agenda-r3-timeline.is-empty .lia-agenda-r3-canvas,.lia-agenda-r3-timeline.is-empty .lia-agenda-r3-empty { height:240px;min-height:240px;max-height:240px; }
+.lia-agenda-r3-title .lia-voice-surface-r3 { margin-left:auto; }
+@media (min-width:1000px) and (max-width:1239px) {
+  .lia-agenda-r3-layout { grid-template-columns:minmax(0,1.4fr) minmax(250px,.7fr); }
+  .lia-agenda-r3-rail { grid-column:2;grid-row:3;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-self:start; }
 }
