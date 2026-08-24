@@ -1281,3 +1281,82 @@
 }
 
 /* END LIA_PROJECTS_FLOW_V9 */
+
+/* LIA_VISUAL_POLISH_R4 · goal intake density */
+.lia-projects-r3-welcome {
+  min-height:unset !important;
+  padding-top:18px !important;
+  padding-bottom:18px !important;
+}
+
+.lia-projects-r3-chat {
+  min-height:0;
+}
+
+.lia-projects-r3-thread:has(.lia-projects-r3-welcome) {
+  min-height:clamp(140px,22vh,230px);
+}
+
+.lia-projects-r3-composer textarea {
+  min-height:44px;
+  max-height:150px;
+}
+
+@media (min-width:900px) {
+  .lia-projects-r3-thread:has(.lia-projects-r3-welcome) {
+    min-height:150px;
+  }
+}
+
+/* LÍA R8 · Projects continuous glass */
+.lia-projects-r3-shell,
+.lia-projects-r3-shell .lia-dash-r3-main,
+.lia-projects-r3-chat,
+.lia-projects-r3-thread {
+  background:transparent !important;
+}
+
+.lia-projects-r3-chat,
+.lia-projects-r3-composer-shell,
+.lia-projects-r3-msg-bubble {
+  background:
+    linear-gradient(145deg,rgba(11,53,55,.23),rgba(6,23,31,.10)) !important;
+  backdrop-filter:blur(15px) saturate(138%) !important;
+  -webkit-backdrop-filter:blur(15px) saturate(138%) !important;
+}
+
+.lia-dash-r3-shell.lia-projects-r3-shell {
+  min-height:100dvh !important;
+  height:auto !important;
+  overflow-x:clip !important;
+  overflow-y:visible !important;
+}
+
+/* LÍA PRODUCTIZATION · one hierarchy, not nested boxes. */
+.lia-projects-r3-title { padding-bottom:10px; }
+.lia-autonomy-hud-r3,.lia-human-control-r3,.lia-board-r3,.lia-projects-r3-composer {
+  margin-inline:0 !important; border-radius:16px !important;
+  background:linear-gradient(145deg,rgba(27,104,98,.11),rgba(5,20,30,.055)) !important;
+  border-color:rgba(152,226,215,.13) !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.06),0 12px 30px rgba(0,7,12,.08) !important;
+  backdrop-filter:blur(11px) saturate(140%) !important;
+  -webkit-backdrop-filter:blur(11px) saturate(140%) !important;
+}
+.lia-autonomy-hud-r3 { border-left:3px solid rgba(77,211,192,.55) !important; }
+.lia-human-control-r3 { border-left:3px solid rgba(225,173,84,.58) !important; }
+.lia-board-r3 { border-left:3px solid rgba(138,151,239,.52) !important; }
+.lia-autonomy-hud-r3-overview article,.lia-autonomy-hud-r3-distribution,
+.lia-autonomy-hud-r3-recent,.lia-board-r3-grid article,.lia-board-r3-specialists > div,
+.lia-learning-r3-summary article,.lia-learning-r3-sections > article {
+  background:rgba(8,31,38,.13) !important; box-shadow:none !important;
+}
+.lia-learning-r3 { margin-top:12px; padding:12px 0 0; border-top-color:rgba(152,172,241,.16); }
+.lia-projects-r3-chat { padding-top:2px; }
+.lia-projects-r3-welcome { background:rgba(8,35,39,.12) !important; box-shadow:none; }
+.lia-projects-r3-thread:has(.lia-projects-r3-welcome) { min-height:120px !important; }
+.lia-autonomy-hud-r3-overview small,.lia-autonomy-hud-r3-recent small,
+.lia-board-r3 p,.lia-learning-r3 p,.lia-learning-r3 small { color:#9bb1b8 !important; }
+@media (min-width:1000px) and (max-width:1400px) {
+  .lia-autonomy-hud-r3-layout { grid-template-columns:minmax(0,1fr) minmax(160px,.34fr) !important; }
+  .lia-autonomy-hud-r3-recent { display:none; }
+}

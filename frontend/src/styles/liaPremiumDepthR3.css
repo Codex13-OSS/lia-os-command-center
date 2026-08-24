@@ -2051,7 +2051,7 @@ body,
   .lia-command-r3-shell,
   .lia-agenda-r3-shell,
   .lia-projects-r3-shell {
-    height:100vh !important;
+    height:100dvh !important;
     height:100svh !important;
     min-height:0 !important;
     max-height:100svh !important;
@@ -2061,7 +2061,7 @@ body,
   .lia-command-r3-shell > .lia-dash-r3-scroll,
   .lia-agenda-r3-shell > .lia-dash-r3-scroll,
   .lia-projects-r3-shell > .lia-dash-r3-scroll {
-    height:calc(100vh - 70px) !important;
+    height:calc(100dvh - 70px) !important;
     height:calc(100svh - 70px) !important;
     min-height:0 !important;
     max-height:calc(100svh - 70px) !important;
@@ -3170,7 +3170,7 @@ body,
     radial-gradient(ellipse at 52% 42%,rgba(224,241,246,.74) 0 10%,rgba(145,178,197,.42) 34%,transparent 67%),
     radial-gradient(ellipse at 82% 62%,rgba(198,224,234,.62) 0 8%,rgba(110,151,174,.34) 32%,transparent 66%)!important;
   box-shadow:none!important;
-  filter:blur(7px) drop-shadow(0 14px 17px rgba(0,8,17,.24));
+  filter:blur(1.2px) contrast(1.08) drop-shadow(0 12px 15px rgba(0,8,17,.30));
   will-change:transform,opacity;
 }
 
@@ -3214,13 +3214,13 @@ body,
 
 .lia-weather-r3-scene.is-night .lia-weather-r3-clouds > span {
   opacity:.62;
-  filter:blur(8px) brightness(.72) saturate(.72)
+  filter:blur(1.5px) contrast(1.12) brightness(.76) saturate(.78)
     drop-shadow(0 15px 20px rgba(0,4,12,.34));
 }
 
 .lia-weather-r3-scene.is-storm .lia-weather-r3-clouds > span {
   opacity:.82;
-  filter:blur(9px) brightness(.52) saturate(.48)
+  filter:blur(1.8px) contrast(1.16) brightness(.58) saturate(.55)
     drop-shadow(0 18px 24px rgba(0,2,8,.50));
 }
 

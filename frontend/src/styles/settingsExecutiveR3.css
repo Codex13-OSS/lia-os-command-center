@@ -13,3 +13,98 @@
 .lia-settings-r3-agents{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.lia-settings-r3-agents>div{min-width:0;padding:8px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px;border-radius:9px;background:rgba(3,17,29,.34)}.lia-settings-r3-agents i{width:7px;height:7px;margin-top:4px;border-radius:50%;background:#61bdd7}.lia-settings-r3-agents b,.lia-settings-r3-agents small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lia-settings-r3-agents b{color:#bad0da;font-size:8px}.lia-settings-r3-agents small{margin-top:2px;color:#617d8e;font-size:6px}
 .lia-settings-r3-safety{display:flex;align-items:center;gap:20px}.lia-settings-r3-safety div{min-width:120px}.lia-settings-r3-safety strong{display:block;margin-top:4px;color:#d6e9f1;font-size:11px}.lia-settings-r3-safety p{margin:0;color:#6f8998;font-size:8px;line-height:1.5}
 @media(max-width:900px){.lia-settings-r3-grid{grid-template-columns:1fr}}
+
+/* LIA_VISUAL_POLISH_R5_SETTINGS */
+
+.lia-settings-r3-grid article {
+  position:relative;
+  overflow:hidden;
+  isolation:isolate;
+  transition:
+    transform 220ms cubic-bezier(.2,.8,.2,1),
+    border-color 220ms ease,
+    box-shadow 220ms ease,
+    background 260ms ease;
+}
+
+.lia-settings-r3-grid article::before {
+  content:"";
+  position:absolute;
+  z-index:-1;
+  width:150px;
+  height:150px;
+  right:-65px;
+  top:-70px;
+  border-radius:50%;
+  background:radial-gradient(circle,rgba(119,153,226,.17),transparent 69%);
+  transition:transform 450ms cubic-bezier(.2,.8,.2,1), opacity 250ms ease;
+}
+
+.lia-settings-r3-grid article:nth-child(2)::before {
+  background:radial-gradient(circle,rgba(91,190,188,.15),transparent 69%);
+}
+.lia-settings-r3-grid article:nth-child(3)::before {
+  background:radial-gradient(circle,rgba(181,135,218,.15),transparent 69%);
+}
+.lia-settings-r3-grid article:nth-child(4)::before {
+  background:radial-gradient(circle,rgba(218,160,85,.14),transparent 69%);
+}
+
+.lia-settings-r3-grid article:hover {
+  transform:translateY(-3px);
+  border-color:rgba(153,186,235,.20);
+  box-shadow:0 18px 40px rgba(0,5,15,.25), inset 0 1px rgba(255,255,255,.06);
+}
+.lia-settings-r3-grid article:hover::before {
+  transform:translate(-15px,18px) scale(1.12);
+}
+
+.lia-settings-r3-grid dl > div {
+  border-radius:8px;
+  transition:background 160ms ease, padding 160ms ease;
+}
+.lia-settings-r3-grid dl > div:hover {
+  padding-left:7px;
+  padding-right:7px;
+  background:rgba(109,151,210,.07);
+}
+
+.lia-settings-r3-tags i {
+  transition:transform 160ms ease, background 160ms ease;
+}
+.lia-settings-r3-tags i:hover {
+  transform:translateY(-1px);
+  background:rgba(93,171,207,.16);
+}
+
+.lia-settings-r3-agents > div {
+  transition:transform 180ms ease, background 180ms ease;
+}
+.lia-settings-r3-agents > div:hover {
+  transform:translateX(3px);
+  background:rgba(104,146,208,.08);
+}
+
+.lia-settings-r3-title button {
+  transition:transform 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+.lia-settings-r3-title button:hover {
+  transform:translateY(-2px);
+  box-shadow:0 10px 25px rgba(38,83,157,.20);
+}
+
+.lia-settings-r3-safety {
+  position:relative;
+  overflow:hidden;
+}
+.lia-settings-r3-safety::after {
+  content:"";
+  position:absolute;
+  width:220px;
+  height:220px;
+  right:-100px;
+  bottom:-145px;
+  border-radius:50%;
+  background:radial-gradient(circle,rgba(91,129,214,.13),transparent 70%);
+  pointer-events:none;
+}

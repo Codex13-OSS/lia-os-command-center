@@ -148,3 +148,249 @@
 .lia-office-r3-waiting { border:0;background:radial-gradient(ellipse at 50% 70%,rgba(63,145,158,.15),transparent 72%); }
 .lia-office-r3-evidence { align-items:start; }
 @media (min-width:1000px) and (max-width:1239px) { .lia-office-r3-shell { grid-template-columns:min(var(--lia-dash-r3-sidebar-width),176px) minmax(0,1fr); }.lia-office-r3-world { height:550px;min-height:550px; }.lia-office-r3-floor { min-height:496px; } }
+
+/* LIA_VISUAL_POLISH_R4 · durable-state office motion */
+@keyframes lia-r4-office-idle {
+  0%,100% { transform:translateY(0); }
+  50% { transform:translateY(-2px); }
+}
+
+@keyframes lia-r4-office-think {
+  0%,100% { transform:translateY(0) rotate(0deg); }
+  30% { transform:translateY(-3px) rotate(-1deg); }
+  70% { transform:translateY(-1px) rotate(1deg); }
+}
+
+@keyframes lia-r4-office-work {
+  0%,100% { transform:translateY(0); }
+  25% { transform:translateY(-3px) translateX(-1px); }
+  55% { transform:translateY(0) translateX(1px); }
+  78% { transform:translateY(-2px); }
+}
+
+@keyframes lia-r4-office-verify {
+  0%,100% { transform:scale(1); }
+  50% { transform:scale(1.025); }
+}
+
+@keyframes lia-r4-office-state-pulse {
+  0%,100% { opacity:.45; transform:scale(.82); }
+  50% { opacity:1; transform:scale(1.18); }
+}
+
+.lia-office-r3-agent .lia-office-r3-person {
+  transform-origin:50% 100%;
+  will-change:transform;
+}
+
+.lia-office-r3-agent.is-idle .lia-office-r3-person,
+.lia-office-r3-agent.is-queued .lia-office-r3-person,
+.lia-office-r3-agent.is-planned .lia-office-r3-person {
+  animation:lia-r4-office-idle 3.8s ease-in-out infinite;
+}
+
+.lia-office-r3-agent.is-planning .lia-office-r3-person,
+.lia-office-r3-agent.is-delegating .lia-office-r3-person,
+.lia-office-r3-agent.is-reviewing .lia-office-r3-person {
+  animation:lia-r4-office-think 1.75s ease-in-out infinite;
+}
+
+.lia-office-r3-agent.is-implementing .lia-office-r3-person,
+.lia-office-r3-agent.is-correcting .lia-office-r3-person {
+  animation:lia-r4-office-work 1.05s ease-in-out infinite;
+}
+
+.lia-office-r3-agent.is-verifying .lia-office-r3-person {
+  animation:lia-r4-office-verify 1.4s ease-in-out infinite;
+}
+
+.lia-office-r3-agent.is-planning .lia-office-r3-state i,
+.lia-office-r3-agent.is-delegating .lia-office-r3-state i,
+.lia-office-r3-agent.is-implementing .lia-office-r3-state i,
+.lia-office-r3-agent.is-verifying .lia-office-r3-state i,
+.lia-office-r3-agent.is-reviewing .lia-office-r3-state i,
+.lia-office-r3-agent.is-correcting .lia-office-r3-state i {
+  animation:lia-r4-office-state-pulse 1.25s ease-in-out infinite;
+}
+
+.lia-office-r3-agent.is-waiting_human .lia-office-r3-person {
+  opacity:.72;
+}
+
+.lia-office-r3-agent.is-completed .lia-office-r3-person {
+  filter:drop-shadow(0 0 10px rgba(98,217,139,.14));
+}
+
+.lia-office-r3-agent.is-failed .lia-office-r3-person {
+  opacity:.64;
+  filter:saturate(.65);
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .lia-office-r3-agent .lia-office-r3-person,
+  .lia-office-r3-agent .lia-office-r3-state i {
+    animation:none !important;
+  }
+}
+
+/* ============================================================
+   LÍA R7 · Office geometry
+   Exact mirrored stations around one central axis.
+   ============================================================ */
+
+.lia-office-r3-world,
+.lia-office-r3-floor,
+.lia-office-r3-evidence article {
+  border-color:rgba(242,172,93,.12) !important;
+}
+
+.lia-office-r3-world {
+  background:
+    linear-gradient(145deg,
+      rgba(46,28,18,.22),
+      rgba(10,24,31,.18)) !important;
+  backdrop-filter:blur(14px) saturate(135%) !important;
+  -webkit-backdrop-filter:blur(14px) saturate(135%) !important;
+}
+
+.lia-office-r3-floor {
+  background:
+    radial-gradient(ellipse at 50% 42%,rgba(235,147,65,.16),transparent 43%),
+    radial-gradient(ellipse at 50% 88%,rgba(226,105,51,.09),transparent 52%),
+    linear-gradient(150deg,rgba(30,45,45,.44) 0 49.7%,rgba(18,32,36,.39) 50% 100%) !important;
+}
+
+/* Symmetrical station geometry on desktop/iPad landscape. */
+@media (min-width:901px) {
+  .lia-office-r3-zone.is-architecture {
+    top:21% !important;
+    left:8% !important;
+    right:auto !important;
+  }
+
+  .lia-office-r3-zone.is-risk {
+    top:21% !important;
+    right:8% !important;
+    left:auto !important;
+  }
+
+  .lia-office-r3-zone.is-implementation {
+    bottom:8% !important;
+    left:16% !important;
+    right:auto !important;
+  }
+
+  .lia-office-r3-zone.is-verification {
+    bottom:8% !important;
+    right:16% !important;
+    left:auto !important;
+  }
+
+  .lia-office-r3-zone.is-hub {
+    left:50% !important;
+    top:55% !important;
+    transform:translate(-50%,-50%) !important;
+  }
+
+  .lia-office-r3-boardroom {
+    left:50% !important;
+    top:3% !important;
+    transform:translateX(-50%) !important;
+  }
+}
+
+.lia-office-r3-zone > span,
+.lia-office-r3-agent > strong,
+.lia-office-r3-agent > small,
+.lia-office-r3-boardroom header {
+  background:rgba(16,24,29,.34) !important;
+  border:1px solid rgba(244,178,103,.08);
+  backdrop-filter:blur(8px) saturate(130%);
+  -webkit-backdrop-filter:blur(8px) saturate(130%);
+}
+
+.lia-office-r3-evidence {
+  grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+  gap:12px !important;
+}
+
+.lia-office-r3-evidence article {
+  min-height:145px;
+  background:
+    linear-gradient(145deg,
+      rgba(42,28,19,.27),
+      rgba(8,23,31,.19)) !important;
+  backdrop-filter:blur(12px) saturate(135%) !important;
+  -webkit-backdrop-filter:blur(12px) saturate(135%) !important;
+}
+
+@media (max-width:900px) {
+  .lia-office-r3-evidence {
+    grid-template-columns:1fr !important;
+  }
+}
+
+/* LÍA R8 · Office evidence + symmetry */
+.lia-office-r3-evidence {
+  grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+  align-items:stretch !important;
+}
+
+.lia-office-r3-evidence article {
+  height:100%;
+  background:
+    linear-gradient(145deg,rgba(72,43,18,.22),rgba(14,23,31,.10)) !important;
+  border-color:rgba(236,178,104,.12) !important;
+  backdrop-filter:blur(14px) saturate(132%) !important;
+}
+
+.lia-office-r3-floor {
+  background:
+    radial-gradient(ellipse at 50% 37%,rgba(240,154,73,.18),transparent 48%),
+    linear-gradient(150deg,rgba(45,31,21,.41) 0 49.7%,rgba(19,28,34,.32) 50% 100%) !important;
+}
+
+@media (max-width:900px) {
+  .lia-office-r3-evidence {
+    grid-template-columns:1fr !important;
+  }
+}
+
+/* LÍA PRODUCTIZATION · premium executive office. */
+.lia-office-r3-title { padding-bottom:10px; }
+.lia-office-r3-title p,.lia-office-r3-live small { color:#aab9bf !important; }
+.lia-office-r3-live,.lia-office-r3-world,.lia-office-r3-evidence article {
+  background:linear-gradient(145deg,rgba(120,76,32,.105),rgba(9,25,31,.06)) !important;
+  border-color:rgba(246,190,121,.14) !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.07),0 18px 42px rgba(8,5,2,.10) !important;
+  backdrop-filter:blur(11px) saturate(138%) !important;
+  -webkit-backdrop-filter:blur(11px) saturate(138%) !important;
+}
+.lia-office-r3-world { height:520px; min-height:520px; max-height:520px; }
+.lia-office-r3-floor {
+  min-height:466px;
+  background:
+    radial-gradient(ellipse at 50% 38%,rgba(255,183,105,.22),transparent 45%),
+    radial-gradient(ellipse at 50% 90%,rgba(66,150,158,.13),transparent 54%),
+    linear-gradient(150deg,rgba(76,57,39,.38) 0 49.7%,rgba(30,50,51,.32) 50% 100%) !important;
+}
+.lia-office-r3-walls i { opacity:.58; }
+.lia-office-r3-grid { opacity:.7; box-shadow:inset 0 0 80px rgba(0,5,10,.20); }
+.lia-office-r3-zone { width:174px !important; height:128px !important; }
+.lia-office-r3-zone.is-hub { width:198px !important; height:146px !important; }
+.lia-office-r3-agent { width:108px; min-height:82px; }
+.lia-office-r3-person { width:40px; height:53px; transform:scale(1.12); }
+.lia-office-r3-agent > strong { color:#f4f5ef; font-size:10px; }
+.lia-office-r3-agent > small { color:#b2b9b6; font-size:9px; }
+.lia-office-r3-state { min-width:82px; color:#d3dedb; background:rgba(22,29,29,.48); font-size:9px; }
+.lia-office-r3-zone > span { color:#e2c59c; font-size:8px; }
+.lia-office-r3-evidence { gap:10px !important; }
+.lia-office-r3-evidence article { min-height:125px; }
+.lia-office-r3-evidence p,.lia-office-r3-evidence small { color:#aeb8b6 !important; font-size:10px; }
+@media (min-width:901px) and (max-width:1200px) {
+  .lia-office-r3-zone { width:152px !important; }
+  .lia-office-r3-zone.is-architecture { left:4% !important; }
+  .lia-office-r3-zone.is-risk { right:4% !important; }
+  .lia-office-r3-zone.is-implementation { left:10% !important; }
+  .lia-office-r3-zone.is-verification { right:10% !important; }
+}
