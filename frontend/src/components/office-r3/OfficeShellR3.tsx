@@ -11,6 +11,7 @@ type Props = {
   onSettings: () => void;
   onTracking: () => void; onDocuments: () => void; onAlerts: () => void; onLogout: () => void;
   conversationController?: LiaConversationController;
+  operatorName?: string;
 };
 const LABELS: Record<LiaOfficeState, string> = {
   idle: 'En espera', queued: 'En cola', planned: 'Planificado', planning: 'Planificando', delegating: 'Enrutando plan',
@@ -43,7 +44,7 @@ function Inspector({ agent, onClose }: { agent: LiaOfficeAgent; onClose: () => v
       <div><dt>Goal</dt><dd>{agent.goal ?? 'Sin Goal asignado'}</dd></div>
       <div><dt>Task</dt><dd>{agent.taskId ?? 'Sin task durable'}</dd></div>
       <div><dt>Intento</dt><dd>{agent.attempt ?? '—'}</dd></div>
-      <div><dt>Etapa</dt><dd>{agent.stage ?? 'idle'}</dd></div>
+      <div><dt>Etapa</dt><dd>{agent.stage === 'idle' || !agent.stage ? 'En espera' : agent.stage}</dd></div>
       <div><dt>Dependencias</dt><dd>{agent.dependencies.length ? agent.dependencies.join(', ') : 'Ninguna registrada'}</dd></div>
       <div><dt>Evidencia</dt><dd>{agent.verification ?? (agent.evidenceKind === 'validated_plan_metadata' ? 'Metadata de plan validado; no prueba ejecución leaf.' : 'Sin verification disponible')}</dd></div>
       <div><dt>Bloqueo</dt><dd>{agent.blockingReason ?? 'Sin bloqueo registrado'}</dd></div>
@@ -83,9 +84,9 @@ export function OfficeShellR3(props: Props) {
           <div className="lia-office-r3-zone is-hub"><span>ESTACIÓN CENTRAL · HERMES</span><div className="lia-office-r3-console" aria-hidden="true"><i /><i /><i /></div>{agent('hermes') && <Character agent={agent('hermes')!} selected={selectedId === 'hermes'} onSelect={() => setSelectedId('hermes')} />}</div>
           <div className="lia-office-r3-zone is-architecture"><span>ARQUITECTURA</span><div className="lia-office-r3-desk" aria-hidden="true"><i /></div>{agent('architecture') && <Character agent={agent('architecture')!} selected={selectedId === 'architecture'} onSelect={() => setSelectedId('architecture')} />}</div>
           <div className="lia-office-r3-zone is-implementation"><span>IMPLEMENTACIÓN</span><div className="lia-office-r3-desk" aria-hidden="true"><i /></div>{agent('implementation') && <Character agent={agent('implementation')!} selected={selectedId === 'implementation'} onSelect={() => setSelectedId('implementation')} />}</div>
-          <div className="lia-office-r3-zone is-verification"><span>QA / VERIFICATION</span><div className="lia-office-r3-desk" aria-hidden="true"><i /></div>{agent('verification') && <Character agent={agent('verification')!} selected={selectedId === 'verification'} onSelect={() => setSelectedId('verification')} />}</div>
-          <div className="lia-office-r3-zone is-risk"><span>DATA / RISK</span><div className="lia-office-r3-desk" aria-hidden="true"><i /></div>{agent('data-risk') && <Character agent={agent('data-risk')!} selected={selectedId === 'data-risk'} onSelect={() => setSelectedId('data-risk')} />}</div>
-          <div className="lia-office-r3-waiting"><span>LOUNGE / IDLE</span><i aria-hidden="true" /><i aria-hidden="true" /></div>
+          <div className="lia-office-r3-zone is-verification"><span>QA / VERIFICACIÓN</span><div className="lia-office-r3-desk" aria-hidden="true"><i /></div>{agent('verification') && <Character agent={agent('verification')!} selected={selectedId === 'verification'} onSelect={() => setSelectedId('verification')} />}</div>
+          <div className="lia-office-r3-zone is-risk"><span>DATOS / RIESGO</span><div className="lia-office-r3-desk" aria-hidden="true"><i /></div>{agent('data-risk') && <Character agent={agent('data-risk')!} selected={selectedId === 'data-risk'} onSelect={() => setSelectedId('data-risk')} />}</div>
+          <div className="lia-office-r3-waiting"><span>LOUNGE / EN ESPERA</span><i aria-hidden="true" /><i aria-hidden="true" /></div>
           <section className="lia-office-r3-boardroom" aria-label="Sala del Executive Board">
             <header><span>EXECUTIVE BOARD</span><small>{office.board.decisions.length ? `${office.board.decisions.length} decisiones registradas` : 'Sin sesión registrada'}</small></header>
             <div className="lia-office-r3-board-table" aria-hidden="true" />

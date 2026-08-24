@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ExecutiveShellR3 } from '../executive-r3/ExecutiveShellR3';
 import type { LiaConversationController } from '../lia-r3/liaConversationController';
 import { LiaVoiceSurfaceR3 } from '../lia-r3/LiaVoiceSurfaceR3';
+import { DashboardIconR3 } from '../dashboard-r3/DashboardIconR3';
 import '../../styles/serversExecutiveR3.css';
 import { readLiaServerTelemetry, type LiaServerTelemetry } from '../../integrations/liaServerTelemetryClient';
 import { readLiaServerInventory, type LiaServerInventory } from '../../integrations/liaServerInventoryClient';
@@ -18,6 +19,7 @@ type Props = {
   onAlerts: () => void;
   onLogout: () => void;
   conversationController?: LiaConversationController;
+  operatorName?: string;
 };
 
 function formatBytes(value: number): string {
@@ -203,7 +205,7 @@ export function ServersShellR3(props: Props) {
       </section>
 
       <section className="lia-servers-r3-grid">
-        <article className="lia-servers-r3-card">
+        <article className="lia-servers-r3-card lia-servers-r3-card-pm2">
           <header>
             <span>APLICACIONES / PM2</span>
             <b>{inventory ? `${inventory.pm2.length} PROCESOS` : inventoryLoaded ? 'NO DISPONIBLE' : 'LEYENDO'}</b>
@@ -211,13 +213,16 @@ export function ServersShellR3(props: Props) {
 
           <div className="lia-servers-r3-services">
             {(inventory?.pm2 ?? []).slice(0, 14).map((process) => (
-              <div key={process.name}>
+              <div key={process.name} className={`lia-servers-r3-process is-${process.status}`}>
+                <span className="lia-servers-r3-row-icon" aria-hidden="true">
+                  <DashboardIconR3 name="procesos" />
+                </span>
                 <i className={process.status === 'online' ? 'is-online' : ''} />
                 <span>
                   <strong>{process.name}</strong>
                   <small>PID {process.pid || '—'} · {(process.memoryBytes / 1024 / 1024).toFixed(0)} MB</small>
                 </span>
-                <b>{process.status}</b>
+                <b>{process.status === 'online' ? 'En línea' : process.status === 'stopped' ? 'Detenido' : process.status}</b>
               </div>
             ))}
 
@@ -227,7 +232,7 @@ export function ServersShellR3(props: Props) {
           </div>
         </article>
 
-        <article className="lia-servers-r3-card">
+        <article className="lia-servers-r3-card lia-servers-r3-card-system">
           <header>
             <span>SERVICIOS DEL SISTEMA</span>
             <b>{inventory ? `${inventory.systemServices.length} ACTIVOS` : '—'}</b>
@@ -235,7 +240,8 @@ export function ServersShellR3(props: Props) {
 
           <div className="lia-servers-r3-service-chips">
             {(inventory?.systemServices ?? []).map((service) => (
-              <span key={service}>
+              <span key={service} className="lia-servers-r3-system-chip">
+                <DashboardIconR3 name="configuracion" />
                 <i />
                 {service.replace(/\.service$/, '')}
               </span>
@@ -243,7 +249,7 @@ export function ServersShellR3(props: Props) {
           </div>
         </article>
 
-        <article className="lia-servers-r3-card">
+        <article className="lia-servers-r3-card lia-servers-r3-card-docker">
           <header>
             <span>DOCKER</span>
             <b>{inventory ? `${inventory.containers.length} CONTENEDORES` : '—'}</b>
@@ -251,9 +257,9 @@ export function ServersShellR3(props: Props) {
 
           <div className="lia-servers-r3-containers">
             {(inventory?.containers ?? []).map((container) => (
-              <div key={container.name}>
+              <div key={container.name} className="lia-servers-r3-container-row">
                 <div className="lia-servers-r3-container-icon" aria-hidden="true">
-                  <i /><i /><i />
+                  <DashboardIconR3 name="servidores" />
                 </div>
                 <span>
                   <strong>{container.name}</strong>
@@ -269,15 +275,19 @@ export function ServersShellR3(props: Props) {
           </div>
         </article>
 
-        <article className="lia-servers-r3-card">
+        <article className="lia-servers-r3-card lia-servers-r3-card-ports">
           <header>
             <span>PUERTOS EN ESCUCHA</span>
             <b>{inventory ? `${inventory.ports.length} DETECTADOS` : '—'}</b>
           </header>
 
           <div className="lia-servers-r3-ports">
-            {(inventory?.ports ?? []).map((port) => (
-              <span key={port}>{port}</span>
+            {(inventory?.ports ?? []).map((port, index) => (
+              <span key={port} className={`lia-servers-r3-port-chip is-${index % 3 === 0 ? 'cyan' : index % 3 === 1 ? 'green' : 'amber'}`}>
+                <DashboardIconR3 name="servidores" />
+                <b>{port}</b>
+                <small>EN USO</small>
+              </span>
             ))}
           </div>
         </article>
@@ -297,7 +307,9 @@ export function ServersShellR3(props: Props) {
           {(inventory?.roots ?? []).map((root) => (
             <article key={root.path} className="lia-servers-r3-root">
               <header>
-                <i aria-hidden="true" />
+                <span className="lia-servers-r3-root-icon" aria-hidden="true">
+                  <DashboardIconR3 name="ruta" />
+                </span>
                 <div>
                   <span>DIRECTORIO</span>
                   <strong>{root.path}</strong>
@@ -307,7 +319,10 @@ export function ServersShellR3(props: Props) {
 
               <div className="lia-servers-r3-tree">
                 {root.entries.map((entry) => (
-                  <div key={`${root.path}/${entry.name}`}>
+                  <div key={`${root.path}/${entry.name}`} className={`lia-servers-r3-tree-entry is-${entry.type}`}>
+                    <span className="lia-servers-r3-tree-icon" aria-hidden="true">
+                      <DashboardIconR3 name={entry.type === 'directory' ? 'ruta' : 'documentos'} />
+                    </span>
                     <i className={`is-${entry.type}`} aria-hidden="true" />
                     <span>{entry.name}</span>
                     <small>{entry.type === 'directory' ? 'CARPETA' : entry.type.toUpperCase()}</small>
