@@ -21,7 +21,11 @@ export function LiaVoiceSurfaceR3({ controller, compact = false }: Props) {
   };
   const write = () => controller?.openPanel();
 
-  return <section className={`lia-voice-surface-r3${compact ? ' is-compact' : ''}`} aria-label="Voz y compatibilidad">
+  return <section
+    className={`lia-voice-surface-r3${compact ? ' is-compact' : ''} is-voice-${voice?.state ?? 'unsupported'}${controller?.pending ? ' is-processing' : ''}`}
+    data-voice-state={voice?.state ?? 'unsupported'}
+    aria-label="Voz y compatibilidad"
+  >
     <button
       type="button"
       className={`lia-voice-surface-r3-mic is-${voice?.state ?? 'unsupported'}`}

@@ -67,6 +67,7 @@ type Props = {
   onAlerts: () => void;
   onLogout: () => void;
   conversationController?: LiaConversationController;
+  operatorName?: string;
 };
 
 export function AgendaShellR3(props: Props) {

@@ -66,6 +66,7 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
             aria-disabled={Boolean(('disabled' in item && item.disabled) || undefined) || undefined}
             aria-label={item.label}
             data-tooltip={item.label}
+            data-section={item.id}
           >
             <DashboardIconR3 name={item.icon} />
             <span className="lia-dash-r3-nav-label">{item.label}</span>
@@ -110,6 +111,7 @@ export function DashboardSidebarR3(props: DashboardSidebarR3Props) {
                 onClick={actions[item.id]}
                 aria-current={item.id === props.activeSection ? 'page' : undefined}
                 aria-label={item.label}
+                data-section={item.id}
               >
                 <DashboardIconR3 name={item.icon} />
                 <span>{item.label}</span>

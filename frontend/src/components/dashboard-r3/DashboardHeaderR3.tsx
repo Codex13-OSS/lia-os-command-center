@@ -7,9 +7,16 @@ type Props = {
   now: Date;
   conversationController?: LiaConversationController;
   onLogout?: () => void;
+  operatorName?: string;
 };
 
-export function DashboardHeaderR3({ now, conversationController, onLogout }: Props) {
+function profileInitials(name?: string): string {
+  const words = name?.trim().split(/\s+/).filter(Boolean) ?? [];
+  if (!words.length) return 'LÍA';
+  return `${words[0]?.[0] ?? ''}${words.length > 1 ? words[words.length - 1]?.[0] ?? '' : ''}`.toLocaleUpperCase('es-MX');
+}
+
+export function DashboardHeaderR3({ now, conversationController, onLogout, operatorName }: Props) {
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     conversationController?.submit();
@@ -58,7 +65,10 @@ export function DashboardHeaderR3({ now, conversationController, onLogout }: Pro
           <DashboardIconR3 name="campana" />
         </button>
         <button type="button" aria-label="Mensajes"><DashboardIconR3 name="mensajes" /></button>
-        <span className="lia-dash-r3-avatar">OL</span>
+        <span className="lia-dash-r3-avatar" aria-label={operatorName ? `Perfil de ${operatorName}` : 'Perfil autenticado'} title={operatorName || 'Perfil autenticado'}>
+          <b aria-hidden="true">{profileInitials(operatorName)}</b>
+          <small>{operatorName || 'Perfil'}</small>
+        </span>
         {onLogout && (
           <button type="button" className="lia-dash-r3-header-logout" aria-label="Cerrar sesión" onClick={onLogout}>
             <DashboardIconR3 name="cerrar-sesion" />
