@@ -15,6 +15,7 @@ type DashboardShellR3Props = {
   onAlerts: () => void;
   onLogout: () => void;
   conversationController?: LiaConversationController;
+  operatorName?: string;
 };
 
 export function DashboardShellR3(props: DashboardShellR3Props) {

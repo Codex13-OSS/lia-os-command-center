@@ -27,6 +27,7 @@ type Props = {
   onAlerts: () => void;
   onLogout: () => void;
   conversationController?: LiaConversationController;
+  operatorName?: string;
 };
 
 const PROJECT_ID = 'lia-hermes';

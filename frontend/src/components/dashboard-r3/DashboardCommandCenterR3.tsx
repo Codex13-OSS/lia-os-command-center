@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { type LiaAutonomyGoal } from '../../integrations/liaAutonomyHudClient';
+import { isExecutivePriorityGoal, type LiaAutonomyGoal } from '../../integrations/liaAutonomyHudClient';
 import { type LiaOfficeState } from '../../integrations/liaOfficeClient';
 import { readLatestExecutiveBoardDecision, type LiaExecutiveBoardDecision } from '../../integrations/liaExecutiveBoardClient';
 import { LiaCoreR3 } from '../lia-core-r3/LiaCoreR3';
@@ -47,7 +47,7 @@ export function DashboardCommandCenterR3({ onProjects, onAgents, onAgenda, conve
   const [board, setBoard] = useState<{ loading: boolean; durable: boolean; decision: LiaExecutiveBoardDecision | null }>({ loading: false, durable: false, decision: null });
 
   const priorityGoal = useMemo(() => {
-    const goals = state.hud?.goals ?? [];
+    const goals = (state.hud?.goals ?? []).filter(isExecutivePriorityGoal);
     return [...goals].sort((a, b) => {
       const rank = (goal: LiaAutonomyGoal) => goal.humanInterventionRequired ? 3 : goal.status === 'active' ? 2 : 1;
       return rank(b) - rank(a) || b.updatedAt - a.updatedAt;
@@ -93,23 +93,26 @@ export function DashboardCommandCenterR3({ onProjects, onAgents, onAgenda, conve
   const failClosed = state.hud?.supervisor.failClosed || state.office?.supervisor.failClosed;
   const generalTone = !state.loaded ? 'loading' : !hasConnection ? 'unavailable' : failClosed || attention.some((item) => item.tone === 'critical') ? 'critical' : attention.length ? 'attention' : (executing ?? 0) > 0 ? 'active' : 'stable';
   const generalLabel = !state.loaded ? 'Conectando evidencia' : !hasConnection ? 'Datos operativos no disponibles' : failClosed ? 'Protección fail-closed activa' : attention.some((item) => item.tone === 'critical') ? 'Incidencias requieren revisión' : attention.length ? 'Atención ejecutiva requerida' : (executing ?? 0) > 0 ? 'LÍA está ejecutando' : 'Operación estable, sin ejecución activa';
+  const supervisorState = state.hud?.supervisor.state ?? state.office?.supervisor.state;
+  const supervisorLabel = supervisorState === 'idle' ? 'En espera' : supervisorState ?? (state.loaded ? 'No disponible' : 'Conectando');
+  const heroCore = core.state === 'idle' ? { ...core, label: 'En espera' } : core;
 
   return <>
     <header className={`lia-command-r3-hero is-${generalTone}`}>
-      <div className="lia-command-r3-hero-copy"><span>CABINA EJECUTIVA / ESTADO REAL</span><h1>Centro de mando LÍA</h1><p>{generalLabel}</p></div>
-      <div className="lia-command-r3-core-cluster"><LiaCoreR3 model={core} /></div>
-      <div className="lia-command-r3-hero-actions"><div className="lia-command-r3-system"><i aria-hidden="true" /><div><small>SUPERVISOR</small><strong>{state.hud?.supervisor.state ?? state.office?.supervisor.state ?? (state.loaded ? 'no disponible' : 'conectando')}</strong><span>{state.hud?.supervisor.lastPass ? `Último pase · ${formatDate(state.hud.supervisor.lastPass.at)}` : 'Sin pase durable registrado'}</span></div></div><LiaVoiceSurfaceR3 controller={conversationController} /></div>
+      <div className="lia-command-r3-hero-copy"><h1>Centro de mando LÍA</h1><p>{generalLabel}</p></div>
+      <div className="lia-command-r3-core-cluster"><LiaCoreR3 model={heroCore} /></div>
+      <div className="lia-command-r3-hero-actions"><div className="lia-command-r3-system"><i aria-hidden="true" /><div><small>SUPERVISOR</small><strong>{supervisorLabel}</strong></div></div><LiaVoiceSurfaceR3 controller={conversationController} compact /></div>
     </header>
 
     <section className="lia-command-r3-grid" aria-label="Resumen operativo ejecutivo">
       <article className="lia-command-r3-card lia-command-r3-goal">
-        <header><span>GOAL PRIORITARIO</span><button type="button" onClick={onProjects}>Abrir Proyectos →</button></header>
+        <header><span>OBJETIVO EJECUTIVO ACTUAL</span><button type="button" onClick={onProjects}>Abrir Proyectos →</button></header>
         {!state.loaded ? <p className="lia-command-r3-empty">Leyendo Goals durables…</p> : priorityGoal ? <>
           <div className="lia-command-r3-goal-state"><b className={`is-${priorityGoal.hudState}`}>{priorityGoal.humanInterventionRequired ? 'Atención humana' : stageLabel(priorityGoal.loopStage)}</b><small>Proyecto · {priorityGoal.projectId}</small></div>
           <h2>{priorityGoal.title}</h2>
           <dl><div><dt>Etapa</dt><dd>{stageLabel(priorityGoal.loopStage)}</dd></div><div><dt>Intento</dt><dd>{attemptLabel(priorityGoal)}</dd></div><div><dt>Profundidad</dt><dd>{priorityGoal.continuationDepth}/{priorityGoal.maxDepth}</dd></div><div><dt>Task actual</dt><dd>{priorityGoal.currentTask?.taskId ?? state.office?.focus?.currentTask?.taskId ?? 'Sin task actual'}</dd></div></dl>
           {priorityGoal.latestEvidence && <footer><span>EVIDENCIA</span><strong>{priorityGoal.latestEvidence.decision} · {priorityGoal.latestEvidence.reasonCode}</strong><small>{priorityGoal.latestEvidence.summary}</small></footer>}
-        </> : <p className="lia-command-r3-empty">No hay Goals registrados. LÍA no tiene un foco operativo que mostrar.</p>}
+        </> : <p className="lia-command-r3-empty">No hay un objetivo ejecutivo activo. La evidencia histórica y de validación permanece disponible en Proyectos.</p>}
       </article>
 
       <article className="lia-command-r3-card lia-command-r3-autonomy">

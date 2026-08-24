@@ -27,7 +27,26 @@ export type LiaAutonomyGoal = {
   };
   noProgress?: { count: number; threshold: number; escalated: boolean };
   budget?: { attemptsRemaining: number; depthRemaining: number; cyclesRemaining?: number; elapsedBudgetMsRemaining?: number };
+  presentation?: { audience?: string; hiddenByDefault?: boolean };
+  metadata?: { type?: string; purpose?: string; tags?: string[]; qualification?: boolean; test?: boolean };
+  type?: string;
 };
+
+/** Durable evidence remains in the read model; this only controls default executive prominence. */
+export function isExecutiveGoal(goal: LiaAutonomyGoal): boolean {
+  const kinds = [goal.type, goal.metadata?.type, goal.metadata?.purpose].filter(Boolean).map((value) => value!.toLowerCase());
+  const tags = goal.metadata?.tags?.map((tag) => tag.toLowerCase()) ?? [];
+  return (goal.status === 'active' || goal.status === 'blocked')
+    && goal.presentation?.hiddenByDefault !== true
+    && goal.presentation?.audience !== 'qualification'
+    && goal.metadata?.qualification !== true
+    && goal.metadata?.test !== true
+    && ![...kinds, ...tags].some((value) => ['qualification', 'test', 'fixture', 'e2e', 'synthetic'].includes(value));
+}
+
+export function isExecutivePriorityGoal(goal: LiaAutonomyGoal): boolean {
+  return isExecutiveGoal(goal) && (goal.status === 'active' || goal.status === 'blocked');
+}
 
 export type LiaAutonomyHud = {
   supervisor: {

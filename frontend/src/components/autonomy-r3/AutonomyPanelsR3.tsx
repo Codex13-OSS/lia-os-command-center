@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { type LiaAutonomyGoal, type LiaAutonomyHud } from '../../integrations/liaAutonomyHudClient';
+import { isExecutiveGoal, type LiaAutonomyGoal, type LiaAutonomyHud } from '../../integrations/liaAutonomyHudClient';
 import { useLiaCoreState } from '../lia-core-r3/useLiaCoreState';
 
 const HUD_LABELS: Record<LiaAutonomyGoal['hudState'], string> = {
@@ -60,7 +60,7 @@ export function ProjectsAutonomyHudR3() {
     };
   }, [hud]);
   const recentGoals = useMemo(
-    () => [...(hud?.goals ?? [])].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4),
+    () => [...(hud?.goals ?? [])].filter(isExecutiveGoal).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4),
     [hud],
   );
   const capacity = hud?.supervisor.goals;
