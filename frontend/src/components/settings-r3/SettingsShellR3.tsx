@@ -15,6 +15,7 @@ type Props = {
   onAlerts: () => void;
   onLogout: () => void;
   conversationController?: LiaConversationController;
+  operatorName?: string;
   profile: LiaUserProfile;
   onReconfigure: () => void;
 };

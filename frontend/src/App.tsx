@@ -1,3 +1,4 @@
+import './styles/liaPremiumDepthR3.css';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { CognitiveSpaceEngine } from './components/CognitiveSpaceEngine';
 import { NeuralCore } from './components/NeuralCore';
@@ -36,7 +37,6 @@ import type { LiaConversationController } from './components/lia-r3/liaConversat
 import { LiaCoreStateProvider } from './components/lia-core-r3/useLiaCoreState';
 import { LiaBrowserVoiceAdapter } from './integrations/liaBrowserVoice';
 import './styles/agendaExecutiveR3.css';
-import './styles/liaPremiumDepthR3.css';
 
 type View = 'dashboard' | 'agenda' | 'projects' | 'agents' | 'servers' | 'tracking' | 'documents' | 'alerts' | 'settings';
 
@@ -604,6 +604,7 @@ export default function App() {
         onDocuments={openDocumentGenerator}
         onAlerts={() => setView('alerts')}
         onLogout={handleLogout}
+        operatorName={profile.identity.displayName}
         conversationController={liaConversationR3Enabled ? liaConversationController : undefined}
       />
       </LiaCoreStateProvider>
@@ -611,23 +612,23 @@ export default function App() {
   }
 
   if (view === 'agenda' && agendaR3Enabled) {
-    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><AgendaShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><AgendaShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} operatorName={profile.identity.displayName} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
   }
 
   if (view === 'projects') {
-    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><ProjectsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><ProjectsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} operatorName={profile.identity.displayName} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
   }
 
   if (view === 'agents') {
-    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><OfficeShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><OfficeShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} operatorName={profile.identity.displayName} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
   }
 
   if (view === 'servers') {
-    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><ServersShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><ServersShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} operatorName={profile.identity.displayName} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} /></LiaCoreStateProvider>;
   }
 
   if (view === 'settings') {
-    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><SettingsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} profile={profile} onReconfigure={() => setOnboardingOpen(true)} /></LiaCoreStateProvider>;
+    return <LiaCoreStateProvider chatPending={liaQueryPending} voiceListening={voiceSnapshot.state === 'listening'} voiceSpeaking={voiceSnapshot.state === 'speaking'}><SettingsShellR3 onDashboard={() => setView('dashboard')} onAgenda={() => setView('agenda')} onProjects={() => setView('projects')} onAgents={() => setView('agents')} onServers={() => setView('servers')} onSettings={() => setView('settings')} onTracking={() => setView('tracking')} onDocuments={openDocumentGenerator} onAlerts={() => setView('alerts')} onLogout={handleLogout} operatorName={profile.identity.displayName} conversationController={liaConversationR3Enabled ? liaConversationController : undefined} profile={profile} onReconfigure={() => setOnboardingOpen(true)} /></LiaCoreStateProvider>;
   }
 
   const nav = [

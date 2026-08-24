@@ -28,6 +28,7 @@ import { createProjectGoalControlRouter } from './routes/projectGoalControl.js';
 import { createExecutiveBoardRouter } from './routes/executiveBoard.js';
 import { createDecisionLearningRouter } from './routes/decisionLearning.js';
 import { createOfficeRouter } from './routes/office.js';
+import { createPersonalAuthRouter } from './routes/personalAuth.js';
 import type { ExecutiveBoardDecisionStore } from './contracts/executiveBoard.js';
 import { InMemoryProjectTaskStore } from './services/inMemoryProjectTaskStore.js';
 import type { AgendaReadSource } from './services/agendaReadSource.js';
@@ -87,6 +88,7 @@ export function createApp(
   app.use(createAgendaRouter(dependencies.agendaReadSource));
   app.use(createStatusRouter());
   app.use(createSameOriginStatusRouter());
+  app.use(createPersonalAuthRouter());
   app.use(createHermesRouter(config));
   app.use(createHermesQueryRouter(config, {
     executeQuery: dependencies.hermesQueryExecutor,
