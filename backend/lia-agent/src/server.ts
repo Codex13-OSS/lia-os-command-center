@@ -6,6 +6,7 @@ import { createFileProjectVerificationRegistry } from './services/projectVerific
 import { createProjectTaskStore } from './services/projectTaskStoreFactory.js';
 import { reconcileProjectTasksAtStartup } from './services/projectTaskReconciliation.js';
 import { createProjectSupervisorSchedulingRuntime } from './services/projectSupervisorSchedulingRuntime.js';
+import { createHermesReasoningOnlyGoalAssessor } from './services/projectGoalSatisfactionAssessor.js';
 import { ExecutiveBoardSqliteStore } from './services/executiveBoardSqliteStore.js';
 
 const config = loadConfig();
@@ -52,6 +53,7 @@ const projectSupervisorRuntime = config.supervisorEnabled
       config,
       ...(projectRegistrySource !== undefined ? { registry: projectRegistrySource } : {}),
       ...(projectVerificationRegistry !== undefined ? { verificationRegistry: projectVerificationRegistry } : {}),
+      assessor: createHermesReasoningOnlyGoalAssessor(config),
     })
   : undefined;
 

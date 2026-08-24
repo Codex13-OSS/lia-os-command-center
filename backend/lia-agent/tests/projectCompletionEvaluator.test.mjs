@@ -10,6 +10,7 @@ import {
 } from '../dist/contracts/projectGoalEvaluation.js';
 import { SAFE_TASK_ERROR_MESSAGES } from '../dist/contracts/projectTask.js';
 import { ProjectTaskSqliteStore } from '../dist/services/projectTaskSqliteStore.js';
+import { evaluateProjectGoalCompletion } from '../dist/services/projectCompletionEvaluator.js';
 import {
   PROJECT_TASK_SQLITE_SCHEMA_VERSION,
   initializeProjectTaskSqliteDatabaseV1,
@@ -545,4 +546,109 @@ test('legacy SQLite migrates additively and evaluator metadata stays outside Cod
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('read-only completed task may satisfy goal from durable analyzed result without code verification', () => {
+  const goal = {
+    goalId: 'd50e8400-e29b-41d4-a716-446655440099',
+    projectId: 'safe',
+    objective: 'Inspect repository architecture',
+    status: 'active',
+    createdAt: 1,
+    updatedAt: 1,
+    maxAttempts: 1,
+    continuationDepthLimit: 0,
+    currentAttempt: 0,
+  };
+
+  const task = {
+    taskId: '450e8400-e29b-41d4-a716-446655440099',
+    fingerprint: 'fp',
+    status: 'completed',
+    intent: {
+      projectId: 'safe',
+      instruction: 'Inspect repository architecture',
+      priority: 'normal',
+      requestedCapabilities: ['repository_read'],
+    },
+    createdAt: 1,
+    updatedAt: 2,
+    terminalAt: 2,
+    lineage: {
+      goalId: goal.goalId,
+      rootTaskId: '450e8400-e29b-41d4-a716-446655440099',
+      attemptNumber: 0,
+      continuationDepth: 0,
+    },
+    receipt: {
+      executionId: 'read-only-execution',
+      status: 'analyzed',
+      resultText: 'Inspect repository architecture',
+      stages: ['planning', 'hermes', 'codex'],
+    },
+  };
+
+  const result = evaluateProjectGoalCompletion(
+    { goal, task },
+    {
+      goalSatisfaction: 'satisfied',
+      blocking: 'none',
+      failure: 'retryable',
+    },
+  );
+
+  assert.equal(result.decision, 'completed');
+  assert.equal(result.reasonCode, 'goal_satisfied');
+});
+
+test('write-capable completed task still requires technical verification', () => {
+  const goal = {
+    goalId: 'd50e8400-e29b-41d4-a716-446655440098',
+    projectId: 'safe',
+    objective: 'Modify repository',
+    status: 'active',
+    createdAt: 1,
+    updatedAt: 1,
+    maxAttempts: 1,
+    continuationDepthLimit: 0,
+    currentAttempt: 0,
+  };
+
+  const task = {
+    taskId: '450e8400-e29b-41d4-a716-446655440098',
+    fingerprint: 'fp',
+    status: 'completed',
+    intent: {
+      projectId: 'safe',
+      instruction: 'Modify repository',
+      priority: 'normal',
+      requestedCapabilities: ['repository_read', 'isolated_worktree_write'],
+    },
+    createdAt: 1,
+    updatedAt: 2,
+    terminalAt: 2,
+    lineage: {
+      goalId: goal.goalId,
+      rootTaskId: '450e8400-e29b-41d4-a716-446655440098',
+      attemptNumber: 0,
+      continuationDepth: 0,
+    },
+    receipt: {
+      executionId: 'write-execution',
+      status: 'analyzed',
+      resultText: 'Modify repository',
+      stages: ['planning', 'hermes', 'codex'],
+    },
+  };
+
+  const result = evaluateProjectGoalCompletion(
+    { goal, task },
+    {
+      goalSatisfaction: 'satisfied',
+      blocking: 'none',
+      failure: 'retryable',
+    },
+  );
+
+  assert.notEqual(result.decision, 'completed');
 });

@@ -138,10 +138,24 @@ export function evaluateProjectGoalCompletion(
   }
 
   const receipt = task.receipt;
-  const technicallyVerified = receipt?.verification?.status === 'verified'
+  const requestedCapabilities = task.intent.requestedCapabilities;
+  const readOnlyCompletion = requestedCapabilities.length === 0
+    || requestedCapabilities.every((capability) => capability === 'repository_read');
+
+  const technicallyVerifiedByChecks = receipt?.verification?.status === 'verified'
     && receipt.verification.totalChecks > 0
     && receipt.verification.checksPassed === receipt.verification.totalChecks
     && receipt.stages?.includes('verification') === true;
+
+  const technicallyVerifiedByReadOnlyAnalysis = readOnlyCompletion
+    && task.status === 'completed'
+    && receipt?.status === 'analyzed'
+    && typeof receipt.resultText === 'string'
+    && receipt.resultText.trim().length > 0
+    && receipt.stages?.includes('codex') === true;
+
+  const technicallyVerified =
+    technicallyVerifiedByChecks || technicallyVerifiedByReadOnlyAnalysis;
   const visuallyVerified = !projectRequiresVisualVerification(goal.projectId)
     || receipt?.stages?.includes('visualQa') === true;
 
